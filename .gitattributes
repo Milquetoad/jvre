@@ -1,0 +1,9 @@
+# Normalize line endings: text files stored as LF in the repo.
+# Keeps diffs clean when moving between Windows and Linux.
+* text=auto eol=lf
+
+# Windows batch files must stay CRLF to run correctly.
+*.bat text eol=crlf
+
+# The Gradle wrapper jar is binary.
+gradle/wrapper/gradle-wrapper.jar binary

@@ -1,0 +1,34 @@
+# Gradle
+.gradle/
+build/
+
+# Java
+*.class
+hs_err_pid*
+replay_pid*
+
+# IDEs
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.project
+.classpath
+.settings/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Obsidian workspace state (keep the notes, ignore per-machine UI state)
+vault/.obsidian/workspace*
+vault/.obsidian/cache
+vault/.trash/
+
+# Claude Code per-machine settings (local permissions, not for the repo)
+.claude/settings.local.json
+
+# Logs / misc
+*.log

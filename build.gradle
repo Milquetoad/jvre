@@ -1,0 +1,59 @@
+// jvre — Java Vulkan Rendering Engine
+//
+// This build file pulls in LWJGL (Lightweight Java Game Library), which gives us
+// the thin Java bindings to the native Vulkan and GLFW C libraries. LWJGL is split
+// into modules; we only ask for the three we need:
+//   - lwjgl        : core (memory management, the MemoryStack, shared utilities)
+//   - lwjgl-glfw   : windowing + input (creates the OS window + Vulkan surface)
+//   - lwjgl-vulkan : the Vulkan API bindings themselves
+//
+// Each native-backed module also needs a "natives" artifact for the current OS,
+// which contains the actual .dll files LWJGL loads at runtime. Note that
+// lwjgl-vulkan has NO natives on Windows/Linux: the Vulkan loader (vulkan-1.dll)
+// is provided by the system / GPU driver, not by LWJGL.
+
+plugins {
+    id 'application'
+}
+
+repositories {
+    mavenCentral()
+}
+
+ext {
+    lwjglVersion = '3.3.4'
+    // We're on Windows x64. Other options exist (natives-linux, natives-macos, etc.)
+    lwjglNatives = 'natives-windows'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+dependencies {
+    // The BOM (Bill of Materials) pins every lwjgl-* artifact to the same version,
+    // so we don't have to repeat the version string on each line below.
+    implementation platform("org.lwjgl:lwjgl-bom:$lwjglVersion")
+
+    implementation "org.lwjgl:lwjgl"
+    implementation "org.lwjgl:lwjgl-glfw"
+    implementation "org.lwjgl:lwjgl-vulkan"
+
+    // Native libraries (.dll) for this platform, needed only at runtime.
+    runtimeOnly "org.lwjgl:lwjgl::$lwjglNatives"
+    runtimeOnly "org.lwjgl:lwjgl-glfw::$lwjglNatives"
+    // (no lwjgl-vulkan natives on Windows — the loader is system-provided)
+}
+
+application {
+    mainClass = 'jvre.Main'
+}
+
+// Make `gradle run` flush native crash logs etc. nicely; harmless defaults.
+tasks.named('run') {
+    // GLFW must own the main thread. On macOS this needs -XstartOnFirstThread;
+    // on Windows nothing special is required, but we keep stdout unbuffered.
+    standardInput = System.in
+}

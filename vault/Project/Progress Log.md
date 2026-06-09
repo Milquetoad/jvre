@@ -2,6 +2,12 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-10 — Refactor: `Device` extracted ✅
+- Pulled physical-device **selection** (the scoring policy), logical **`VkDevice`** creation, and **graphics/present queue** retrieval out of `Main` into **`jvre.core.Device`** -- the head of the recreatable "device context" (Instance + Surface stay put above it; everything GPU-dependent will hang below it). `Main` now does `device = new Device(instance, surface)` and reads `device.handle()` / `device.physicalDevice()` / `device.graphicsQueue()` / `device.presentQueue()` / `device.graphicsFamily()` / `device.presentFamily()`. Pruned 13 now-dead imports.
+- **Behavior-preserving:** identical scoring (discrete +1000, `maxImageDimension2D` tiebreak), same swapchain-extension hard requirement, same queue-family dedup. Small cleanup: `createSwapchain`/`createCommandPool` used to *re-run* `findQueueFamilies` each time they needed the indices; they now read the values `Device` captured once at construction. `rateDevice` stays the seam for future flexible GPU selection. Compiles clean; committed `8c29195`.
+- Was caught mid-extraction by a context cutoff (two half-applied edits + stray imports); resumed, finished, reviewed the diff as a pure mechanical move, and verified the build.
+- **Next:** extract `Swapchain` / `RenderPass` / `Framebuffers` into the device context, then a `Renderer` coordinator (+ resize/swapchain recreation), then frames-in-flight (>1).
+
 ## 2026-06-09 — Refactor begins: stable trio extracted ✅
 - Started turning the linear `Main.java` into reusable classes. New package **`jvre.core`** with the **stable layer**: `Window` (GLFW), `Instance` (instance + validation + debug messenger), `Surface` (VkSurfaceKHR). `Main` now constructs them (`new Window(...)`, `new Instance("jvre demo", ENABLE_VALIDATION)`, `new Surface(instance, window)`) and calls `.handle()` where the raw Vulkan object is needed; pruned the now-dead imports. **Behavior-preserving** -- still clears to orange, validation-clean.
 - Design decisions logged in [[API Vision - Layered Altitudes]]: **naming** is Vulkan-faithful at L1 (its audience is Vulkan-literate), intuitive at L2; **L1 visibility** hides infrastructure and exposes only the creative tier (`Shader`/`Pipeline`/`Buffer`) -- a Shadertoy shader touches ~1 artifact, not a dozen objects. Plus [[Design North Star]] (the smaller-than-Processing-but-flexible sweet spot).

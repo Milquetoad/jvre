@@ -1,5 +1,6 @@
 package jvre;
 
+import jvre.core.Device;
 import jvre.core.Instance;
 import jvre.core.Surface;
 import jvre.core.Window;
@@ -14,20 +15,11 @@ import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkCommandBufferAllocateInfo;
 import org.lwjgl.vulkan.VkCommandBufferBeginInfo;
 import org.lwjgl.vulkan.VkCommandPoolCreateInfo;
-import org.lwjgl.vulkan.VkDevice;
-import org.lwjgl.vulkan.VkDeviceCreateInfo;
-import org.lwjgl.vulkan.VkDeviceQueueCreateInfo;
-import org.lwjgl.vulkan.VkExtensionProperties;
 import org.lwjgl.vulkan.VkExtent2D;
 import org.lwjgl.vulkan.VkFenceCreateInfo;
 import org.lwjgl.vulkan.VkFramebufferCreateInfo;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
-import org.lwjgl.vulkan.VkPhysicalDevice;
-import org.lwjgl.vulkan.VkPhysicalDeviceFeatures;
-import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
 import org.lwjgl.vulkan.VkPresentInfoKHR;
-import org.lwjgl.vulkan.VkQueue;
-import org.lwjgl.vulkan.VkQueueFamilyProperties;
 import org.lwjgl.vulkan.VkRenderPassBeginInfo;
 import org.lwjgl.vulkan.VkRenderPassCreateInfo;
 import org.lwjgl.vulkan.VkSemaphoreCreateInfo;
@@ -38,12 +30,8 @@ import org.lwjgl.vulkan.VkSurfaceCapabilitiesKHR;
 import org.lwjgl.vulkan.VkSurfaceFormatKHR;
 import org.lwjgl.vulkan.VkSwapchainCreateInfoKHR;
 
-import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.Set;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.KHRSurface.*;
@@ -79,32 +67,16 @@ public class Main {
     // Flip to false to build a "release" run with no validation overhead.
     private static final boolean ENABLE_VALIDATION = true;
 
-    // Device-level extensions we require. VK_KHR_swapchain is what lets us present
-    // rendered images to the surface (the next milestone), so we both REQUIRE it
-    // during GPU selection and ENABLE it when creating the logical device.
-    private static final String[] DEVICE_EXTENSIONS = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
-
     private Window window;
     private Instance instance;
 
     // The window<->Vulkan bridge (VkSurfaceKHR), created from the window + instance.
     private Surface surface;
 
-    // The GPU we chose to render with. A "physical device" is a handle to a real
-    // GPU; it is OWNED BY the instance and is NOT destroyed (you don't create it,
-    // you just select it). The logical device (next step) is what we create.
-    private VkPhysicalDevice physicalDevice = null;
-
-    // The logical device: our actual CONNECTION to the chosen GPU. Unlike the
-    // physical device, WE create this (and must destroy it). All real work --
-    // swapchains, pipelines, buffers, command submission -- goes through the
-    // logical device, never the physical one.
-    private VkDevice device;
-
-    // Handles to the specific queues we asked the device to create; this is where
-    // we submit work. They may be the SAME underlying queue if one family does both.
-    private VkQueue graphicsQueue;
-    private VkQueue presentQueue;
+    // The chosen GPU + our connection to it: physical-device selection, the logical
+    // VkDevice, the graphics/present queues, and the queue-family indices. The head
+    // of the recreatable "device context".
+    private Device device;
 
     // The swapchain: the queue of images presented to the surface (double/triple
     // buffering). WE create it from the device + surface, and destroy it. The
@@ -174,8 +146,7 @@ public class Main {
     private void initVulkan() {
         instance = new Instance("jvre demo", ENABLE_VALIDATION);
         surface = new Surface(instance, window);
-        pickPhysicalDevice();
-        createLogicalDevice();
+        device = new Device(instance, surface);
         createSwapchain();
         createImageViews();
         createRenderPass();
@@ -183,226 +154,6 @@ public class Main {
         createCommandPool();
         createCommandBuffers();
         createSyncObjects();
-    }
-
-    // ------------------------------------------------------------------
-    // Physical device (GPU) selection
-    // ------------------------------------------------------------------
-
-    /**
-     * The queue family indices we care about. Integer (not int) so null means
-     * "not found yet" — index 0 is a perfectly valid family, so we can't use -1
-     * as a sentinel without being careful. isComplete() = we found everything.
-     *
-     * graphics and present MAY be the same family; we allow that.
-     */
-    private static class QueueFamilyIndices {
-        Integer graphicsFamily;
-        Integer presentFamily;
-
-        boolean isComplete() {
-            return graphicsFamily != null && presentFamily != null;
-        }
-    }
-
-    private void pickPhysicalDevice() {
-        try (MemoryStack stack = stackPush()) {
-            // Two-call idiom again: how many GPUs? then list them.
-            IntBuffer deviceCount = stack.ints(0);
-            vkEnumeratePhysicalDevices(instance.handle(), deviceCount, null);
-            if (deviceCount.get(0) == 0) {
-                throw new RuntimeException("No GPUs with Vulkan support found");
-            }
-
-            PointerBuffer devices = stack.mallocPointer(deviceCount.get(0));
-            vkEnumeratePhysicalDevices(instance.handle(), deviceCount, devices);
-
-            // Walk every GPU; keep the highest-scoring SUITABLE one.
-            VkPhysicalDevice best = null;
-            int bestScore = -1;
-            for (int i = 0; i < devices.capacity(); i++) {
-                VkPhysicalDevice device = new VkPhysicalDevice(devices.get(i), instance.handle());
-
-                QueueFamilyIndices indices = findQueueFamilies(device, stack);
-                // Suitable = has the queues we need AND supports the device
-                // extensions we require (swapchain). Both are hard requirements.
-                if (!indices.isComplete() || !checkDeviceExtensionSupport(device, stack)) {
-                    continue;  // missing graphics/present or swapchain -> unusable
-                }
-
-                int score = rateDevice(device, stack);
-                if (score > bestScore) {
-                    bestScore = score;
-                    best = device;
-                }
-            }
-
-            if (best == null) {
-                throw new RuntimeException(
-                        "No suitable GPU found (need graphics + present + swapchain)");
-            }
-            physicalDevice = best;
-
-            // Report what we picked (and re-read its name for the log).
-            VkPhysicalDeviceProperties props = VkPhysicalDeviceProperties.malloc(stack);
-            vkGetPhysicalDeviceProperties(physicalDevice, props);
-            System.out.println("Picked GPU: " + props.deviceNameString()
-                    + " (score " + bestScore + ")");
-        }
-    }
-
-    /**
-     * Find, for one GPU, a queue family that supports graphics and one that can
-     * present to our surface. They may coincide. Stops early once complete.
-     */
-    private QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device, MemoryStack stack) {
-        QueueFamilyIndices indices = new QueueFamilyIndices();
-
-        IntBuffer count = stack.ints(0);
-        vkGetPhysicalDeviceQueueFamilyProperties(device, count, null);
-
-        VkQueueFamilyProperties.Buffer families =
-                VkQueueFamilyProperties.malloc(count.get(0), stack);
-        vkGetPhysicalDeviceQueueFamilyProperties(device, count, families);
-
-        IntBuffer presentSupport = stack.ints(VK_FALSE);
-        for (int i = 0; i < families.capacity(); i++) {
-            // Graphics is a simple capability flag on the family.
-            if ((families.get(i).queueFlags() & VK_QUEUE_GRAPHICS_BIT) != 0) {
-                indices.graphicsFamily = i;
-            }
-            // Present support is surface-specific -> must be QUERIED, not flagged.
-            vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface.handle(), presentSupport);
-            if (presentSupport.get(0) == VK_TRUE) {
-                indices.presentFamily = i;
-            }
-            if (indices.isComplete()) {
-                break;
-            }
-        }
-        return indices;
-    }
-
-    /**
-     * Default selection policy: higher = better. Discrete GPUs win big over
-     * integrated. This is the seam for the future flexible-selection work
-     * (explicit override + runtime switching) — see the vault design note.
-     */
-    private int rateDevice(VkPhysicalDevice device, MemoryStack stack) {
-        VkPhysicalDeviceProperties props = VkPhysicalDeviceProperties.malloc(stack);
-        vkGetPhysicalDeviceProperties(device, props);
-
-        int score = 0;
-        if (props.deviceType() == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
-            score += 1000;  // strongly prefer the dedicated GPU (e.g. the RTX 4090)
-        }
-        // maxImageDimension2D is a rough proxy for "how beefy" — a gentle tiebreak.
-        score += props.limits().maxImageDimension2D();
-        return score;
-    }
-
-    /**
-     * Does this GPU support every device extension we require? Same two-call
-     * enumeration idiom as the instance layers, but at the DEVICE level --
-     * extensions live on a specific GPU, so we enumerate per physical device.
-     */
-    private boolean checkDeviceExtensionSupport(VkPhysicalDevice device, MemoryStack stack) {
-        IntBuffer extCount = stack.ints(0);
-        vkEnumerateDeviceExtensionProperties(device, (String) null, extCount, null);
-
-        VkExtensionProperties.Buffer available =
-                VkExtensionProperties.malloc(extCount.get(0), stack);
-        vkEnumerateDeviceExtensionProperties(device, (String) null, extCount, available);
-
-        // Start with everything we need; cross off what the GPU offers. Empty = all met.
-        Set<String> required = new HashSet<>(Arrays.asList(DEVICE_EXTENSIONS));
-        for (VkExtensionProperties ext : available) {
-            required.remove(ext.extensionNameString());
-        }
-        return required.isEmpty();
-    }
-
-    // ------------------------------------------------------------------
-    // Logical device (VkDevice) + queues
-    // ------------------------------------------------------------------
-
-    /**
-     * Create the logical device -- our handle for actually talking to the chosen
-     * GPU -- and pull out the queue handles we'll submit work to.
-     *
-     * The recipe has three parts: (1) WHICH QUEUES to create (one from the
-     * graphics family, one from the present family -- deduped, since they may be
-     * the same family and Vulkan forbids listing it twice); (2) WHICH FEATURES to
-     * enable (none yet); (3) WHICH DEVICE EXTENSIONS to enable (VK_KHR_swapchain).
-     */
-    private void createLogicalDevice() {
-        try (MemoryStack stack = stackPush()) {
-            QueueFamilyIndices indices = findQueueFamilies(physicalDevice, stack);
-
-            // Collapse graphics+present into the set of DISTINCT families to request.
-            Set<Integer> uniqueFamilies = new HashSet<>();
-            uniqueFamilies.add(indices.graphicsFamily);
-            uniqueFamilies.add(indices.presentFamily);
-
-            // One create-info per distinct family; each asks for a single queue.
-            VkDeviceQueueCreateInfo.Buffer queueCreateInfos =
-                    VkDeviceQueueCreateInfo.calloc(uniqueFamilies.size(), stack);
-
-            // Priority in [0,1] hints scheduling when queues compete. With one queue
-            // each it's moot, but the field is required. The COUNT of priorities is
-            // how Vulkan infers how many queues we want from the family (here: 1).
-            FloatBuffer priority = stack.floats(1.0f);
-
-            int idx = 0;
-            for (int family : uniqueFamilies) {
-                VkDeviceQueueCreateInfo qci = queueCreateInfos.get(idx++);
-                qci.sType(VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO);
-                qci.queueFamilyIndex(family);
-                qci.pQueuePriorities(priority);
-            }
-
-            // No special device features needed yet (geometry shaders, aniso, ...).
-            VkPhysicalDeviceFeatures deviceFeatures = VkPhysicalDeviceFeatures.calloc(stack);
-
-            VkDeviceCreateInfo createInfo = VkDeviceCreateInfo.calloc(stack);
-            createInfo.sType(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO);
-            createInfo.pQueueCreateInfos(queueCreateInfos);
-            createInfo.pEnabledFeatures(deviceFeatures);
-            createInfo.ppEnabledExtensionNames(asPointerBuffer(stack, DEVICE_EXTENSIONS));
-
-            // NOTE: we deliberately leave ppEnabledLayerNames UNSET (count 0).
-            // Device-level layers are a Vulkan 1.0 legacy concept that never worked;
-            // the INSTANCE validation layer already covers device calls. Current
-            // validation requires enabledLayerCount == 0 and errors otherwise
-            // (VUID-VkDeviceCreateInfo-enabledLayerCount-12384).
-
-            PointerBuffer pDevice = stack.mallocPointer(1);
-            if (vkCreateDevice(physicalDevice, createInfo, null, pDevice) != VK_SUCCESS) {
-                throw new RuntimeException("Failed to create the logical device");
-            }
-            device = new VkDevice(pDevice.get(0), physicalDevice, createInfo);
-
-            // Queues are CREATED with the device; we only RETRIEVE handles to them.
-            // Index 0 = the first (and only) queue we requested from each family.
-            PointerBuffer pQueue = stack.mallocPointer(1);
-            vkGetDeviceQueue(device, indices.graphicsFamily, 0, pQueue);
-            graphicsQueue = new VkQueue(pQueue.get(0), device);
-            vkGetDeviceQueue(device, indices.presentFamily, 0, pQueue);
-            presentQueue = new VkQueue(pQueue.get(0), device);
-
-            boolean shared = indices.graphicsFamily.equals(indices.presentFamily);
-            System.out.println("Logical device created; graphics + present queues retrieved"
-                    + (shared ? " (shared family)." : " (separate families)."));
-        }
-    }
-
-    /** Pack a String[] into a PointerBuffer of UTF-8 names for Vulkan. */
-    private PointerBuffer asPointerBuffer(MemoryStack stack, String[] strings) {
-        PointerBuffer buffer = stack.mallocPointer(strings.length);
-        for (String s : strings) {
-            buffer.put(stack.UTF8(s));
-        }
-        return buffer.rewind();
     }
 
     // ------------------------------------------------------------------
@@ -418,18 +169,18 @@ public class Main {
         try (MemoryStack stack = stackPush()) {
             // ---- Query (three separate "what does this surface support?" calls) ----
             VkSurfaceCapabilitiesKHR caps = VkSurfaceCapabilitiesKHR.malloc(stack);
-            vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface.handle(), caps);
+            vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device.physicalDevice(), surface.handle(), caps);
 
             IntBuffer formatCount = stack.ints(0);
-            vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface.handle(), formatCount, null);
+            vkGetPhysicalDeviceSurfaceFormatsKHR(device.physicalDevice(), surface.handle(), formatCount, null);
             VkSurfaceFormatKHR.Buffer formats =
                     VkSurfaceFormatKHR.malloc(formatCount.get(0), stack);
-            vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface.handle(), formatCount, formats);
+            vkGetPhysicalDeviceSurfaceFormatsKHR(device.physicalDevice(), surface.handle(), formatCount, formats);
 
             IntBuffer modeCount = stack.ints(0);
-            vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface.handle(), modeCount, null);
+            vkGetPhysicalDeviceSurfacePresentModesKHR(device.physicalDevice(), surface.handle(), modeCount, null);
             IntBuffer presentModes = stack.mallocInt(modeCount.get(0));
-            vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface.handle(), modeCount, presentModes);
+            vkGetPhysicalDeviceSurfacePresentModesKHR(device.physicalDevice(), surface.handle(), modeCount, presentModes);
 
             // ---- Choose from what's available ----
             VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(formats);
@@ -458,11 +209,10 @@ public class Main {
             // both queues. CONCURRENT lets them share without explicit ownership
             // transfers (simpler, slightly slower); EXCLUSIVE is faster but needs
             // manual handoff. Same family -> EXCLUSIVE with nothing to share.
-            QueueFamilyIndices indices = findQueueFamilies(physicalDevice, stack);
-            if (!indices.graphicsFamily.equals(indices.presentFamily)) {
+            if (device.graphicsFamily() != device.presentFamily()) {
                 createInfo.imageSharingMode(VK_SHARING_MODE_CONCURRENT);
                 createInfo.pQueueFamilyIndices(
-                        stack.ints(indices.graphicsFamily, indices.presentFamily));
+                        stack.ints(device.graphicsFamily(), device.presentFamily()));
             } else {
                 createInfo.imageSharingMode(VK_SHARING_MODE_EXCLUSIVE);
             }
@@ -474,7 +224,7 @@ public class Main {
             createInfo.oldSwapchain(VK_NULL_HANDLE);                   // no prior chain to recycle
 
             LongBuffer pSwapchain = stack.longs(VK_NULL_HANDLE);
-            if (vkCreateSwapchainKHR(device, createInfo, null, pSwapchain) != VK_SUCCESS) {
+            if (vkCreateSwapchainKHR(device.handle(), createInfo, null, pSwapchain) != VK_SUCCESS) {
                 throw new RuntimeException("Failed to create the swapchain");
             }
             swapchain = pSwapchain.get(0);
@@ -482,9 +232,9 @@ public class Main {
             // ---- Retrieve the image handles. The driver may make MORE than we
             // asked for, so query the real count (two-call idiom again). ----
             IntBuffer imgCount = stack.ints(0);
-            vkGetSwapchainImagesKHR(device, swapchain, imgCount, null);
+            vkGetSwapchainImagesKHR(device.handle(), swapchain, imgCount, null);
             LongBuffer pImages = stack.mallocLong(imgCount.get(0));
-            vkGetSwapchainImagesKHR(device, swapchain, imgCount, pImages);
+            vkGetSwapchainImagesKHR(device.handle(), swapchain, imgCount, pImages);
             swapchainImages = new long[imgCount.get(0)];
             for (int i = 0; i < swapchainImages.length; i++) {
                 swapchainImages[i] = pImages.get(i);
@@ -586,7 +336,7 @@ public class Main {
                 createInfo.subresourceRange().baseArrayLayer(0);
                 createInfo.subresourceRange().layerCount(1);
 
-                if (vkCreateImageView(device, createInfo, null, pView) != VK_SUCCESS) {
+                if (vkCreateImageView(device.handle(), createInfo, null, pView) != VK_SUCCESS) {
                     throw new RuntimeException("Failed to create image view " + i);
                 }
                 swapchainImageViews[i] = pView.get(0);
@@ -648,7 +398,7 @@ public class Main {
             renderPassInfo.pDependencies(dependency);
 
             LongBuffer pRenderPass = stack.longs(VK_NULL_HANDLE);
-            if (vkCreateRenderPass(device, renderPassInfo, null, pRenderPass) != VK_SUCCESS) {
+            if (vkCreateRenderPass(device.handle(), renderPassInfo, null, pRenderPass) != VK_SUCCESS) {
                 throw new RuntimeException("Failed to create the render pass");
             }
             renderPass = pRenderPass.get(0);
@@ -683,7 +433,7 @@ public class Main {
                 createInfo.height(swapchainHeight);
                 createInfo.layers(1);
 
-                if (vkCreateFramebuffer(device, createInfo, null, pFramebuffer) != VK_SUCCESS) {
+                if (vkCreateFramebuffer(device.handle(), createInfo, null, pFramebuffer) != VK_SUCCESS) {
                     throw new RuntimeException("Failed to create framebuffer " + i);
                 }
                 swapchainFramebuffers[i] = pFramebuffer.get(0);
@@ -700,16 +450,14 @@ public class Main {
     /** The pool command buffers are allocated from, bound to the graphics family. */
     private void createCommandPool() {
         try (MemoryStack stack = stackPush()) {
-            QueueFamilyIndices indices = findQueueFamilies(physicalDevice, stack);
-
             VkCommandPoolCreateInfo poolInfo = VkCommandPoolCreateInfo.calloc(stack);
             poolInfo.sType(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
-            poolInfo.queueFamilyIndex(indices.graphicsFamily);
+            poolInfo.queueFamilyIndex(device.graphicsFamily());
             // No flags: we record each buffer ONCE and never reset it. A loop that
             // re-records every frame would use RESET_COMMAND_BUFFER_BIT instead.
 
             LongBuffer pPool = stack.longs(VK_NULL_HANDLE);
-            if (vkCreateCommandPool(device, poolInfo, null, pPool) != VK_SUCCESS) {
+            if (vkCreateCommandPool(device.handle(), poolInfo, null, pPool) != VK_SUCCESS) {
                 throw new RuntimeException("Failed to create the command pool");
             }
             commandPool = pPool.get(0);
@@ -735,11 +483,11 @@ public class Main {
             allocInfo.commandBufferCount(count);
 
             PointerBuffer pBuffers = stack.mallocPointer(count);
-            if (vkAllocateCommandBuffers(device, allocInfo, pBuffers) != VK_SUCCESS) {
+            if (vkAllocateCommandBuffers(device.handle(), allocInfo, pBuffers) != VK_SUCCESS) {
                 throw new RuntimeException("Failed to allocate command buffers");
             }
             for (int i = 0; i < count; i++) {
-                commandBuffers[i] = new VkCommandBuffer(pBuffers.get(i), device);
+                commandBuffers[i] = new VkCommandBuffer(pBuffers.get(i), device.handle());
             }
 
             // The clear color: BRIGHT ORANGE. One VkClearValue for the one color
@@ -798,7 +546,7 @@ public class Main {
             fenceInfo.flags(VK_FENCE_CREATE_SIGNALED_BIT);  // start signaled
 
             LongBuffer p = stack.longs(VK_NULL_HANDLE);
-            if (vkCreateSemaphore(device, semInfo, null, p) != VK_SUCCESS) {
+            if (vkCreateSemaphore(device.handle(), semInfo, null, p) != VK_SUCCESS) {
                 throw new RuntimeException("Failed to create imageAvailable semaphore");
             }
             imageAvailableSemaphore = p.get(0);
@@ -807,13 +555,13 @@ public class Main {
             // isn't re-acquired until its prior present has consumed the semaphore).
             renderFinishedSemaphores = new long[swapchainImages.length];
             for (int i = 0; i < renderFinishedSemaphores.length; i++) {
-                if (vkCreateSemaphore(device, semInfo, null, p) != VK_SUCCESS) {
+                if (vkCreateSemaphore(device.handle(), semInfo, null, p) != VK_SUCCESS) {
                     throw new RuntimeException("Failed to create renderFinished semaphore " + i);
                 }
                 renderFinishedSemaphores[i] = p.get(0);
             }
 
-            if (vkCreateFence(device, fenceInfo, null, p) != VK_SUCCESS) {
+            if (vkCreateFence(device.handle(), fenceInfo, null, p) != VK_SUCCESS) {
                 throw new RuntimeException("Failed to create in-flight fence");
             }
             inFlightFence = p.get(0);
@@ -831,7 +579,7 @@ public class Main {
             drawFrame();
         }
         // Let the GPU finish the in-flight frame before cleanup() frees anything.
-        vkDeviceWaitIdle(device);
+        vkDeviceWaitIdle(device.handle());
     }
 
     /**
@@ -842,13 +590,13 @@ public class Main {
     private void drawFrame() {
         try (MemoryStack stack = stackPush()) {
             // 1. Block until the previous frame finished, then reset the fence.
-            vkWaitForFences(device, stack.longs(inFlightFence), true, NO_TIMEOUT);
-            vkResetFences(device, stack.longs(inFlightFence));
+            vkWaitForFences(device.handle(), stack.longs(inFlightFence), true, NO_TIMEOUT);
+            vkResetFences(device.handle(), stack.longs(inFlightFence));
 
             // 2. Acquire the next swapchain image (GPU signals imageAvailable when
             //    it's genuinely ready to be drawn into).
             IntBuffer pImageIndex = stack.ints(0);
-            vkAcquireNextImageKHR(device, swapchain, NO_TIMEOUT,
+            vkAcquireNextImageKHR(device.handle(), swapchain, NO_TIMEOUT,
                     imageAvailableSemaphore, VK_NULL_HANDLE, pImageIndex);
             int imageIndex = pImageIndex.get(0);
 
@@ -862,7 +610,7 @@ public class Main {
             submitInfo.pCommandBuffers(stack.pointers(commandBuffers[imageIndex]));
             submitInfo.pSignalSemaphores(stack.longs(renderFinishedSemaphores[imageIndex]));
 
-            if (vkQueueSubmit(graphicsQueue, submitInfo, inFlightFence) != VK_SUCCESS) {
+            if (vkQueueSubmit(device.graphicsQueue(), submitInfo, inFlightFence) != VK_SUCCESS) {
                 throw new RuntimeException("Failed to submit the draw command buffer");
             }
 
@@ -876,7 +624,7 @@ public class Main {
             presentInfo.pSwapchains(stack.longs(swapchain));
             presentInfo.pImageIndices(pImageIndex);
 
-            vkQueuePresentKHR(presentQueue, presentInfo);
+            vkQueuePresentKHR(device.presentQueue(), presentInfo);
         }
     }
 
@@ -890,42 +638,42 @@ public class Main {
         // frees the images it owns -- we don't destroy those individually.)
         // Per-frame sync primitives.
         if (imageAvailableSemaphore != VK_NULL_HANDLE) {
-            vkDestroySemaphore(device, imageAvailableSemaphore, null);
+            vkDestroySemaphore(device.handle(), imageAvailableSemaphore, null);
         }
         if (renderFinishedSemaphores != null) {
             for (long s : renderFinishedSemaphores) {
-                vkDestroySemaphore(device, s, null);
+                vkDestroySemaphore(device.handle(), s, null);
             }
         }
         if (inFlightFence != VK_NULL_HANDLE) {
-            vkDestroyFence(device, inFlightFence, null);
+            vkDestroyFence(device.handle(), inFlightFence, null);
         }
         // Destroying the command pool also frees the command buffers from it.
         if (commandPool != VK_NULL_HANDLE) {
-            vkDestroyCommandPool(device, commandPool, null);
+            vkDestroyCommandPool(device.handle(), commandPool, null);
         }
         // Framebuffers reference the image views + render pass, so they go first.
         if (swapchainFramebuffers != null) {
             for (long fb : swapchainFramebuffers) {
-                vkDestroyFramebuffer(device, fb, null);
+                vkDestroyFramebuffer(device.handle(), fb, null);
             }
         }
         // Render pass is built against the swapchain's format; tear it down before
         // the views/swapchain it describes.
         if (renderPass != VK_NULL_HANDLE) {
-            vkDestroyRenderPass(device, renderPass, null);
+            vkDestroyRenderPass(device.handle(), renderPass, null);
         }
         // Image views reference the swapchain's images, so destroy them first.
         if (swapchainImageViews != null) {
             for (long view : swapchainImageViews) {
-                vkDestroyImageView(device, view, null);
+                vkDestroyImageView(device.handle(), view, null);
             }
         }
         if (swapchain != VK_NULL_HANDLE) {
-            vkDestroySwapchainKHR(device, swapchain, null);
+            vkDestroySwapchainKHR(device.handle(), swapchain, null);
         }
         if (device != null) {
-            vkDestroyDevice(device, null);
+            device.close();
         }
         // Surface is owned by the instance -> destroy it before the instance.
         if (surface != null) {

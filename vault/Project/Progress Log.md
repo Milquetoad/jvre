@@ -2,6 +2,18 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-09 — Refactor begins: stable trio extracted ✅
+- Started turning the linear `Main.java` into reusable classes. New package **`jvre.core`** with the **stable layer**: `Window` (GLFW), `Instance` (instance + validation + debug messenger), `Surface` (VkSurfaceKHR). `Main` now constructs them (`new Window(...)`, `new Instance("jvre demo", ENABLE_VALIDATION)`, `new Surface(instance, window)`) and calls `.handle()` where the raw Vulkan object is needed; pruned the now-dead imports. **Behavior-preserving** -- still clears to orange, validation-clean.
+- Design decisions logged in [[API Vision - Layered Altitudes]]: **naming** is Vulkan-faithful at L1 (its audience is Vulkan-literate), intuitive at L2; **L1 visibility** hides infrastructure and exposes only the creative tier (`Shader`/`Pipeline`/`Buffer`) -- a Shadertoy shader touches ~1 artifact, not a dozen objects. Plus [[Design North Star]] (the smaller-than-Processing-but-flexible sweet spot).
+- **Next:** extract `Device` (physical selection + logical device + queues), then `Swapchain`/`RenderPass`/`Framebuffers`, then a `Renderer` coordinator (+ resize recreation).
+
+## 2026-06-09 — Headless validation on Hal-9000's RTX 4090 ✅
+- Ran the latest jvre on Hal-9000 (RTX 4090) over SSH/Tailscale (GLFW window is invisible there, but bootstrap runs fine; captured output, then killed the process). Same code, validation-clean. Cross-hardware confirmation of the flexible design:
+  - **Scoring** picks the **RTX 4090 (score 33768)** over the AMD iGPU — vs craptop's Intel UHD 620 (16384). The discrete-GPU preference works on real dual-GPU hardware.
+  - **Present-mode preference** picks **MAILBOX** on the 4090 vs the **FIFO** fallback on the Intel — exactly our "prefer MAILBOX, else FIFO" logic, validated across two GPUs.
+  - Caveat: both machines report a **shared** graphics+present family, so the swapchain's `CONCURRENT` sharing-mode branch is still unexercised on real hardware.
+- **Next:** refactor the linear `Main.java` into reusable "elementaries" (start of the framework). See [[API Vision - Layered Altitudes]].
+
 ## 2026-06-09 — 🟠 CLEAR TO COLOR — first pixels! ✅
 - Added `createSyncObjects()` + `drawFrame()` + a real render loop to `jvre.Main`. **The window now fills with bright orange** `(1.0, 0.4, 0.0)`, vsync (FIFO), on the Intel UHD 620 — zero validation output. **The entire "clear to color" roadmap is complete** (instance -> ... -> render loop). See [[Synchronization and the Render Loop]].
 - Sync model (one frame in flight): `imageAvailable` + `renderFinished` semaphores (GPU<->GPU), one `inFlightFence` (GPU->CPU, created SIGNALED). `drawFrame`: wait fence -> acquire -> submit (wait imageAvailable, signal renderFinished + fence) -> present. `vkDeviceWaitIdle` before cleanup.

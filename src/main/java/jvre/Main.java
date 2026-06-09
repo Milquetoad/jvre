@@ -1,9 +1,12 @@
 package jvre;
 
+import jvre.core.Instance;
+import jvre.core.Surface;
+import jvre.core.Window;
+
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.Configuration;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.vulkan.VkApplicationInfo;
 import org.lwjgl.vulkan.VkAttachmentDescription;
 import org.lwjgl.vulkan.VkAttachmentReference;
 import org.lwjgl.vulkan.VkClearValue;
@@ -11,9 +14,6 @@ import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkCommandBufferAllocateInfo;
 import org.lwjgl.vulkan.VkCommandBufferBeginInfo;
 import org.lwjgl.vulkan.VkCommandPoolCreateInfo;
-import org.lwjgl.vulkan.VkDebugUtilsMessengerCallbackDataEXT;
-import org.lwjgl.vulkan.VkDebugUtilsMessengerCallbackEXT;
-import org.lwjgl.vulkan.VkDebugUtilsMessengerCreateInfoEXT;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkDeviceCreateInfo;
 import org.lwjgl.vulkan.VkDeviceQueueCreateInfo;
@@ -22,9 +22,6 @@ import org.lwjgl.vulkan.VkExtent2D;
 import org.lwjgl.vulkan.VkFenceCreateInfo;
 import org.lwjgl.vulkan.VkFramebufferCreateInfo;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
-import org.lwjgl.vulkan.VkInstance;
-import org.lwjgl.vulkan.VkInstanceCreateInfo;
-import org.lwjgl.vulkan.VkLayerProperties;
 import org.lwjgl.vulkan.VkPhysicalDevice;
 import org.lwjgl.vulkan.VkPhysicalDeviceFeatures;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
@@ -48,11 +45,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 
-import static org.lwjgl.glfw.GLFW.*;
-import static org.lwjgl.glfw.GLFWVulkan.*;
 import static org.lwjgl.system.MemoryStack.stackPush;
-import static org.lwjgl.system.MemoryUtil.NULL;
-import static org.lwjgl.vulkan.EXTDebugUtils.*;
 import static org.lwjgl.vulkan.KHRSurface.*;
 import static org.lwjgl.vulkan.KHRSwapchain.*;
 import static org.lwjgl.vulkan.VK10.*;
@@ -85,20 +78,17 @@ public class Main {
 
     // Flip to false to build a "release" run with no validation overhead.
     private static final boolean ENABLE_VALIDATION = true;
-    private static final String VALIDATION_LAYER = "VK_LAYER_KHRONOS_validation";
 
     // Device-level extensions we require. VK_KHR_swapchain is what lets us present
     // rendered images to the surface (the next milestone), so we both REQUIRE it
     // during GPU selection and ENABLE it when creating the logical device.
     private static final String[] DEVICE_EXTENSIONS = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
 
-    private long window;
-    private VkInstance instance;
+    private Window window;
+    private Instance instance;
 
-    // The window<->Vulkan bridge. A VkSurfaceKHR is an opaque handle (a long),
-    // owned by the instance. Created from the GLFW window; later steps ask the
-    // GPU "can you present to THIS surface?" and build the swapchain for it.
-    private long surface = VK_NULL_HANDLE;
+    // The window<->Vulkan bridge (VkSurfaceKHR), created from the window + instance.
+    private Surface surface;
 
     // The GPU we chose to render with. A "physical device" is a handle to a real
     // GPU; it is OWNED BY the instance and is NOT destroyed (you don't create it,
@@ -156,12 +146,6 @@ public class Main {
     private long[] renderFinishedSemaphores;               // render done, safe to present
     private long inFlightFence = VK_NULL_HANDLE;            // GPU finished this frame
 
-    // Handle to the debug messenger object (0 = none).
-    private long debugMessenger = VK_NULL_HANDLE;
-    // The native callback function. We keep a reference so we can free it at
-    // shutdown (it lives in off-heap memory, like everything else native).
-    private VkDebugUtilsMessengerCallbackEXT debugCallback;
-
     public static void main(String[] args) {
         // See the MemoryStack gotcha note: this machine's GPUs expose enough
         // extensions to overflow the default 64 KB per-thread stack.
@@ -181,25 +165,15 @@ public class Main {
     // Window
     // ------------------------------------------------------------------
     private void initWindow() {
-        if (!glfwInit()) {
-            throw new IllegalStateException("Unable to initialize GLFW");
-        }
-        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);  // no OpenGL context
-        glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);    // fixed until we add swapchain recreation
-
-        window = glfwCreateWindow(WIDTH, HEIGHT, TITLE, NULL, NULL);
-        if (window == NULL) {
-            throw new RuntimeException("Failed to create the GLFW window");
-        }
+        window = new Window(WIDTH, HEIGHT, TITLE);
     }
 
     // ------------------------------------------------------------------
     // Vulkan
     // ------------------------------------------------------------------
     private void initVulkan() {
-        createInstance();
-        setupDebugMessenger();
-        createSurface();
+        instance = new Instance("jvre demo", ENABLE_VALIDATION);
+        surface = new Surface(instance, window);
         pickPhysicalDevice();
         createLogicalDevice();
         createSwapchain();
@@ -209,165 +183,6 @@ public class Main {
         createCommandPool();
         createCommandBuffers();
         createSyncObjects();
-    }
-
-    private void createInstance() {
-        if (!glfwVulkanSupported()) {
-            throw new IllegalStateException("Vulkan is not supported by the loader");
-        }
-        if (ENABLE_VALIDATION && !checkValidationLayerSupport()) {
-            throw new RuntimeException(
-                    "Validation layer requested but not available. Is the Vulkan SDK installed?");
-        }
-
-        try (MemoryStack stack = stackPush()) {
-            // ---- App metadata ----
-            VkApplicationInfo appInfo = VkApplicationInfo.calloc(stack);
-            appInfo.sType(VK_STRUCTURE_TYPE_APPLICATION_INFO);
-            appInfo.pApplicationName(stack.UTF8("jvre demo"));
-            appInfo.applicationVersion(VK_MAKE_VERSION(1, 0, 0));
-            appInfo.pEngineName(stack.UTF8("jvre"));
-            appInfo.engineVersion(VK_MAKE_VERSION(1, 0, 0));
-            appInfo.apiVersion(VK_API_VERSION_1_0);
-
-            // ---- Instance recipe ----
-            VkInstanceCreateInfo createInfo = VkInstanceCreateInfo.calloc(stack);
-            createInfo.sType(VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO);
-            createInfo.pApplicationInfo(appInfo);
-            createInfo.ppEnabledExtensionNames(getRequiredExtensions(stack));
-
-            if (ENABLE_VALIDATION) {
-                // Enable the validation layer.
-                createInfo.ppEnabledLayerNames(stack.pointers(stack.UTF8(VALIDATION_LAYER)));
-
-                // Chain a debug-messenger create-info into pNext so that messages
-                // emitted DURING vkCreateInstance / vkDestroyInstance are reported.
-                // (The standalone messenger below only covers the time in between.)
-                VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo =
-                        VkDebugUtilsMessengerCreateInfoEXT.calloc(stack);
-                populateDebugMessengerCreateInfo(debugCreateInfo);
-                createInfo.pNext(debugCreateInfo.address());
-            } else {
-                createInfo.ppEnabledLayerNames(null);
-            }
-
-            // ---- Create ----
-            PointerBuffer pInstance = stack.mallocPointer(1);
-            if (vkCreateInstance(createInfo, null, pInstance) != VK_SUCCESS) {
-                throw new RuntimeException("Failed to create the Vulkan instance");
-            }
-            instance = new VkInstance(pInstance.get(0), createInfo);
-        }
-
-        System.out.println("Vulkan instance created successfully.");
-    }
-
-    /** Enumerate available instance layers and check our validation layer is among them. */
-    private boolean checkValidationLayerSupport() {
-        try (MemoryStack stack = stackPush()) {
-            // Classic two-call idiom: first call asks "how many?", second fills the buffer.
-            IntBuffer layerCount = stack.ints(0);
-            vkEnumerateInstanceLayerProperties(layerCount, null);
-
-            VkLayerProperties.Buffer availableLayers =
-                    VkLayerProperties.malloc(layerCount.get(0), stack);
-            vkEnumerateInstanceLayerProperties(layerCount, availableLayers);
-
-            for (VkLayerProperties layer : availableLayers) {
-                if (VALIDATION_LAYER.equals(layer.layerNameString())) {
-                    return true;
-                }
-            }
-            return false;
-        }
-    }
-
-    /** GLFW's required extensions, plus the debug-utils extension when validating. */
-    private PointerBuffer getRequiredExtensions(MemoryStack stack) {
-        PointerBuffer glfwExtensions = glfwGetRequiredInstanceExtensions();
-        if (glfwExtensions == null) {
-            throw new RuntimeException("Failed to get the required GLFW instance extensions");
-        }
-        if (!ENABLE_VALIDATION) {
-            return glfwExtensions;
-        }
-        // Make room for one more name: VK_EXT_debug_utils.
-        PointerBuffer extensions = stack.mallocPointer(glfwExtensions.capacity() + 1);
-        extensions.put(glfwExtensions);                                  // copy GLFW's names
-        extensions.put(stack.UTF8(VK_EXT_DEBUG_UTILS_EXTENSION_NAME));   // add ours
-        return extensions.rewind();
-    }
-
-    private void setupDebugMessenger() {
-        if (!ENABLE_VALIDATION) {
-            return;
-        }
-        try (MemoryStack stack = stackPush()) {
-            VkDebugUtilsMessengerCreateInfoEXT createInfo =
-                    VkDebugUtilsMessengerCreateInfoEXT.calloc(stack);
-            populateDebugMessengerCreateInfo(createInfo);
-
-            LongBuffer pMessenger = stack.longs(VK_NULL_HANDLE);
-            if (vkCreateDebugUtilsMessengerEXT(instance, createInfo, null, pMessenger) != VK_SUCCESS) {
-                throw new RuntimeException("Failed to set up the debug messenger");
-            }
-            debugMessenger = pMessenger.get(0);
-        }
-    }
-
-    /** Fill a messenger create-info: which message levels/types we want, and our callback. */
-    private void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT createInfo) {
-        if (debugCallback == null) {
-            debugCallback = VkDebugUtilsMessengerCallbackEXT.create(Main::onDebugMessage);
-        }
-        createInfo.sType(VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT);
-        // Only WARNING and ERROR: stays silent on success, loud on mistakes.
-        // (Add ..._VERBOSE_BIT_EXT / ..._INFO_BIT_EXT to hear everything.)
-        createInfo.messageSeverity(
-                VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
-                VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT);
-        createInfo.messageType(
-                VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
-                VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
-                VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT);
-        createInfo.pfnUserCallback(debugCallback);
-    }
-
-    /**
-     * The callback Vulkan invokes for each message. Must return VK_FALSE
-     * (VK_TRUE is reserved for layer-internal testing and aborts the call).
-     */
-    private static int onDebugMessage(int severity, int messageType, long pCallbackData, long pUserData) {
-        VkDebugUtilsMessengerCallbackDataEXT data =
-                VkDebugUtilsMessengerCallbackDataEXT.create(pCallbackData);
-        String message = data.pMessageString();
-
-        if ((severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0) {
-            System.err.println("[Vulkan ERROR] " + message);
-        } else {
-            System.err.println("[Vulkan WARN]  " + message);
-        }
-        return VK_FALSE;
-    }
-
-    // ------------------------------------------------------------------
-    // Surface — the window <-> Vulkan bridge
-    // ------------------------------------------------------------------
-    private void createSurface() {
-        try (MemoryStack stack = stackPush()) {
-            // Output param: glfwCreateWindowSurface writes the new handle here.
-            LongBuffer pSurface = stack.longs(VK_NULL_HANDLE);
-
-            // GLFW picks the right platform call (vkCreateWin32SurfaceKHR on
-            // Windows) using the native handle of the window it created.
-            // Note it returns a Vulkan result code (an int), not the handle.
-            int result = glfwCreateWindowSurface(instance, window, null, pSurface);
-            if (result != VK_SUCCESS) {
-                throw new RuntimeException("Failed to create the window surface: " + result);
-            }
-            surface = pSurface.get(0);
-        }
-        System.out.println("Window surface created.");
     }
 
     // ------------------------------------------------------------------
@@ -394,19 +209,19 @@ public class Main {
         try (MemoryStack stack = stackPush()) {
             // Two-call idiom again: how many GPUs? then list them.
             IntBuffer deviceCount = stack.ints(0);
-            vkEnumeratePhysicalDevices(instance, deviceCount, null);
+            vkEnumeratePhysicalDevices(instance.handle(), deviceCount, null);
             if (deviceCount.get(0) == 0) {
                 throw new RuntimeException("No GPUs with Vulkan support found");
             }
 
             PointerBuffer devices = stack.mallocPointer(deviceCount.get(0));
-            vkEnumeratePhysicalDevices(instance, deviceCount, devices);
+            vkEnumeratePhysicalDevices(instance.handle(), deviceCount, devices);
 
             // Walk every GPU; keep the highest-scoring SUITABLE one.
             VkPhysicalDevice best = null;
             int bestScore = -1;
             for (int i = 0; i < devices.capacity(); i++) {
-                VkPhysicalDevice device = new VkPhysicalDevice(devices.get(i), instance);
+                VkPhysicalDevice device = new VkPhysicalDevice(devices.get(i), instance.handle());
 
                 QueueFamilyIndices indices = findQueueFamilies(device, stack);
                 // Suitable = has the queues we need AND supports the device
@@ -457,7 +272,7 @@ public class Main {
                 indices.graphicsFamily = i;
             }
             // Present support is surface-specific -> must be QUERIED, not flagged.
-            vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, presentSupport);
+            vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface.handle(), presentSupport);
             if (presentSupport.get(0) == VK_TRUE) {
                 indices.presentFamily = i;
             }
@@ -603,18 +418,18 @@ public class Main {
         try (MemoryStack stack = stackPush()) {
             // ---- Query (three separate "what does this surface support?" calls) ----
             VkSurfaceCapabilitiesKHR caps = VkSurfaceCapabilitiesKHR.malloc(stack);
-            vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, caps);
+            vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface.handle(), caps);
 
             IntBuffer formatCount = stack.ints(0);
-            vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, formatCount, null);
+            vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface.handle(), formatCount, null);
             VkSurfaceFormatKHR.Buffer formats =
                     VkSurfaceFormatKHR.malloc(formatCount.get(0), stack);
-            vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, formatCount, formats);
+            vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface.handle(), formatCount, formats);
 
             IntBuffer modeCount = stack.ints(0);
-            vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, modeCount, null);
+            vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface.handle(), modeCount, null);
             IntBuffer presentModes = stack.mallocInt(modeCount.get(0));
-            vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, modeCount, presentModes);
+            vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface.handle(), modeCount, presentModes);
 
             // ---- Choose from what's available ----
             VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(formats);
@@ -631,7 +446,7 @@ public class Main {
             // ---- Build the create-info ----
             VkSwapchainCreateInfoKHR createInfo = VkSwapchainCreateInfoKHR.calloc(stack);
             createInfo.sType(VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR);
-            createInfo.surface(surface);
+            createInfo.surface(surface.handle());
             createInfo.minImageCount(imageCount);
             createInfo.imageFormat(surfaceFormat.format());
             createInfo.imageColorSpace(surfaceFormat.colorSpace());
@@ -720,7 +535,7 @@ public class Main {
         }
         IntBuffer w = stack.ints(0);
         IntBuffer h = stack.ints(0);
-        glfwGetFramebufferSize(window, w, h);
+        window.framebufferSize(w, h);
 
         VkExtent2D extent = VkExtent2D.malloc(stack);
         extent.width(clamp(w.get(0),
@@ -1011,8 +826,8 @@ public class Main {
     // ------------------------------------------------------------------
     private void mainLoop() {
         System.out.println("Entering render loop -- clearing to orange. Close the window to exit.");
-        while (!glfwWindowShouldClose(window)) {
-            glfwPollEvents();
+        while (!window.shouldClose()) {
+            window.pollEvents();
             drawFrame();
         }
         // Let the GPU finish the in-flight frame before cleanup() frees anything.
@@ -1112,22 +927,15 @@ public class Main {
         if (device != null) {
             vkDestroyDevice(device, null);
         }
-        if (ENABLE_VALIDATION && debugMessenger != VK_NULL_HANDLE) {
-            vkDestroyDebugUtilsMessengerEXT(instance, debugMessenger, null);
-        }
         // Surface is owned by the instance -> destroy it before the instance.
-        if (surface != VK_NULL_HANDLE) {
-            vkDestroySurfaceKHR(instance, surface, null);
+        if (surface != null) {
+            surface.close();
         }
-        vkDestroyInstance(instance, null);
+        // Instance.close() destroys the debug messenger, then the instance, then
+        // frees the native callback.
+        instance.close();
 
-        // Free the native callback AFTER the instance (which referenced it) is gone.
-        if (debugCallback != null) {
-            debugCallback.free();
-        }
-
-        glfwDestroyWindow(window);
-        glfwTerminate();
+        window.close();
 
         System.out.println("Cleaned up. Bye.");
     }

@@ -65,8 +65,8 @@ Path to first pixels ("clear to color"):
 - [x] Logical device + queues
 - [x] Swapchain
 - [x] Image views
-- [ ] Render pass
-- [ ] Framebuffers
+- [x] Render pass
+- [x] Framebuffers
 - [ ] Command pool + buffers
 - [ ] Synchronization + render loop → **clear to a color**
 

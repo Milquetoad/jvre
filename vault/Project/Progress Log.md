@@ -2,6 +2,17 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-09 — Framebuffers ✅
+- Added `createFramebuffers()` to `jvre.Main`: one `VkFramebuffer` per swapchain image, each binding that image's [[Image Views|view]] into the [[Render Pass|render pass]]'s color slot at the swapchain size. Output: `Created 3 framebuffers`, clean. See [[Framebuffers]].
+- Learned: render pass = blueprint (attachment *slots*), framebuffer = the *filled-in* binding (slot -> concrete view) at a size; attachment order must match the render pass; framebuffers/views/swapchain are the set recreated on resize.
+- **Next:** **command pool + command buffers** — record "begin render pass (clear) / end" into a buffer the GPU executes. See [[Roadmap - Clear to Color]].
+
+## 2026-06-09 — Render pass ✅
+- Added `createRenderPass()` to `jvre.Main`: one color attachment (swapchain format, `loadOp=CLEAR` -> `storeOp=STORE`, `UNDEFINED` -> `PRESENT_SRC_KHR`), a single graphics subpass referencing it, and a forward-looking subpass dependency for the render loop's sync. Output: `Render pass created`, clean. See [[Render Pass]].
+- Learned: the render pass is a **blueprint** (attachments + load/store ops + subpasses), separate from the images/pipeline; **`loadOp=CLEAR` is literally what clears the screen**; image **layouts** and automatic transitions; the attachment index = the fragment shader's `layout(location=0)`; subpass dependencies as sync seams.
+- Added a vault [[Glossary]] (smoke test, boilerplate, two-call idiom, etc.). Committed + pushed swapchain/image-views/design-notes (`ba4c401`, `7b4c3a9`).
+- **Next:** **framebuffers** — one per swapchain image, binding its [[Image Views|view]] to this render pass. See [[Roadmap - Clear to Color]].
+
 ## 2026-06-09 — Image views ✅
 - Added `createImageViews()` to `jvre.Main`: one `VkImageView` per swapchain image (2D, swapchain format, color aspect, no mips, single array layer, identity swizzle). Output: `Created 3 image views`, clean. See [[Image Views]].
 - Learned: you almost never use a `VkImage` directly — a view says *how to interpret* it; render pass/framebuffer reference **views, not images**; the `subresourceRange` (aspect + mip/array range) and component swizzle; we own the views (destroy before the swapchain).

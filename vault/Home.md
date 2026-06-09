@@ -29,6 +29,8 @@ New here? The Map of Content below is a reference index, not a path. To actually
 12. [[Logical Device and Queues]] — opening the connection to the GPU; retrieving queues; requiring swapchain
 13. [[Swapchain]] — negotiating and creating the queue of images we present to the screen
 14. [[Image Views]] — wrapping each swapchain image so it can be rendered into
+15. [[Render Pass]] — the blueprint whose `loadOp=CLEAR` clears the screen
+16. [[Framebuffers]] — binding the real image views into that blueprint
 
 **5. Looking ahead — optional, for the curious**
 - [[Shaders - GLSL and SPIR-V]], [[GUI Options]] / [[Self-Built GUI (planned)]], [[Ray Tracing and Path Tracing (future)]], [[Device Selection and Cross-Platform (planned)]]
@@ -45,6 +47,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - [[Device Selection and Cross-Platform (planned)]] — flexible GPU choice + OS-agnostic (post-MVP)
 
 ### Foundations (Java ↔ native)
+- [[Glossary]] — quick one-line definitions for jargon across the vault
 - [[Build Tools]]
 - [[Gradle]]
 - [[Gradle Wrapper]]
@@ -72,6 +75,8 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - [[Logical Device and Queues]] ✅ — VkDevice, queue handles, swapchain extension
 - [[Swapchain]] ✅ — the presented-image queue (format, present mode, extent)
 - [[Image Views]] ✅ — how to interpret each swapchain image (the render-pass prerequisite)
+- [[Render Pass]] ✅ — the clear-to-color blueprint (attachments, subpass, `loadOp=CLEAR`)
+- [[Framebuffers]] ✅ — bind image views into the render pass (one per swapchain image)
 
 ## Status
 - ✅ Toolchain verified (smoke test passes)
@@ -83,6 +88,8 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - ✅ [[Logical Device and Queues]] — `VkDevice` created, graphics + present queues retrieved, swapchain extension enabled
 - ✅ [[Swapchain]] — created (3 images, 800x600, sRGB BGRA, FIFO on the Intel iGPU)
 - ✅ [[Image Views]] — one view per swapchain image (3 created)
-- ⏭️ Next: **render pass** — the `loadOp = CLEAR` attachment that actually clears the screen
+- ✅ [[Render Pass]] — clear-to-color blueprint created (one color attachment, `loadOp=CLEAR`)
+- ✅ [[Framebuffers]] — one per swapchain image (3 created)
+- ⏭️ Next: **command pool + buffers** — record "begin render pass (clear) / end"
 
 #jvre #moc

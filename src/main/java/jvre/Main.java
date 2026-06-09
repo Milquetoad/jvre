@@ -4,6 +4,8 @@ import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.Configuration;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkApplicationInfo;
+import org.lwjgl.vulkan.VkAttachmentDescription;
+import org.lwjgl.vulkan.VkAttachmentReference;
 import org.lwjgl.vulkan.VkDebugUtilsMessengerCallbackDataEXT;
 import org.lwjgl.vulkan.VkDebugUtilsMessengerCallbackEXT;
 import org.lwjgl.vulkan.VkDebugUtilsMessengerCreateInfoEXT;
@@ -12,6 +14,7 @@ import org.lwjgl.vulkan.VkDeviceCreateInfo;
 import org.lwjgl.vulkan.VkDeviceQueueCreateInfo;
 import org.lwjgl.vulkan.VkExtensionProperties;
 import org.lwjgl.vulkan.VkExtent2D;
+import org.lwjgl.vulkan.VkFramebufferCreateInfo;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
 import org.lwjgl.vulkan.VkInstance;
 import org.lwjgl.vulkan.VkInstanceCreateInfo;
@@ -21,6 +24,9 @@ import org.lwjgl.vulkan.VkPhysicalDeviceFeatures;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
 import org.lwjgl.vulkan.VkQueue;
 import org.lwjgl.vulkan.VkQueueFamilyProperties;
+import org.lwjgl.vulkan.VkRenderPassCreateInfo;
+import org.lwjgl.vulkan.VkSubpassDependency;
+import org.lwjgl.vulkan.VkSubpassDescription;
 import org.lwjgl.vulkan.VkSurfaceCapabilitiesKHR;
 import org.lwjgl.vulkan.VkSurfaceFormatKHR;
 import org.lwjgl.vulkan.VkSwapchainCreateInfoKHR;
@@ -56,7 +62,7 @@ public class Main {
 
     private static final int WIDTH = 800;
     private static final int HEIGHT = 600;
-    private static final CharSequence TITLE = "jvre - image views";
+    private static final CharSequence TITLE = "jvre - framebuffers";
 
     // Flip to false to build a "release" run with no validation overhead.
     private static final boolean ENABLE_VALIDATION = true;
@@ -107,6 +113,16 @@ public class Main {
     // destroy these (unlike the images, which the swapchain owns).
     private long[] swapchainImageViews;
 
+    // The render pass: the BLUEPRINT of a rendering operation -- which attachments,
+    // what to do with them (here: CLEAR then STORE one color attachment), and the
+    // subpasses that use them. Framebuffers and the pipeline are built against it.
+    private long renderPass = VK_NULL_HANDLE;
+
+    // One framebuffer per swapchain image: binds that image's VIEW into the render
+    // pass's attachment slot(s) at the swapchain size. The concrete target the
+    // render pass writes into.
+    private long[] swapchainFramebuffers;
+
     // Handle to the debug messenger object (0 = none).
     private long debugMessenger = VK_NULL_HANDLE;
     // The native callback function. We keep a reference so we can free it at
@@ -155,6 +171,8 @@ public class Main {
         createLogicalDevice();
         createSwapchain();
         createImageViews();
+        createRenderPass();
+        createFramebuffers();
     }
 
     private void createInstance() {
@@ -728,6 +746,103 @@ public class Main {
     }
 
     // ------------------------------------------------------------------
+    // Render pass -- the blueprint that (with loadOp=CLEAR) clears the screen
+    // ------------------------------------------------------------------
+
+    /**
+     * Describe a one-subpass render pass with a single color attachment that we
+     * CLEAR at the start and STORE at the end, leaving it ready to present. This
+     * object defines the clear; the command buffer (later) records it and the loop
+     * runs it. The subpass dependency is forward-looking sync for the render loop.
+     */
+    private void createRenderPass() {
+        try (MemoryStack stack = stackPush()) {
+            // ---- One color attachment: a swapchain image we clear, then present ----
+            VkAttachmentDescription.Buffer colorAttachment =
+                    VkAttachmentDescription.calloc(1, stack);
+            colorAttachment.format(swapchainImageFormat);
+            colorAttachment.samples(VK_SAMPLE_COUNT_1_BIT);            // no multisampling
+            colorAttachment.loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR);       // <-- clears the screen
+            colorAttachment.storeOp(VK_ATTACHMENT_STORE_OP_STORE);     // keep result (to present)
+            colorAttachment.stencilLoadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE);   // no stencil
+            colorAttachment.stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE);
+            colorAttachment.initialLayout(VK_IMAGE_LAYOUT_UNDEFINED);         // don't care about prior contents
+            colorAttachment.finalLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);     // leave it ready to present
+
+            // ---- The subpass uses that attachment as its color target ----
+            VkAttachmentReference.Buffer colorRef = VkAttachmentReference.calloc(1, stack);
+            colorRef.attachment(0);  // index into pAttachments below
+            colorRef.layout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);  // layout DURING the subpass
+
+            VkSubpassDescription.Buffer subpass = VkSubpassDescription.calloc(1, stack);
+            subpass.pipelineBindPoint(VK_PIPELINE_BIND_POINT_GRAPHICS);
+            subpass.colorAttachmentCount(1);
+            subpass.pColorAttachments(colorRef);
+            // The index here (0) is what a fragment shader writes as layout(location=0).
+
+            // ---- Dependency: make the implicit pre-subpass wait for the color
+            // stage before we write. Inert now; makes the render loop correct. ----
+            VkSubpassDependency.Buffer dependency = VkSubpassDependency.calloc(1, stack);
+            dependency.srcSubpass(VK_SUBPASS_EXTERNAL);  // the implicit "before"
+            dependency.dstSubpass(0);                    // our subpass
+            dependency.srcStageMask(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+            dependency.srcAccessMask(0);
+            dependency.dstStageMask(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+            dependency.dstAccessMask(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+
+            VkRenderPassCreateInfo renderPassInfo = VkRenderPassCreateInfo.calloc(stack);
+            renderPassInfo.sType(VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO);
+            renderPassInfo.pAttachments(colorAttachment);
+            renderPassInfo.pSubpasses(subpass);
+            renderPassInfo.pDependencies(dependency);
+
+            LongBuffer pRenderPass = stack.longs(VK_NULL_HANDLE);
+            if (vkCreateRenderPass(device, renderPassInfo, null, pRenderPass) != VK_SUCCESS) {
+                throw new RuntimeException("Failed to create the render pass");
+            }
+            renderPass = pRenderPass.get(0);
+        }
+        System.out.println("Render pass created.");
+    }
+
+    // ------------------------------------------------------------------
+    // Framebuffers -- bind the image views into the render pass
+    // ------------------------------------------------------------------
+
+    /**
+     * One framebuffer per swapchain image: it plugs that image's view into the
+     * render pass's attachment slot(s), at the swapchain size. All share the same
+     * render pass; they differ only in which image view they wrap.
+     */
+    private void createFramebuffers() {
+        swapchainFramebuffers = new long[swapchainImageViews.length];
+
+        try (MemoryStack stack = stackPush()) {
+            LongBuffer attachments = stack.mallocLong(1);  // one attachment (color) per framebuffer
+            LongBuffer pFramebuffer = stack.mallocLong(1);
+
+            for (int i = 0; i < swapchainImageViews.length; i++) {
+                attachments.put(0, swapchainImageViews[i]);
+
+                VkFramebufferCreateInfo createInfo = VkFramebufferCreateInfo.calloc(stack);
+                createInfo.sType(VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO);
+                createInfo.renderPass(renderPass);          // must be compatible with this pass
+                createInfo.pAttachments(attachments);       // the view filling slot 0
+                createInfo.width(swapchainWidth);
+                createInfo.height(swapchainHeight);
+                createInfo.layers(1);
+
+                if (vkCreateFramebuffer(device, createInfo, null, pFramebuffer) != VK_SUCCESS) {
+                    throw new RuntimeException("Failed to create framebuffer " + i);
+                }
+                swapchainFramebuffers[i] = pFramebuffer.get(0);
+            }
+        }
+
+        System.out.println("Created " + swapchainFramebuffers.length + " framebuffers.");
+    }
+
+    // ------------------------------------------------------------------
     // Loop
     // ------------------------------------------------------------------
     private void mainLoop() {
@@ -744,6 +859,17 @@ public class Main {
         // it goes before the device; the device (everything device-level hangs off
         // it) goes before the instance-level objects. (Destroying the swapchain also
         // frees the images it owns -- we don't destroy those individually.)
+        // Framebuffers reference the image views + render pass, so they go first.
+        if (swapchainFramebuffers != null) {
+            for (long fb : swapchainFramebuffers) {
+                vkDestroyFramebuffer(device, fb, null);
+            }
+        }
+        // Render pass is built against the swapchain's format; tear it down before
+        // the views/swapchain it describes.
+        if (renderPass != VK_NULL_HANDLE) {
+            vkDestroyRenderPass(device, renderPass, null);
+        }
         // Image views reference the swapchain's images, so destroy them first.
         if (swapchainImageViews != null) {
             for (long view : swapchainImageViews) {

@@ -27,6 +27,8 @@ New here? The Map of Content below is a reference index, not a path. To actually
 10. [[Windowing - GLFW and the Surface]] — who actually makes the window, and the window ↔ Vulkan bridge
 11. [[Physical Device and Queue Families]] — choosing a GPU; queue families; present support
 12. [[Logical Device and Queues]] — opening the connection to the GPU; retrieving queues; requiring swapchain
+13. [[Swapchain]] — negotiating and creating the queue of images we present to the screen
+14. [[Image Views]] — wrapping each swapchain image so it can be rendered into
 
 **5. Looking ahead — optional, for the curious**
 - [[Shaders - GLSL and SPIR-V]], [[GUI Options]] / [[Self-Built GUI (planned)]], [[Ray Tracing and Path Tracing (future)]], [[Device Selection and Cross-Platform (planned)]]
@@ -39,6 +41,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - [[Toolchain Setup]] — what's installed and why
 - [[Progress Log]] — dated diary of what we've done
 - [[API Vision - Layered Altitudes]] — the engine's north star (high-level + shader-art on one stack)
+- [[Design North Star]] — the sweet spot (smaller than Processing; powerful, flexible, approachable) + how we measure it
 - [[Device Selection and Cross-Platform (planned)]] — flexible GPU choice + OS-agnostic (post-MVP)
 
 ### Foundations (Java ↔ native)
@@ -67,6 +70,8 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - [[Validation Layer and Debug Messenger]] ✅ — the safety net
 - [[Physical Device and Queue Families]] ✅ — picking a GPU, queues, present support
 - [[Logical Device and Queues]] ✅ — VkDevice, queue handles, swapchain extension
+- [[Swapchain]] ✅ — the presented-image queue (format, present mode, extent)
+- [[Image Views]] ✅ — how to interpret each swapchain image (the render-pass prerequisite)
 
 ## Status
 - ✅ Toolchain verified (smoke test passes)
@@ -76,6 +81,8 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - ✅ Surface (`VkSurfaceKHR`) created — window connected to Vulkan
 - ✅ [[Physical Device and Queue Families]] — picked the RTX 4090 (graphics + present, scored)
 - ✅ [[Logical Device and Queues]] — `VkDevice` created, graphics + present queues retrieved, swapchain extension enabled
-- ⏭️ Next: **swapchain** — choose format/present-mode/extent, create the presentable images
+- ✅ [[Swapchain]] — created (3 images, 800x600, sRGB BGRA, FIFO on the Intel iGPU)
+- ✅ [[Image Views]] — one view per swapchain image (3 created)
+- ⏭️ Next: **render pass** — the `loadOp = CLEAR` attachment that actually clears the screen
 
 #jvre #moc

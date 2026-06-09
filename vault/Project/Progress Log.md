@@ -2,6 +2,18 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-09 — Image views ✅
+- Added `createImageViews()` to `jvre.Main`: one `VkImageView` per swapchain image (2D, swapchain format, color aspect, no mips, single array layer, identity swizzle). Output: `Created 3 image views`, clean. See [[Image Views]].
+- Learned: you almost never use a `VkImage` directly — a view says *how to interpret* it; render pass/framebuffer reference **views, not images**; the `subresourceRange` (aspect + mip/array range) and component swizzle; we own the views (destroy before the swapchain).
+- **Design discussion logged this session:** [[Design North Star]] (the smaller-than-Processing-but-flexible sweet spot; approachability is unbuilt and must be designed at L2, not bolted on), plus the elementaries-refactor *timing/seam* and surface-format-as-L1-policy decisions (in [[API Vision - Layered Altitudes]] / [[Swapchain]]).
+- **Next:** the **render pass** — describe the color attachment (these views) with `loadOp = CLEAR`. This is the object that actually **clears the screen**. See [[Roadmap - Clear to Color]].
+
+## 2026-06-09 — Swapchain ✅
+- Added `createSwapchain()` to `jvre.Main`: queried surface capabilities / formats / present modes, chose format (prefer `B8G8R8A8_SRGB`), present mode (prefer `MAILBOX`, fall back to `FIFO`), and extent (window framebuffer size, clamped), created the `VkSwapchainKHR`, and retrieved the image handles. See [[Swapchain]].
+- Output on craptop's Intel UHD 620: `Swapchain created: 3 images, 800x600, format 50, present mode FIFO` — clean. `minImageCount`(2)+1 = triple buffering; the iGPU exposes only FIFO (no MAILBOX); surface pinned the 800x600 extent; format 50 = `B8G8R8A8_SRGB`.
+- Learned: the present/acquire swap model; sharing mode (`CONCURRENT` vs `EXCLUSIVE`) depends on whether graphics/present families differ (shared here -> EXCLUSIVE); extent is in **pixels** (framebuffer size, not screen coords); swapchain images are **owned by the swapchain** (freed by destroying it, not individually); `oldSwapchain` is the future seam for resize recreation.
+- **Next:** **image views** — a `VkImageView` per swapchain image describing how to interpret it (2D, color, mip/array range), the prerequisite for framebuffers. See [[Roadmap - Clear to Color]].
+
 ## 2026-06-09 — Logical device + queues ✅
 - Added `createLogicalDevice()` to `jvre.Main`: deduped graphics+present families via a `Set`, requested one queue each, enabled the `VK_KHR_swapchain` device extension, created the `VkDevice`, and retrieved the graphics & present `VkQueue` handles. Also made **swapchain support a hard requirement** during GPU selection (`checkDeviceExtensionSupport`). See [[Logical Device and Queues]].
 - On craptop's Intel UHD 620, graphics and present are the **same family** → output: `Logical device created; ... (shared family)`.

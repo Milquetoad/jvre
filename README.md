@@ -63,8 +63,8 @@ Path to first pixels ("clear to color"):
 - [x] Window surface
 - [x] Physical device selection (queue families, present support, scoring)
 - [x] Logical device + queues
-- [ ] Swapchain
-- [ ] Image views
+- [x] Swapchain
+- [x] Image views
 - [ ] Render pass
 - [ ] Framebuffers
 - [ ] Command pool + buffers

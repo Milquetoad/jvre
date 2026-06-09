@@ -11,6 +11,8 @@ import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkDeviceCreateInfo;
 import org.lwjgl.vulkan.VkDeviceQueueCreateInfo;
 import org.lwjgl.vulkan.VkExtensionProperties;
+import org.lwjgl.vulkan.VkExtent2D;
+import org.lwjgl.vulkan.VkImageViewCreateInfo;
 import org.lwjgl.vulkan.VkInstance;
 import org.lwjgl.vulkan.VkInstanceCreateInfo;
 import org.lwjgl.vulkan.VkLayerProperties;
@@ -19,6 +21,9 @@ import org.lwjgl.vulkan.VkPhysicalDeviceFeatures;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
 import org.lwjgl.vulkan.VkQueue;
 import org.lwjgl.vulkan.VkQueueFamilyProperties;
+import org.lwjgl.vulkan.VkSurfaceCapabilitiesKHR;
+import org.lwjgl.vulkan.VkSurfaceFormatKHR;
+import org.lwjgl.vulkan.VkSwapchainCreateInfoKHR;
 
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
@@ -37,18 +42,21 @@ import static org.lwjgl.vulkan.KHRSwapchain.*;
 import static org.lwjgl.vulkan.VK10.*;
 
 /**
- * Step 2: instance + validation layer + debug messenger (the "safety net").
+ * jvre bootstrap -- one linear, heavily commented file by design (we get it
+ * working top-to-bottom first, then refactor into reusable classes; see the
+ * vault). initVulkan() builds the path to the screen one object at a time:
  *
- * Vulkan is silent on misuse. The validation layer checks our every call; the
- * debug messenger is the callback that delivers those check results to us. With
- * this in place, mistakes show up as readable messages instead of crashes or
- * (worse) silent wrong behavior.
+ *   instance -> validation/debug messenger -> surface -> physical device
+ *   -> logical device + queues -> swapchain
+ *
+ * cleanup() tears everything down in reverse (child before parent). This is a
+ * learning artifact, so the comments explain the WHY, not just the what.
  */
 public class Main {
 
     private static final int WIDTH = 800;
     private static final int HEIGHT = 600;
-    private static final CharSequence TITLE = "jvre - logical device";
+    private static final CharSequence TITLE = "jvre - image views";
 
     // Flip to false to build a "release" run with no validation overhead.
     private static final boolean ENABLE_VALIDATION = true;
@@ -83,6 +91,22 @@ public class Main {
     private VkQueue graphicsQueue;
     private VkQueue presentQueue;
 
+    // The swapchain: the queue of images presented to the surface (double/triple
+    // buffering). WE create it from the device + surface, and destroy it. The
+    // images it holds are OWNED by the swapchain -- not destroyed individually.
+    private long swapchain = VK_NULL_HANDLE;
+    private long[] swapchainImages;
+    // Chosen at creation; every later step (image views, render pass, framebuffers,
+    // viewport) needs the format and the extent, so we remember them.
+    private int swapchainImageFormat;
+    private int swapchainWidth;
+    private int swapchainHeight;
+
+    // One VkImageView per swapchain image: the "lens" describing how to interpret
+    // that image so the render pass / framebuffer can target it. WE create and
+    // destroy these (unlike the images, which the swapchain owns).
+    private long[] swapchainImageViews;
+
     // Handle to the debug messenger object (0 = none).
     private long debugMessenger = VK_NULL_HANDLE;
     // The native callback function. We keep a reference so we can free it at
@@ -112,7 +136,7 @@ public class Main {
             throw new IllegalStateException("Unable to initialize GLFW");
         }
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);  // no OpenGL context
-        glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);    // no swapchain yet
+        glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);    // fixed until we add swapchain recreation
 
         window = glfwCreateWindow(WIDTH, HEIGHT, TITLE, NULL, NULL);
         if (window == NULL) {
@@ -129,6 +153,8 @@ public class Main {
         createSurface();
         pickPhysicalDevice();
         createLogicalDevice();
+        createSwapchain();
+        createImageViews();
     }
 
     private void createInstance() {
@@ -511,6 +537,197 @@ public class Main {
     }
 
     // ------------------------------------------------------------------
+    // Swapchain -- the images we present to the surface
+    // ------------------------------------------------------------------
+
+    /**
+     * Create the swapchain: negotiate format / present mode / extent / image count
+     * with the surface, build the VkSwapchainKHR, and retrieve its image handles.
+     * Each choice follows the same shape: QUERY what's supported, then PICK.
+     */
+    private void createSwapchain() {
+        try (MemoryStack stack = stackPush()) {
+            // ---- Query (three separate "what does this surface support?" calls) ----
+            VkSurfaceCapabilitiesKHR caps = VkSurfaceCapabilitiesKHR.malloc(stack);
+            vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, caps);
+
+            IntBuffer formatCount = stack.ints(0);
+            vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, formatCount, null);
+            VkSurfaceFormatKHR.Buffer formats =
+                    VkSurfaceFormatKHR.malloc(formatCount.get(0), stack);
+            vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, formatCount, formats);
+
+            IntBuffer modeCount = stack.ints(0);
+            vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, modeCount, null);
+            IntBuffer presentModes = stack.mallocInt(modeCount.get(0));
+            vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, modeCount, presentModes);
+
+            // ---- Choose from what's available ----
+            VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(formats);
+            int presentMode = chooseSwapPresentMode(presentModes);
+            VkExtent2D extent = chooseSwapExtent(caps, stack);
+
+            // Request one MORE than the minimum so we're not stuck waiting on the
+            // driver to release an image. maxImageCount == 0 means "no maximum".
+            int imageCount = caps.minImageCount() + 1;
+            if (caps.maxImageCount() > 0 && imageCount > caps.maxImageCount()) {
+                imageCount = caps.maxImageCount();
+            }
+
+            // ---- Build the create-info ----
+            VkSwapchainCreateInfoKHR createInfo = VkSwapchainCreateInfoKHR.calloc(stack);
+            createInfo.sType(VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR);
+            createInfo.surface(surface);
+            createInfo.minImageCount(imageCount);
+            createInfo.imageFormat(surfaceFormat.format());
+            createInfo.imageColorSpace(surfaceFormat.colorSpace());
+            createInfo.imageExtent(extent);
+            createInfo.imageArrayLayers(1);  // 1 unless rendering stereoscopic 3D
+            createInfo.imageUsage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);  // we render INTO them
+
+            // If graphics and present are DIFFERENT families, the images are used by
+            // both queues. CONCURRENT lets them share without explicit ownership
+            // transfers (simpler, slightly slower); EXCLUSIVE is faster but needs
+            // manual handoff. Same family -> EXCLUSIVE with nothing to share.
+            QueueFamilyIndices indices = findQueueFamilies(physicalDevice, stack);
+            if (!indices.graphicsFamily.equals(indices.presentFamily)) {
+                createInfo.imageSharingMode(VK_SHARING_MODE_CONCURRENT);
+                createInfo.pQueueFamilyIndices(
+                        stack.ints(indices.graphicsFamily, indices.presentFamily));
+            } else {
+                createInfo.imageSharingMode(VK_SHARING_MODE_EXCLUSIVE);
+            }
+
+            createInfo.preTransform(caps.currentTransform());          // no rotate/flip
+            createInfo.compositeAlpha(VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR);  // ignore window alpha
+            createInfo.presentMode(presentMode);
+            createInfo.clipped(true);                                  // skip obscured pixels
+            createInfo.oldSwapchain(VK_NULL_HANDLE);                   // no prior chain to recycle
+
+            LongBuffer pSwapchain = stack.longs(VK_NULL_HANDLE);
+            if (vkCreateSwapchainKHR(device, createInfo, null, pSwapchain) != VK_SUCCESS) {
+                throw new RuntimeException("Failed to create the swapchain");
+            }
+            swapchain = pSwapchain.get(0);
+
+            // ---- Retrieve the image handles. The driver may make MORE than we
+            // asked for, so query the real count (two-call idiom again). ----
+            IntBuffer imgCount = stack.ints(0);
+            vkGetSwapchainImagesKHR(device, swapchain, imgCount, null);
+            LongBuffer pImages = stack.mallocLong(imgCount.get(0));
+            vkGetSwapchainImagesKHR(device, swapchain, imgCount, pImages);
+            swapchainImages = new long[imgCount.get(0)];
+            for (int i = 0; i < swapchainImages.length; i++) {
+                swapchainImages[i] = pImages.get(i);
+            }
+
+            // ---- Remember what later steps will need ----
+            swapchainImageFormat = surfaceFormat.format();
+            swapchainWidth = extent.width();
+            swapchainHeight = extent.height();
+
+            String pmName = (presentMode == VK_PRESENT_MODE_MAILBOX_KHR) ? "MAILBOX" : "FIFO";
+            System.out.println("Swapchain created: " + swapchainImages.length + " images, "
+                    + swapchainWidth + "x" + swapchainHeight
+                    + ", format " + swapchainImageFormat + ", present mode " + pmName + ".");
+        }
+    }
+
+    /** Prefer 8-bit BGRA in sRGB color space (correct-looking colors); else take the first. */
+    private VkSurfaceFormatKHR chooseSwapSurfaceFormat(VkSurfaceFormatKHR.Buffer available) {
+        for (VkSurfaceFormatKHR f : available) {
+            if (f.format() == VK_FORMAT_B8G8R8A8_SRGB
+                    && f.colorSpace() == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+                return f;
+            }
+        }
+        return available.get(0);  // any format beats failing
+    }
+
+    /** Prefer MAILBOX (low-latency triple buffering); fall back to FIFO (always supported). */
+    private int chooseSwapPresentMode(IntBuffer available) {
+        for (int i = 0; i < available.capacity(); i++) {
+            if (available.get(i) == VK_PRESENT_MODE_MAILBOX_KHR) {
+                return VK_PRESENT_MODE_MAILBOX_KHR;
+            }
+        }
+        return VK_PRESENT_MODE_FIFO_KHR;  // guaranteed by the spec
+    }
+
+    /**
+     * The image resolution, in PIXELS. If the surface pins currentExtent we must
+     * use it; otherwise (the sentinel 0xFFFFFFFF) we're free to choose, so we take
+     * the window's FRAMEBUFFER size -- pixels, not screen coordinates, which differ
+     * on high-DPI displays -- clamped into the surface's allowed min/max.
+     */
+    private VkExtent2D chooseSwapExtent(VkSurfaceCapabilitiesKHR caps, MemoryStack stack) {
+        if (caps.currentExtent().width() != 0xFFFFFFFF) {
+            return caps.currentExtent();
+        }
+        IntBuffer w = stack.ints(0);
+        IntBuffer h = stack.ints(0);
+        glfwGetFramebufferSize(window, w, h);
+
+        VkExtent2D extent = VkExtent2D.malloc(stack);
+        extent.width(clamp(w.get(0),
+                caps.minImageExtent().width(), caps.maxImageExtent().width()));
+        extent.height(clamp(h.get(0),
+                caps.minImageExtent().height(), caps.maxImageExtent().height()));
+        return extent;
+    }
+
+    private int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    // ------------------------------------------------------------------
+    // Image views -- "how to interpret" each swapchain image
+    // ------------------------------------------------------------------
+
+    /**
+     * Wrap each swapchain image in a VkImageView. The render pass and framebuffers
+     * reference VIEWS, not images. For these color images every view is identical
+     * apart from the image it wraps: 2D, swapchain format, color aspect, no mips,
+     * a single array layer, identity component swizzle.
+     */
+    private void createImageViews() {
+        swapchainImageViews = new long[swapchainImages.length];
+
+        try (MemoryStack stack = stackPush()) {
+            LongBuffer pView = stack.mallocLong(1);
+
+            for (int i = 0; i < swapchainImages.length; i++) {
+                VkImageViewCreateInfo createInfo = VkImageViewCreateInfo.calloc(stack);
+                createInfo.sType(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);
+                createInfo.image(swapchainImages[i]);
+                createInfo.viewType(VK_IMAGE_VIEW_TYPE_2D);
+                createInfo.format(swapchainImageFormat);
+
+                // Identity swizzle: R->R, G->G, B->B, A->A (no channel remapping).
+                createInfo.components().r(VK_COMPONENT_SWIZZLE_IDENTITY);
+                createInfo.components().g(VK_COMPONENT_SWIZZLE_IDENTITY);
+                createInfo.components().b(VK_COMPONENT_SWIZZLE_IDENTITY);
+                createInfo.components().a(VK_COMPONENT_SWIZZLE_IDENTITY);
+
+                // Which slice of the image this view covers: the COLOR data, mip
+                // level 0 only (swapchain images have no mipmaps), one array layer.
+                createInfo.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT);
+                createInfo.subresourceRange().baseMipLevel(0);
+                createInfo.subresourceRange().levelCount(1);
+                createInfo.subresourceRange().baseArrayLayer(0);
+                createInfo.subresourceRange().layerCount(1);
+
+                if (vkCreateImageView(device, createInfo, null, pView) != VK_SUCCESS) {
+                    throw new RuntimeException("Failed to create image view " + i);
+                }
+                swapchainImageViews[i] = pView.get(0);
+            }
+        }
+
+        System.out.println("Created " + swapchainImageViews.length + " image views.");
+    }
+
+    // ------------------------------------------------------------------
     // Loop
     // ------------------------------------------------------------------
     private void mainLoop() {
@@ -523,8 +740,19 @@ public class Main {
     // Cleanup — reverse order of creation.
     // ------------------------------------------------------------------
     private void cleanup() {
-        // Reverse order of creation. The logical device is the most dependent
-        // object (everything device-level hangs off it), so it is torn down first.
+        // Reverse order of creation. The swapchain is created FROM the device, so
+        // it goes before the device; the device (everything device-level hangs off
+        // it) goes before the instance-level objects. (Destroying the swapchain also
+        // frees the images it owns -- we don't destroy those individually.)
+        // Image views reference the swapchain's images, so destroy them first.
+        if (swapchainImageViews != null) {
+            for (long view : swapchainImageViews) {
+                vkDestroyImageView(device, view, null);
+            }
+        }
+        if (swapchain != VK_NULL_HANDLE) {
+            vkDestroySwapchainKHR(device, swapchain, null);
+        }
         if (device != null) {
             vkDestroyDevice(device, null);
         }

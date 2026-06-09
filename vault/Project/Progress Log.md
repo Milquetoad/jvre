@@ -2,6 +2,13 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-09 — Open-sourced: pushed to GitHub ✅
+- Published to **https://github.com/Milquetoad/jvre** (public). Added docs: README, CONTRIBUTING (with a CLA), `.gitignore`, `.gitattributes` (LF normalization for the coming Linux move), AGPL-3.0 LICENSE.
+- **License = AGPL-3.0**, chosen via the one-way-ratchet principle (start restrictive; can always relax to MIT, never re-tighten). Keeps dual-licensing/monetization open — relevant if jvre ever powers a hosted/streamed rendering service (headless Vulkan!). See [[Device Selection and Cross-Platform (planned)]] neighbors / engine vision.
+- Privacy scrub before going public: no secrets; excluded `.claude/settings.local.json` and Obsidian `workspace.json`; genericized a local path; committed with a GitHub **noreply** email so the real address stays out of history.
+- The whole **vault is committed** — the learning notes travel with the code.
+- **Next (resumes the build):** **logical device + queues**.
+
 ## 2026-06-09 — Physical device: picked the RTX 4090 ✅
 - Added `pickPhysicalDevice()` to `jvre.Main`: enumerate GPUs, find queue families (graphics + present), discard unsuitable, **score** the rest (discrete +1000, +maxImageDimension2D tiebreak), keep the best. See [[Physical Device and Queue Families]].
 - Output: `Picked GPU: NVIDIA GeForce RTX 4090 (score 33768)`.

@@ -62,7 +62,7 @@ Path to first pixels ("clear to color"):
 - [x] Validation layer + debug messenger
 - [x] Window surface
 - [x] Physical device selection (queue families, present support, scoring)
-- [ ] Logical device + queues
+- [x] Logical device + queues
 - [ ] Swapchain
 - [ ] Image views
 - [ ] Render pass

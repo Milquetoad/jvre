@@ -7,15 +7,25 @@ import org.lwjgl.vulkan.VkApplicationInfo;
 import org.lwjgl.vulkan.VkDebugUtilsMessengerCallbackDataEXT;
 import org.lwjgl.vulkan.VkDebugUtilsMessengerCallbackEXT;
 import org.lwjgl.vulkan.VkDebugUtilsMessengerCreateInfoEXT;
+import org.lwjgl.vulkan.VkDevice;
+import org.lwjgl.vulkan.VkDeviceCreateInfo;
+import org.lwjgl.vulkan.VkDeviceQueueCreateInfo;
+import org.lwjgl.vulkan.VkExtensionProperties;
 import org.lwjgl.vulkan.VkInstance;
 import org.lwjgl.vulkan.VkInstanceCreateInfo;
 import org.lwjgl.vulkan.VkLayerProperties;
 import org.lwjgl.vulkan.VkPhysicalDevice;
+import org.lwjgl.vulkan.VkPhysicalDeviceFeatures;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
+import org.lwjgl.vulkan.VkQueue;
 import org.lwjgl.vulkan.VkQueueFamilyProperties;
 
+import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
 
 import static org.lwjgl.glfw.GLFW.*;
 import static org.lwjgl.glfw.GLFWVulkan.*;
@@ -23,6 +33,7 @@ import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.NULL;
 import static org.lwjgl.vulkan.EXTDebugUtils.*;
 import static org.lwjgl.vulkan.KHRSurface.*;
+import static org.lwjgl.vulkan.KHRSwapchain.*;
 import static org.lwjgl.vulkan.VK10.*;
 
 /**
@@ -37,11 +48,16 @@ public class Main {
 
     private static final int WIDTH = 800;
     private static final int HEIGHT = 600;
-    private static final CharSequence TITLE = "jvre - physical device";
+    private static final CharSequence TITLE = "jvre - logical device";
 
     // Flip to false to build a "release" run with no validation overhead.
     private static final boolean ENABLE_VALIDATION = true;
     private static final String VALIDATION_LAYER = "VK_LAYER_KHRONOS_validation";
+
+    // Device-level extensions we require. VK_KHR_swapchain is what lets us present
+    // rendered images to the surface (the next milestone), so we both REQUIRE it
+    // during GPU selection and ENABLE it when creating the logical device.
+    private static final String[] DEVICE_EXTENSIONS = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
 
     private long window;
     private VkInstance instance;
@@ -55,6 +71,17 @@ public class Main {
     // GPU; it is OWNED BY the instance and is NOT destroyed (you don't create it,
     // you just select it). The logical device (next step) is what we create.
     private VkPhysicalDevice physicalDevice = null;
+
+    // The logical device: our actual CONNECTION to the chosen GPU. Unlike the
+    // physical device, WE create this (and must destroy it). All real work --
+    // swapchains, pipelines, buffers, command submission -- goes through the
+    // logical device, never the physical one.
+    private VkDevice device;
+
+    // Handles to the specific queues we asked the device to create; this is where
+    // we submit work. They may be the SAME underlying queue if one family does both.
+    private VkQueue graphicsQueue;
+    private VkQueue presentQueue;
 
     // Handle to the debug messenger object (0 = none).
     private long debugMessenger = VK_NULL_HANDLE;
@@ -101,6 +128,7 @@ public class Main {
         setupDebugMessenger();
         createSurface();
         pickPhysicalDevice();
+        createLogicalDevice();
     }
 
     private void createInstance() {
@@ -301,8 +329,10 @@ public class Main {
                 VkPhysicalDevice device = new VkPhysicalDevice(devices.get(i), instance);
 
                 QueueFamilyIndices indices = findQueueFamilies(device, stack);
-                if (!indices.isComplete()) {
-                    continue;  // missing graphics or present -> unusable for us
+                // Suitable = has the queues we need AND supports the device
+                // extensions we require (swapchain). Both are hard requirements.
+                if (!indices.isComplete() || !checkDeviceExtensionSupport(device, stack)) {
+                    continue;  // missing graphics/present or swapchain -> unusable
                 }
 
                 int score = rateDevice(device, stack);
@@ -313,7 +343,8 @@ public class Main {
             }
 
             if (best == null) {
-                throw new RuntimeException("No suitable GPU found (need graphics + present)");
+                throw new RuntimeException(
+                        "No suitable GPU found (need graphics + present + swapchain)");
             }
             physicalDevice = best;
 
@@ -375,6 +406,110 @@ public class Main {
         return score;
     }
 
+    /**
+     * Does this GPU support every device extension we require? Same two-call
+     * enumeration idiom as the instance layers, but at the DEVICE level --
+     * extensions live on a specific GPU, so we enumerate per physical device.
+     */
+    private boolean checkDeviceExtensionSupport(VkPhysicalDevice device, MemoryStack stack) {
+        IntBuffer extCount = stack.ints(0);
+        vkEnumerateDeviceExtensionProperties(device, (String) null, extCount, null);
+
+        VkExtensionProperties.Buffer available =
+                VkExtensionProperties.malloc(extCount.get(0), stack);
+        vkEnumerateDeviceExtensionProperties(device, (String) null, extCount, available);
+
+        // Start with everything we need; cross off what the GPU offers. Empty = all met.
+        Set<String> required = new HashSet<>(Arrays.asList(DEVICE_EXTENSIONS));
+        for (VkExtensionProperties ext : available) {
+            required.remove(ext.extensionNameString());
+        }
+        return required.isEmpty();
+    }
+
+    // ------------------------------------------------------------------
+    // Logical device (VkDevice) + queues
+    // ------------------------------------------------------------------
+
+    /**
+     * Create the logical device -- our handle for actually talking to the chosen
+     * GPU -- and pull out the queue handles we'll submit work to.
+     *
+     * The recipe has three parts: (1) WHICH QUEUES to create (one from the
+     * graphics family, one from the present family -- deduped, since they may be
+     * the same family and Vulkan forbids listing it twice); (2) WHICH FEATURES to
+     * enable (none yet); (3) WHICH DEVICE EXTENSIONS to enable (VK_KHR_swapchain).
+     */
+    private void createLogicalDevice() {
+        try (MemoryStack stack = stackPush()) {
+            QueueFamilyIndices indices = findQueueFamilies(physicalDevice, stack);
+
+            // Collapse graphics+present into the set of DISTINCT families to request.
+            Set<Integer> uniqueFamilies = new HashSet<>();
+            uniqueFamilies.add(indices.graphicsFamily);
+            uniqueFamilies.add(indices.presentFamily);
+
+            // One create-info per distinct family; each asks for a single queue.
+            VkDeviceQueueCreateInfo.Buffer queueCreateInfos =
+                    VkDeviceQueueCreateInfo.calloc(uniqueFamilies.size(), stack);
+
+            // Priority in [0,1] hints scheduling when queues compete. With one queue
+            // each it's moot, but the field is required. The COUNT of priorities is
+            // how Vulkan infers how many queues we want from the family (here: 1).
+            FloatBuffer priority = stack.floats(1.0f);
+
+            int idx = 0;
+            for (int family : uniqueFamilies) {
+                VkDeviceQueueCreateInfo qci = queueCreateInfos.get(idx++);
+                qci.sType(VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO);
+                qci.queueFamilyIndex(family);
+                qci.pQueuePriorities(priority);
+            }
+
+            // No special device features needed yet (geometry shaders, aniso, ...).
+            VkPhysicalDeviceFeatures deviceFeatures = VkPhysicalDeviceFeatures.calloc(stack);
+
+            VkDeviceCreateInfo createInfo = VkDeviceCreateInfo.calloc(stack);
+            createInfo.sType(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO);
+            createInfo.pQueueCreateInfos(queueCreateInfos);
+            createInfo.pEnabledFeatures(deviceFeatures);
+            createInfo.ppEnabledExtensionNames(asPointerBuffer(stack, DEVICE_EXTENSIONS));
+
+            // NOTE: we deliberately leave ppEnabledLayerNames UNSET (count 0).
+            // Device-level layers are a Vulkan 1.0 legacy concept that never worked;
+            // the INSTANCE validation layer already covers device calls. Current
+            // validation requires enabledLayerCount == 0 and errors otherwise
+            // (VUID-VkDeviceCreateInfo-enabledLayerCount-12384).
+
+            PointerBuffer pDevice = stack.mallocPointer(1);
+            if (vkCreateDevice(physicalDevice, createInfo, null, pDevice) != VK_SUCCESS) {
+                throw new RuntimeException("Failed to create the logical device");
+            }
+            device = new VkDevice(pDevice.get(0), physicalDevice, createInfo);
+
+            // Queues are CREATED with the device; we only RETRIEVE handles to them.
+            // Index 0 = the first (and only) queue we requested from each family.
+            PointerBuffer pQueue = stack.mallocPointer(1);
+            vkGetDeviceQueue(device, indices.graphicsFamily, 0, pQueue);
+            graphicsQueue = new VkQueue(pQueue.get(0), device);
+            vkGetDeviceQueue(device, indices.presentFamily, 0, pQueue);
+            presentQueue = new VkQueue(pQueue.get(0), device);
+
+            boolean shared = indices.graphicsFamily.equals(indices.presentFamily);
+            System.out.println("Logical device created; graphics + present queues retrieved"
+                    + (shared ? " (shared family)." : " (separate families)."));
+        }
+    }
+
+    /** Pack a String[] into a PointerBuffer of UTF-8 names for Vulkan. */
+    private PointerBuffer asPointerBuffer(MemoryStack stack, String[] strings) {
+        PointerBuffer buffer = stack.mallocPointer(strings.length);
+        for (String s : strings) {
+            buffer.put(stack.UTF8(s));
+        }
+        return buffer.rewind();
+    }
+
     // ------------------------------------------------------------------
     // Loop
     // ------------------------------------------------------------------
@@ -388,6 +523,11 @@ public class Main {
     // Cleanup — reverse order of creation.
     // ------------------------------------------------------------------
     private void cleanup() {
+        // Reverse order of creation. The logical device is the most dependent
+        // object (everything device-level hangs off it), so it is torn down first.
+        if (device != null) {
+            vkDestroyDevice(device, null);
+        }
         if (ENABLE_VALIDATION && debugMessenger != VK_NULL_HANDLE) {
             vkDestroyDebugUtilsMessengerEXT(instance, debugMessenger, null);
         }

@@ -2,6 +2,14 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-09 — Logical device + queues ✅
+- Added `createLogicalDevice()` to `jvre.Main`: deduped graphics+present families via a `Set`, requested one queue each, enabled the `VK_KHR_swapchain` device extension, created the `VkDevice`, and retrieved the graphics & present `VkQueue` handles. Also made **swapchain support a hard requirement** during GPU selection (`checkDeviceExtensionSupport`). See [[Logical Device and Queues]].
+- On craptop's Intel UHD 620, graphics and present are the **same family** → output: `Logical device created; ... (shared family)`.
+- **War story:** first run hit a validation **ERROR** — `vkCreateDevice enabledLayerCount is 1 (not zero)`. Old "set device layers for backwards-compat" advice is now wrong: device layers are 1.0 legacy, the instance layer covers device calls, and the spec requires count 0. Removed them → clean run. The [[Validation Layer and Debug Messenger|safety net]] earning its keep.
+- Learned: physical (read-only, selected) vs logical (created/owned/destroyed) device; queues are born with the device and only *retrieved*; queue count is inferred from the priorities buffer length; device vs instance extension scope; destroy the device first in cleanup.
+- **Setup milestone:** this was the first feature built on **craptop** after migrating from Hal-9000 (Tailscale/SSH to the 4090 box wired up; Vulkan SDK installed locally). See [[Toolchain Setup]].
+- **Next:** the **swapchain** — choose format/present-mode/extent, create the chain of presentable images. See [[Roadmap - Clear to Color]].
+
 ## 2026-06-09 — Open-sourced: pushed to GitHub ✅
 - Published to **https://github.com/Milquetoad/jvre** (public). Added docs: README, CONTRIBUTING (with a CLA), `.gitignore`, `.gitattributes` (LF normalization for the coming Linux move), AGPL-3.0 LICENSE.
 - **License = AGPL-3.0**, chosen via the one-way-ratchet principle (start restrictive; can always relax to MIT, never re-tighten). Keeps dual-licensing/monetization open — relevant if jvre ever powers a hosted/streamed rendering service (headless Vulkan!). See [[Device Selection and Cross-Platform (planned)]] neighbors / engine vision.

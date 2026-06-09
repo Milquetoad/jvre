@@ -6,6 +6,11 @@ import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkApplicationInfo;
 import org.lwjgl.vulkan.VkAttachmentDescription;
 import org.lwjgl.vulkan.VkAttachmentReference;
+import org.lwjgl.vulkan.VkClearValue;
+import org.lwjgl.vulkan.VkCommandBuffer;
+import org.lwjgl.vulkan.VkCommandBufferAllocateInfo;
+import org.lwjgl.vulkan.VkCommandBufferBeginInfo;
+import org.lwjgl.vulkan.VkCommandPoolCreateInfo;
 import org.lwjgl.vulkan.VkDebugUtilsMessengerCallbackDataEXT;
 import org.lwjgl.vulkan.VkDebugUtilsMessengerCallbackEXT;
 import org.lwjgl.vulkan.VkDebugUtilsMessengerCreateInfoEXT;
@@ -14,6 +19,7 @@ import org.lwjgl.vulkan.VkDeviceCreateInfo;
 import org.lwjgl.vulkan.VkDeviceQueueCreateInfo;
 import org.lwjgl.vulkan.VkExtensionProperties;
 import org.lwjgl.vulkan.VkExtent2D;
+import org.lwjgl.vulkan.VkFenceCreateInfo;
 import org.lwjgl.vulkan.VkFramebufferCreateInfo;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
 import org.lwjgl.vulkan.VkInstance;
@@ -22,9 +28,13 @@ import org.lwjgl.vulkan.VkLayerProperties;
 import org.lwjgl.vulkan.VkPhysicalDevice;
 import org.lwjgl.vulkan.VkPhysicalDeviceFeatures;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
+import org.lwjgl.vulkan.VkPresentInfoKHR;
 import org.lwjgl.vulkan.VkQueue;
 import org.lwjgl.vulkan.VkQueueFamilyProperties;
+import org.lwjgl.vulkan.VkRenderPassBeginInfo;
 import org.lwjgl.vulkan.VkRenderPassCreateInfo;
+import org.lwjgl.vulkan.VkSemaphoreCreateInfo;
+import org.lwjgl.vulkan.VkSubmitInfo;
 import org.lwjgl.vulkan.VkSubpassDependency;
 import org.lwjgl.vulkan.VkSubpassDescription;
 import org.lwjgl.vulkan.VkSurfaceCapabilitiesKHR;
@@ -62,7 +72,16 @@ public class Main {
 
     private static final int WIDTH = 800;
     private static final int HEIGHT = 600;
-    private static final CharSequence TITLE = "jvre - framebuffers";
+    private static final CharSequence TITLE = "jvre - clear to color";
+
+    // Bright orange clear color (RGBA in [0,1]). The swapchain is an sRGB format,
+    // so these linear values are sRGB-encoded on write -> a vivid orange on screen.
+    private static final float CLEAR_R = 1.0f;
+    private static final float CLEAR_G = 0.4f;
+    private static final float CLEAR_B = 0.0f;
+
+    // Vulkan's "wait forever" timeout sentinel (UINT64_MAX) for fences/acquire.
+    private static final long NO_TIMEOUT = 0xFFFFFFFFFFFFFFFFL;
 
     // Flip to false to build a "release" run with no validation overhead.
     private static final boolean ENABLE_VALIDATION = true;
@@ -123,6 +142,20 @@ public class Main {
     // render pass writes into.
     private long[] swapchainFramebuffers;
 
+    // Command pool: allocator for command buffers, tied to one queue family
+    // (graphics). Command buffers: pre-recorded command lists -- one per
+    // framebuffer -- that we SUBMIT to a queue. Destroying the pool frees them.
+    private long commandPool = VK_NULL_HANDLE;
+    private VkCommandBuffer[] commandBuffers;
+
+    // Per-frame synchronization (one frame in flight). Semaphores order GPU<->GPU
+    // steps; the fence lets the CPU wait for the GPU before reusing the frame.
+    private long imageAvailableSemaphore = VK_NULL_HANDLE;  // image ready to draw into
+    // ONE renderFinished semaphore PER swapchain image, indexed by acquired image:
+    // a single shared one races with presentation (validation VUID-...-00067).
+    private long[] renderFinishedSemaphores;               // render done, safe to present
+    private long inFlightFence = VK_NULL_HANDLE;            // GPU finished this frame
+
     // Handle to the debug messenger object (0 = none).
     private long debugMessenger = VK_NULL_HANDLE;
     // The native callback function. We keep a reference so we can free it at
@@ -173,6 +206,9 @@ public class Main {
         createImageViews();
         createRenderPass();
         createFramebuffers();
+        createCommandPool();
+        createCommandBuffers();
+        createSyncObjects();
     }
 
     private void createInstance() {
@@ -843,11 +879,189 @@ public class Main {
     }
 
     // ------------------------------------------------------------------
+    // Command pool + buffers -- record "begin render pass (clear) / end"
+    // ------------------------------------------------------------------
+
+    /** The pool command buffers are allocated from, bound to the graphics family. */
+    private void createCommandPool() {
+        try (MemoryStack stack = stackPush()) {
+            QueueFamilyIndices indices = findQueueFamilies(physicalDevice, stack);
+
+            VkCommandPoolCreateInfo poolInfo = VkCommandPoolCreateInfo.calloc(stack);
+            poolInfo.sType(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
+            poolInfo.queueFamilyIndex(indices.graphicsFamily);
+            // No flags: we record each buffer ONCE and never reset it. A loop that
+            // re-records every frame would use RESET_COMMAND_BUFFER_BIT instead.
+
+            LongBuffer pPool = stack.longs(VK_NULL_HANDLE);
+            if (vkCreateCommandPool(device, poolInfo, null, pPool) != VK_SUCCESS) {
+                throw new RuntimeException("Failed to create the command pool");
+            }
+            commandPool = pPool.get(0);
+        }
+        System.out.println("Command pool created.");
+    }
+
+    /**
+     * Allocate one primary command buffer per framebuffer and pre-record the clear
+     * into each: begin -> begin render pass (with the ORANGE clear value, pointed
+     * at that framebuffer) -> end render pass -> end. The render pass's
+     * loadOp=CLEAR does the actual clearing, so there's nothing in between.
+     */
+    private void createCommandBuffers() {
+        int count = swapchainFramebuffers.length;
+        commandBuffers = new VkCommandBuffer[count];
+
+        try (MemoryStack stack = stackPush()) {
+            VkCommandBufferAllocateInfo allocInfo = VkCommandBufferAllocateInfo.calloc(stack);
+            allocInfo.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
+            allocInfo.commandPool(commandPool);
+            allocInfo.level(VK_COMMAND_BUFFER_LEVEL_PRIMARY);  // submittable directly
+            allocInfo.commandBufferCount(count);
+
+            PointerBuffer pBuffers = stack.mallocPointer(count);
+            if (vkAllocateCommandBuffers(device, allocInfo, pBuffers) != VK_SUCCESS) {
+                throw new RuntimeException("Failed to allocate command buffers");
+            }
+            for (int i = 0; i < count; i++) {
+                commandBuffers[i] = new VkCommandBuffer(pBuffers.get(i), device);
+            }
+
+            // The clear color: BRIGHT ORANGE. One VkClearValue for the one color
+            // attachment (index matches the render pass's attachment 0).
+            VkClearValue.Buffer clearValues = VkClearValue.calloc(1, stack);
+            clearValues.get(0).color().float32(stack.floats(CLEAR_R, CLEAR_G, CLEAR_B, 1.0f));
+
+            VkCommandBufferBeginInfo beginInfo = VkCommandBufferBeginInfo.calloc(stack);
+            beginInfo.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
+
+            VkRenderPassBeginInfo renderPassInfo = VkRenderPassBeginInfo.calloc(stack);
+            renderPassInfo.sType(VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO);
+            renderPassInfo.renderPass(renderPass);
+            renderPassInfo.pClearValues(clearValues);
+            renderPassInfo.renderArea().offset().x(0).y(0);           // whole image
+            renderPassInfo.renderArea().extent().width(swapchainWidth).height(swapchainHeight);
+
+            for (int i = 0; i < count; i++) {
+                VkCommandBuffer cmd = commandBuffers[i];
+
+                if (vkBeginCommandBuffer(cmd, beginInfo) != VK_SUCCESS) {
+                    throw new RuntimeException("Failed to begin command buffer " + i);
+                }
+
+                renderPassInfo.framebuffer(swapchainFramebuffers[i]);  // this image's target
+                // INLINE = the commands live in this primary buffer (no secondary buffers).
+                vkCmdBeginRenderPass(cmd, renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+                // (loadOp=CLEAR fills the image; nothing else to record for clear-to-color.)
+                vkCmdEndRenderPass(cmd);
+
+                if (vkEndCommandBuffer(cmd) != VK_SUCCESS) {
+                    throw new RuntimeException("Failed to record command buffer " + i);
+                }
+            }
+        }
+        System.out.println("Recorded " + count + " command buffers (clear to orange).");
+    }
+
+    // ------------------------------------------------------------------
+    // Synchronization
+    // ------------------------------------------------------------------
+
+    /**
+     * Create the sync primitives: an imageAvailable SEMAPHORE, one renderFinished
+     * SEMAPHORE PER swapchain image (a single shared one races with presentation --
+     * VUID-vkQueueSubmit-pSignalSemaphores-00067), and one FENCE (GPU->CPU) for the
+     * single in-flight frame. The fence starts SIGNALED so the first wait doesn't hang.
+     */
+    private void createSyncObjects() {
+        try (MemoryStack stack = stackPush()) {
+            VkSemaphoreCreateInfo semInfo = VkSemaphoreCreateInfo.calloc(stack);
+            semInfo.sType(VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO);
+
+            VkFenceCreateInfo fenceInfo = VkFenceCreateInfo.calloc(stack);
+            fenceInfo.sType(VK_STRUCTURE_TYPE_FENCE_CREATE_INFO);
+            fenceInfo.flags(VK_FENCE_CREATE_SIGNALED_BIT);  // start signaled
+
+            LongBuffer p = stack.longs(VK_NULL_HANDLE);
+            if (vkCreateSemaphore(device, semInfo, null, p) != VK_SUCCESS) {
+                throw new RuntimeException("Failed to create imageAvailable semaphore");
+            }
+            imageAvailableSemaphore = p.get(0);
+
+            // One renderFinished semaphore per swapchain image (reuse-safe: an image
+            // isn't re-acquired until its prior present has consumed the semaphore).
+            renderFinishedSemaphores = new long[swapchainImages.length];
+            for (int i = 0; i < renderFinishedSemaphores.length; i++) {
+                if (vkCreateSemaphore(device, semInfo, null, p) != VK_SUCCESS) {
+                    throw new RuntimeException("Failed to create renderFinished semaphore " + i);
+                }
+                renderFinishedSemaphores[i] = p.get(0);
+            }
+
+            if (vkCreateFence(device, fenceInfo, null, p) != VK_SUCCESS) {
+                throw new RuntimeException("Failed to create in-flight fence");
+            }
+            inFlightFence = p.get(0);
+        }
+        System.out.println("Sync objects created.");
+    }
+
+    // ------------------------------------------------------------------
     // Loop
     // ------------------------------------------------------------------
     private void mainLoop() {
+        System.out.println("Entering render loop -- clearing to orange. Close the window to exit.");
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
+            drawFrame();
+        }
+        // Let the GPU finish the in-flight frame before cleanup() frees anything.
+        vkDeviceWaitIdle(device);
+    }
+
+    /**
+     * Render one frame: wait the previous frame's fence, acquire an image, submit
+     * its pre-recorded command buffer (wait on imageAvailable, signal
+     * renderFinished + the fence), then present (wait on renderFinished).
+     */
+    private void drawFrame() {
+        try (MemoryStack stack = stackPush()) {
+            // 1. Block until the previous frame finished, then reset the fence.
+            vkWaitForFences(device, stack.longs(inFlightFence), true, NO_TIMEOUT);
+            vkResetFences(device, stack.longs(inFlightFence));
+
+            // 2. Acquire the next swapchain image (GPU signals imageAvailable when
+            //    it's genuinely ready to be drawn into).
+            IntBuffer pImageIndex = stack.ints(0);
+            vkAcquireNextImageKHR(device, swapchain, NO_TIMEOUT,
+                    imageAvailableSemaphore, VK_NULL_HANDLE, pImageIndex);
+            int imageIndex = pImageIndex.get(0);
+
+            // 3. Submit that image's command buffer. Wait on imageAvailable at the
+            //    COLOR_ATTACHMENT_OUTPUT stage; signal renderFinished + the fence.
+            VkSubmitInfo submitInfo = VkSubmitInfo.calloc(stack);
+            submitInfo.sType(VK_STRUCTURE_TYPE_SUBMIT_INFO);
+            submitInfo.waitSemaphoreCount(1);
+            submitInfo.pWaitSemaphores(stack.longs(imageAvailableSemaphore));
+            submitInfo.pWaitDstStageMask(stack.ints(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT));
+            submitInfo.pCommandBuffers(stack.pointers(commandBuffers[imageIndex]));
+            submitInfo.pSignalSemaphores(stack.longs(renderFinishedSemaphores[imageIndex]));
+
+            if (vkQueueSubmit(graphicsQueue, submitInfo, inFlightFence) != VK_SUCCESS) {
+                throw new RuntimeException("Failed to submit the draw command buffer");
+            }
+
+            // 4. Present: hand the finished image back to the swapchain to display,
+            //    once renderFinished is signaled. (We ignore out-of-date/suboptimal
+            //    results -- the window is fixed size, so no swapchain recreation yet.)
+            VkPresentInfoKHR presentInfo = VkPresentInfoKHR.calloc(stack);
+            presentInfo.sType(VK_STRUCTURE_TYPE_PRESENT_INFO_KHR);
+            presentInfo.pWaitSemaphores(stack.longs(renderFinishedSemaphores[imageIndex]));
+            presentInfo.swapchainCount(1);
+            presentInfo.pSwapchains(stack.longs(swapchain));
+            presentInfo.pImageIndices(pImageIndex);
+
+            vkQueuePresentKHR(presentQueue, presentInfo);
         }
     }
 
@@ -859,6 +1073,22 @@ public class Main {
         // it goes before the device; the device (everything device-level hangs off
         // it) goes before the instance-level objects. (Destroying the swapchain also
         // frees the images it owns -- we don't destroy those individually.)
+        // Per-frame sync primitives.
+        if (imageAvailableSemaphore != VK_NULL_HANDLE) {
+            vkDestroySemaphore(device, imageAvailableSemaphore, null);
+        }
+        if (renderFinishedSemaphores != null) {
+            for (long s : renderFinishedSemaphores) {
+                vkDestroySemaphore(device, s, null);
+            }
+        }
+        if (inFlightFence != VK_NULL_HANDLE) {
+            vkDestroyFence(device, inFlightFence, null);
+        }
+        // Destroying the command pool also frees the command buffers from it.
+        if (commandPool != VK_NULL_HANDLE) {
+            vkDestroyCommandPool(device, commandPool, null);
+        }
         // Framebuffers reference the image views + render pass, so they go first.
         if (swapchainFramebuffers != null) {
             for (long fb : swapchainFramebuffers) {

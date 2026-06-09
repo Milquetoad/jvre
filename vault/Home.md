@@ -31,6 +31,8 @@ New here? The Map of Content below is a reference index, not a path. To actually
 14. [[Image Views]] — wrapping each swapchain image so it can be rendered into
 15. [[Render Pass]] — the blueprint whose `loadOp=CLEAR` clears the screen
 16. [[Framebuffers]] — binding the real image views into that blueprint
+17. [[Command Buffers]] — recording the clear command (record now, submit later)
+18. [[Synchronization and the Render Loop]] — semaphores/fences and the loop that finally shows the color
 
 **5. Looking ahead — optional, for the curious**
 - [[Shaders - GLSL and SPIR-V]], [[GUI Options]] / [[Self-Built GUI (planned)]], [[Ray Tracing and Path Tracing (future)]], [[Device Selection and Cross-Platform (planned)]]
@@ -77,6 +79,8 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - [[Image Views]] ✅ — how to interpret each swapchain image (the render-pass prerequisite)
 - [[Render Pass]] ✅ — the clear-to-color blueprint (attachments, subpass, `loadOp=CLEAR`)
 - [[Framebuffers]] ✅ — bind image views into the render pass (one per swapchain image)
+- [[Command Buffers]] ✅ — record "begin render pass (clear to orange) / end"
+- [[Synchronization and the Render Loop]] ✅ — semaphores/fences + the per-frame loop (🟠 first pixels)
 
 ## Status
 - ✅ Toolchain verified (smoke test passes)
@@ -90,6 +94,8 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - ✅ [[Image Views]] — one view per swapchain image (3 created)
 - ✅ [[Render Pass]] — clear-to-color blueprint created (one color attachment, `loadOp=CLEAR`)
 - ✅ [[Framebuffers]] — one per swapchain image (3 created)
-- ⏭️ Next: **command pool + buffers** — record "begin render pass (clear) / end"
+- ✅ [[Command Buffers]] — pool + 3 buffers recorded (clear to bright orange)
+- ✅ [[Synchronization and the Render Loop]] — 🟠 **clear to color achieved!** (orange, FIFO, clean validation)
+- ⏭️ Next phase: **refactor the linear bootstrap into the "elementaries"**, then a first triangle / shader
 
 #jvre #moc

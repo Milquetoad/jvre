@@ -67,8 +67,10 @@ Path to first pixels ("clear to color"):
 - [x] Image views
 - [x] Render pass
 - [x] Framebuffers
-- [ ] Command pool + buffers
-- [ ] Synchronization + render loop → **clear to a color**
+- [x] Command pool + buffers
+- [x] Synchronization + render loop → **clear to a color** ✅
+
+🟠 **Milestone reached: the window clears to a solid color.** The full Vulkan bootstrap — instance through the render loop — runs end to end with the validation layers clean.
 
 After that: refactor the linear bootstrap into reusable components, then 2D rendering, text, a self-built GUI, 3D, and eventually ray/path tracing.
 

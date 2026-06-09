@@ -2,6 +2,19 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-09 — 🟠 CLEAR TO COLOR — first pixels! ✅
+- Added `createSyncObjects()` + `drawFrame()` + a real render loop to `jvre.Main`. **The window now fills with bright orange** `(1.0, 0.4, 0.0)`, vsync (FIFO), on the Intel UHD 620 — zero validation output. **The entire "clear to color" roadmap is complete** (instance -> ... -> render loop). See [[Synchronization and the Render Loop]].
+- Sync model (one frame in flight): `imageAvailable` + `renderFinished` semaphores (GPU<->GPU), one `inFlightFence` (GPU->CPU, created SIGNALED). `drawFrame`: wait fence -> acquire -> submit (wait imageAvailable, signal renderFinished + fence) -> present. `vkDeviceWaitIdle` before cleanup.
+- **War story:** a single shared `renderFinished` semaphore tripped validation `VUID-vkQueueSubmit-pSignalSemaphores-00067` — the next frame re-signals it before the previous PRESENT consumed it (present can't signal a fence). Fix (the layer suggested it): **one renderFinished semaphore per swapchain image**, indexed by acquired image. Clean after. Another win for the safety net.
+- Deferred on purpose: frames-in-flight (>1) and swapchain recreation on resize (window is fixed-size).
+- **Next phase:** refactor the linear `Main.java` into reusable "elementaries" (stable instance+surface vs. one recreatable device context — see [[API Vision - Layered Altitudes]]), then a first **triangle / shader**.
+
+## 2026-06-09 — Command pool + buffers ✅
+- Added `createCommandPool()` + `createCommandBuffers()` to `jvre.Main`: a graphics-family pool, one primary command buffer per framebuffer, each pre-recording begin -> `vkCmdBeginRenderPass` (clear = **bright orange** `(1.0, 0.4, 0.0)`) -> end render pass -> end. Output: `Recorded 3 command buffers (clear to orange)`, clean. See [[Command Buffers]].
+- Learned: recording != executing (record now, submit later); command pool is tied to a queue family and frees its buffers on destroy; `loadOp=CLEAR` means there's nothing to record between begin/end render pass; the clear color is a `VkClearValue`, and sRGB encoding makes the linear values read brighter on screen; `SUBPASS_CONTENTS_INLINE`.
+- Committed + pushed render pass/framebuffers (`da8ab56`) and the [[Glossary]] (`330487d`).
+- **Next (the finale):** **synchronization + render loop** — semaphores/fences to order acquire -> submit -> present, then the loop that submits these buffers. **This is where the orange actually appears.** See [[Roadmap - Clear to Color]].
+
 ## 2026-06-09 — Framebuffers ✅
 - Added `createFramebuffers()` to `jvre.Main`: one `VkFramebuffer` per swapchain image, each binding that image's [[Image Views|view]] into the [[Render Pass|render pass]]'s color slot at the swapchain size. Output: `Created 3 framebuffers`, clean. See [[Framebuffers]].
 - Learned: render pass = blueprint (attachment *slots*), framebuffer = the *filled-in* binding (slot -> concrete view) at a size; attachment order must match the render pass; framebuffers/views/swapchain are the set recreated on resize.

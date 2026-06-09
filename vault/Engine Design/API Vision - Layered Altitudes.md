@@ -47,6 +47,16 @@ High-level primitives are *implemented with shaders* on L1. So exposing the shad
 ## Sequencing surprise
 Shader illustration is the **easier** target: a fullscreen frag shader = screen-covering triangle + fragment shader + a few uniforms ≈ barely more than the "first triangle" milestone. The 2D primitive layer (batching + font atlas text) is *more* work. → expect a cool Shadertoy-style demo **early**, before the full 2D/GUI layers.
 
+## Refactor sequencing — when to extract the elementaries (decided 2026-06-09)
+The linear `Main.java` will be split into reusable classes ("the elementaries") — but **not until clear-to-color is working**. The question is *when*, not whether.
+
+**Decision: finish clear-to-color first, then refactor as its own milestone.** Reasoning:
+- The target boundary is the [[Device Selection and Cross-Platform (planned)|seam]]: instance + surface = **stable, long-lived, GPU-agnostic**; everything device-dependent (logical device, swapchain, image views, pipelines, command buffers) = **one recreatable "device context."**
+- The *correct shape* of that recreatable unit only becomes visible once the **render loop + swapchain recreation exist** — they reveal exactly which fields must tear down and rebuild together. Splitting earlier means inventing the context object blind and redrawing its boundaries within a step or two.
+- Concretely: a `Swapchain` class pulled out now would need `device`, `physicalDevice`, `surface`, `window`, and queue families injected — i.e. we'd end up building the context anyway. Cheaper to let the remaining steps expose the dependencies, then cut once.
+
+**Cheap intermediate move (if Main's bulk starts hurting before then):** extract only the *stable* part — instance + debug messenger + surface — into its own class. That boundary is already firm and won't move; the device/swapchain cluster stays in Main until the loop exists.
+
 Related: [[Self-Built GUI (planned)]] is an L2 feature; [[Roadmap - Clear to Color]] is the L0/L1 groundwork.
 
 #design #vision #api

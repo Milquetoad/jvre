@@ -136,7 +136,8 @@ public class Swapchain {
     public int width()           { return width; }
     public int height()          { return height; }
     public int imageCount()      { return images.length; }
-    public long imageView(int i) { return imageViews[i]; }
+    public long image(int i)     { return images[i]; }      // for pipeline barriers (layout transitions)
+    public long imageView(int i) { return imageViews[i]; }  // for rendering (color attachment target)
 
     /** Destroy our image views, then the swapchain (which frees the images it owns). */
     public void close() {

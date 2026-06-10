@@ -17,6 +17,7 @@ import static org.lwjgl.glfw.GLFWVulkan.*;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.EXTDebugUtils.*;
 import static org.lwjgl.vulkan.VK10.*;
+import static org.lwjgl.vulkan.VK13.VK_API_VERSION_1_3;
 
 /**
  * The Vulkan instance -- the root handle / loader entry point -- bundled with the
@@ -59,7 +60,9 @@ public class Instance {
             appInfo.applicationVersion(VK_MAKE_VERSION(1, 0, 0));
             appInfo.pEngineName(stack.UTF8("jvre"));
             appInfo.engineVersion(VK_MAKE_VERSION(1, 0, 0));
-            appInfo.apiVersion(VK_API_VERSION_1_0);
+            // Require Vulkan 1.3: dynamic rendering (our render path) is core in 1.3.
+            // This is the MAX version we intend to use; the driver must support it.
+            appInfo.apiVersion(VK_API_VERSION_1_3);
 
             // ---- Instance recipe ----
             VkInstanceCreateInfo createInfo = VkInstanceCreateInfo.calloc(stack);

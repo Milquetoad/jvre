@@ -9,22 +9,18 @@ import jvre.core.Window;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.Configuration;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.vulkan.VkAttachmentDescription;
-import org.lwjgl.vulkan.VkAttachmentReference;
 import org.lwjgl.vulkan.VkClearValue;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkCommandBufferAllocateInfo;
 import org.lwjgl.vulkan.VkCommandBufferBeginInfo;
 import org.lwjgl.vulkan.VkCommandPoolCreateInfo;
 import org.lwjgl.vulkan.VkFenceCreateInfo;
-import org.lwjgl.vulkan.VkFramebufferCreateInfo;
+import org.lwjgl.vulkan.VkImageMemoryBarrier;
 import org.lwjgl.vulkan.VkPresentInfoKHR;
-import org.lwjgl.vulkan.VkRenderPassBeginInfo;
-import org.lwjgl.vulkan.VkRenderPassCreateInfo;
+import org.lwjgl.vulkan.VkRenderingAttachmentInfo;
+import org.lwjgl.vulkan.VkRenderingInfo;
 import org.lwjgl.vulkan.VkSemaphoreCreateInfo;
 import org.lwjgl.vulkan.VkSubmitInfo;
-import org.lwjgl.vulkan.VkSubpassDependency;
-import org.lwjgl.vulkan.VkSubpassDescription;
 
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
@@ -32,6 +28,7 @@ import java.nio.LongBuffer;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.KHRSwapchain.*;
 import static org.lwjgl.vulkan.VK10.*;
+import static org.lwjgl.vulkan.VK13.*;
 
 /**
  * jvre bootstrap -- one linear, heavily commented file by design (we get it
@@ -79,19 +76,9 @@ public class Main {
     // recreatable device context (rebuilt on resize).
     private Swapchain swapchain;
 
-    // The render pass: the BLUEPRINT of a rendering operation -- which attachments,
-    // what to do with them (here: CLEAR then STORE one color attachment), and the
-    // subpasses that use them. Framebuffers and the pipeline are built against it.
-    private long renderPass = VK_NULL_HANDLE;
-
-    // One framebuffer per swapchain image: binds that image's VIEW into the render
-    // pass's attachment slot(s) at the swapchain size. The concrete target the
-    // render pass writes into.
-    private long[] swapchainFramebuffers;
-
     // Command pool: allocator for command buffers, tied to one queue family
     // (graphics). Command buffers: pre-recorded command lists -- one per
-    // framebuffer -- that we SUBMIT to a queue. Destroying the pool frees them.
+    // swapchain image -- that we SUBMIT to a queue. Destroying the pool frees them.
     private long commandPool = VK_NULL_HANDLE;
     private VkCommandBuffer[] commandBuffers;
 
@@ -133,112 +120,13 @@ public class Main {
         surface = new Surface(instance, window);
         device = new Device(instance, surface);
         swapchain = new Swapchain(device, surface, window);
-        createRenderPass();
-        createFramebuffers();
         createCommandPool();
         createCommandBuffers();
         createSyncObjects();
     }
 
     // ------------------------------------------------------------------
-    // Render pass -- the blueprint that (with loadOp=CLEAR) clears the screen
-    // ------------------------------------------------------------------
-
-    /**
-     * Describe a one-subpass render pass with a single color attachment that we
-     * CLEAR at the start and STORE at the end, leaving it ready to present. This
-     * object defines the clear; the command buffer (later) records it and the loop
-     * runs it. The subpass dependency is forward-looking sync for the render loop.
-     */
-    private void createRenderPass() {
-        try (MemoryStack stack = stackPush()) {
-            // ---- One color attachment: a swapchain image we clear, then present ----
-            VkAttachmentDescription.Buffer colorAttachment =
-                    VkAttachmentDescription.calloc(1, stack);
-            colorAttachment.format(swapchain.imageFormat());
-            colorAttachment.samples(VK_SAMPLE_COUNT_1_BIT);            // no multisampling
-            colorAttachment.loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR);       // <-- clears the screen
-            colorAttachment.storeOp(VK_ATTACHMENT_STORE_OP_STORE);     // keep result (to present)
-            colorAttachment.stencilLoadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE);   // no stencil
-            colorAttachment.stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE);
-            colorAttachment.initialLayout(VK_IMAGE_LAYOUT_UNDEFINED);         // don't care about prior contents
-            colorAttachment.finalLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);     // leave it ready to present
-
-            // ---- The subpass uses that attachment as its color target ----
-            VkAttachmentReference.Buffer colorRef = VkAttachmentReference.calloc(1, stack);
-            colorRef.attachment(0);  // index into pAttachments below
-            colorRef.layout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);  // layout DURING the subpass
-
-            VkSubpassDescription.Buffer subpass = VkSubpassDescription.calloc(1, stack);
-            subpass.pipelineBindPoint(VK_PIPELINE_BIND_POINT_GRAPHICS);
-            subpass.colorAttachmentCount(1);
-            subpass.pColorAttachments(colorRef);
-            // The index here (0) is what a fragment shader writes as layout(location=0).
-
-            // ---- Dependency: make the implicit pre-subpass wait for the color
-            // stage before we write. Inert now; makes the render loop correct. ----
-            VkSubpassDependency.Buffer dependency = VkSubpassDependency.calloc(1, stack);
-            dependency.srcSubpass(VK_SUBPASS_EXTERNAL);  // the implicit "before"
-            dependency.dstSubpass(0);                    // our subpass
-            dependency.srcStageMask(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-            dependency.srcAccessMask(0);
-            dependency.dstStageMask(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-            dependency.dstAccessMask(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
-
-            VkRenderPassCreateInfo renderPassInfo = VkRenderPassCreateInfo.calloc(stack);
-            renderPassInfo.sType(VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO);
-            renderPassInfo.pAttachments(colorAttachment);
-            renderPassInfo.pSubpasses(subpass);
-            renderPassInfo.pDependencies(dependency);
-
-            LongBuffer pRenderPass = stack.longs(VK_NULL_HANDLE);
-            if (vkCreateRenderPass(device.handle(), renderPassInfo, null, pRenderPass) != VK_SUCCESS) {
-                throw new RuntimeException("Failed to create the render pass");
-            }
-            renderPass = pRenderPass.get(0);
-        }
-        System.out.println("Render pass created.");
-    }
-
-    // ------------------------------------------------------------------
-    // Framebuffers -- bind the image views into the render pass
-    // ------------------------------------------------------------------
-
-    /**
-     * One framebuffer per swapchain image: it plugs that image's view into the
-     * render pass's attachment slot(s), at the swapchain size. All share the same
-     * render pass; they differ only in which image view they wrap.
-     */
-    private void createFramebuffers() {
-        swapchainFramebuffers = new long[swapchain.imageCount()];
-
-        try (MemoryStack stack = stackPush()) {
-            LongBuffer attachments = stack.mallocLong(1);  // one attachment (color) per framebuffer
-            LongBuffer pFramebuffer = stack.mallocLong(1);
-
-            for (int i = 0; i < swapchain.imageCount(); i++) {
-                attachments.put(0, swapchain.imageView(i));
-
-                VkFramebufferCreateInfo createInfo = VkFramebufferCreateInfo.calloc(stack);
-                createInfo.sType(VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO);
-                createInfo.renderPass(renderPass);          // must be compatible with this pass
-                createInfo.pAttachments(attachments);       // the view filling slot 0
-                createInfo.width(swapchain.width());
-                createInfo.height(swapchain.height());
-                createInfo.layers(1);
-
-                if (vkCreateFramebuffer(device.handle(), createInfo, null, pFramebuffer) != VK_SUCCESS) {
-                    throw new RuntimeException("Failed to create framebuffer " + i);
-                }
-                swapchainFramebuffers[i] = pFramebuffer.get(0);
-            }
-        }
-
-        System.out.println("Created " + swapchainFramebuffers.length + " framebuffers.");
-    }
-
-    // ------------------------------------------------------------------
-    // Command pool + buffers -- record "begin render pass (clear) / end"
+    // Command pool + buffers -- record barrier / clear / barrier (dynamic rendering)
     // ------------------------------------------------------------------
 
     /** The pool command buffers are allocated from, bound to the graphics family. */
@@ -260,13 +148,20 @@ public class Main {
     }
 
     /**
-     * Allocate one primary command buffer per framebuffer and pre-record the clear
-     * into each: begin -> begin render pass (with the ORANGE clear value, pointed
-     * at that framebuffer) -> end render pass -> end. The render pass's
-     * loadOp=CLEAR does the actual clearing, so there's nothing in between.
+     * Allocate one primary command buffer per swapchain image and pre-record the
+     * clear into each. With NO render pass, WE drive the image's layout transitions
+     * by hand, so each buffer is: begin -> barrier (UNDEFINED -> COLOR_ATTACHMENT
+     * _OPTIMAL) -> begin rendering (ORANGE clear into the image's VIEW) -> end
+     * rendering -> barrier (COLOR_ATTACHMENT_OPTIMAL -> PRESENT_SRC_KHR) -> end.
+     *
+     * loadOp=CLEAR (on the rendering attachment) still does the actual clearing.
+     * The two barriers are what the render pass used to do invisibly via
+     * initial/finalLayout. oldLayout=UNDEFINED means "discard prior contents",
+     * which is exactly right every frame since we re-clear -- so it's safe to
+     * record these ONCE and replay them.
      */
     private void createCommandBuffers() {
-        int count = swapchainFramebuffers.length;
+        int count = swapchain.imageCount();
         commandBuffers = new VkCommandBuffer[count];
 
         try (MemoryStack stack = stackPush()) {
@@ -285,19 +180,43 @@ public class Main {
             }
 
             // The clear color: BRIGHT ORANGE. One VkClearValue for the one color
-            // attachment (index matches the render pass's attachment 0).
-            VkClearValue.Buffer clearValues = VkClearValue.calloc(1, stack);
-            clearValues.get(0).color().float32(stack.floats(CLEAR_R, CLEAR_G, CLEAR_B, 1.0f));
+            // attachment in the rendering info below.
+            VkClearValue.Buffer clearValue = VkClearValue.calloc(1, stack);
+            clearValue.get(0).color().float32(stack.floats(CLEAR_R, CLEAR_G, CLEAR_B, 1.0f));
 
             VkCommandBufferBeginInfo beginInfo = VkCommandBufferBeginInfo.calloc(stack);
             beginInfo.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
 
-            VkRenderPassBeginInfo renderPassInfo = VkRenderPassBeginInfo.calloc(stack);
-            renderPassInfo.sType(VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO);
-            renderPassInfo.renderPass(renderPass);
-            renderPassInfo.pClearValues(clearValues);
-            renderPassInfo.renderArea().offset().x(0).y(0);           // whole image
-            renderPassInfo.renderArea().extent().width(swapchain.width()).height(swapchain.height());
+            // One reusable image-memory barrier struct; we retarget its image/layouts
+            // per buffer. The subresource range = the whole color image (1 mip, 1
+            // layer), and we don't transfer queue-family ownership.
+            VkImageMemoryBarrier.Buffer barrier = VkImageMemoryBarrier.calloc(1, stack);
+            barrier.sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER);
+            barrier.srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+            barrier.dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+            barrier.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT);
+            barrier.subresourceRange().baseMipLevel(0);
+            barrier.subresourceRange().levelCount(1);
+            barrier.subresourceRange().baseArrayLayer(0);
+            barrier.subresourceRange().layerCount(1);
+
+            // The dynamic-rendering color attachment: render INTO this image's view,
+            // CLEAR it to orange on load, STORE the result for presentation. We point
+            // .imageView() at the right view per buffer below.
+            VkRenderingAttachmentInfo.Buffer colorAttachment =
+                    VkRenderingAttachmentInfo.calloc(1, stack);
+            colorAttachment.sType(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO);
+            colorAttachment.imageLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            colorAttachment.loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR);
+            colorAttachment.storeOp(VK_ATTACHMENT_STORE_OP_STORE);
+            colorAttachment.clearValue(clearValue.get(0));
+
+            VkRenderingInfo renderingInfo = VkRenderingInfo.calloc(stack);
+            renderingInfo.sType(VK_STRUCTURE_TYPE_RENDERING_INFO);
+            renderingInfo.renderArea().offset().x(0).y(0);           // whole image
+            renderingInfo.renderArea().extent().width(swapchain.width()).height(swapchain.height());
+            renderingInfo.layerCount(1);
+            renderingInfo.pColorAttachments(colorAttachment);  // colorAttachmentCount inferred from the buffer
 
             for (int i = 0; i < count; i++) {
                 VkCommandBuffer cmd = commandBuffers[i];
@@ -306,18 +225,41 @@ public class Main {
                     throw new RuntimeException("Failed to begin command buffer " + i);
                 }
 
-                renderPassInfo.framebuffer(swapchainFramebuffers[i]);  // this image's target
-                // INLINE = the commands live in this primary buffer (no secondary buffers).
-                vkCmdBeginRenderPass(cmd, renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-                // (loadOp=CLEAR fills the image; nothing else to record for clear-to-color.)
-                vkCmdEndRenderPass(cmd);
+                // ---- Barrier 1: make the image renderable (UNDEFINED -> COLOR) ----
+                // Gate at COLOR_ATTACHMENT_OUTPUT (the same stage the submit waits on
+                // for image acquisition); nothing read before, color writes after.
+                barrier.image(swapchain.image(i));
+                barrier.oldLayout(VK_IMAGE_LAYOUT_UNDEFINED);
+                barrier.newLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                barrier.srcAccessMask(0);
+                barrier.dstAccessMask(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+                vkCmdPipelineBarrier(cmd,
+                        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,  // src stage
+                        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,  // dst stage
+                        0, null, null, barrier);
+
+                // ---- Clear, via dynamic rendering (no render pass / framebuffer) ----
+                colorAttachment.imageView(swapchain.imageView(i));  // this image's target
+                vkCmdBeginRendering(cmd, renderingInfo);
+                // (loadOp=CLEAR fills the image; nothing else to draw for clear-to-color.)
+                vkCmdEndRendering(cmd);
+
+                // ---- Barrier 2: make it presentable (COLOR -> PRESENT_SRC) ----
+                barrier.oldLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                barrier.newLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+                barrier.srcAccessMask(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+                barrier.dstAccessMask(0);
+                vkCmdPipelineBarrier(cmd,
+                        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,  // src stage
+                        VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,           // dst stage
+                        0, null, null, barrier);
 
                 if (vkEndCommandBuffer(cmd) != VK_SUCCESS) {
                     throw new RuntimeException("Failed to record command buffer " + i);
                 }
             }
         }
-        System.out.println("Recorded " + count + " command buffers (clear to orange).");
+        System.out.println("Recorded " + count + " command buffers (clear to orange, dynamic rendering).");
     }
 
     // ------------------------------------------------------------------
@@ -446,20 +388,9 @@ public class Main {
         if (commandPool != VK_NULL_HANDLE) {
             vkDestroyCommandPool(device.handle(), commandPool, null);
         }
-        // Framebuffers reference the image views + render pass, so they go first.
-        if (swapchainFramebuffers != null) {
-            for (long fb : swapchainFramebuffers) {
-                vkDestroyFramebuffer(device.handle(), fb, null);
-            }
-        }
-        // Render pass is built against the swapchain's format; tear it down before
-        // the views/swapchain it describes.
-        if (renderPass != VK_NULL_HANDLE) {
-            vkDestroyRenderPass(device.handle(), renderPass, null);
-        }
         // Swapchain.close() destroys our image views, then the swapchain (which
-        // frees the images it owns). Framebuffers above referenced those views, so
-        // they had to go first.
+        // frees the images it owns). With dynamic rendering there's no render pass
+        // or framebuffer to tear down first.
         if (swapchain != null) {
             swapchain.close();
         }

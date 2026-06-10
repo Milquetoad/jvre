@@ -1,5 +1,11 @@
 # Framebuffers
 
+> [!note] Superseded in jvre by [[Dynamic Rendering]]
+> Framebuffers exist only to bind image views into a [[Render Pass]]. jvre dropped
+> both on 2026-06-10 in favor of [[Dynamic Rendering]], which names the
+> [[Image Views|image view]] inline at `vkCmdBeginRendering` time -- no framebuffer
+> object. Kept for reference; not jvre's path anymore.
+
 A **framebuffer** (`VkFramebuffer`) binds **concrete [[Image Views|image views]] into a [[Render Pass|render pass]]'s attachment slots**, at a specific size. The render pass is the *blueprint* ("slot 0 = a color attachment of this format"); the framebuffer is the *filled-in* version ("slot 0 = *this actual image view*, 800x600").
 
 ## One per swapchain image

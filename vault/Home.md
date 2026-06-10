@@ -29,10 +29,11 @@ New here? The Map of Content below is a reference index, not a path. To actually
 12. [[Logical Device and Queues]] — opening the connection to the GPU; retrieving queues; requiring swapchain
 13. [[Swapchain]] — negotiating and creating the queue of images we present to the screen
 14. [[Image Views]] — wrapping each swapchain image so it can be rendered into
-15. [[Render Pass]] — the blueprint whose `loadOp=CLEAR` clears the screen
-16. [[Framebuffers]] — binding the real image views into that blueprint
-17. [[Command Buffers]] — recording the clear command (record now, submit later)
-18. [[Synchronization and the Render Loop]] — semaphores/fences and the loop that finally shows the color
+15. [[Render Pass]] + [[Framebuffers]] — the *classic* clear path (now **superseded** in jvre, but the concepts carry over)
+16. [[Dynamic Rendering]] — the **modern** path jvre actually uses (no render pass / framebuffer; core in Vulkan 1.3)
+17. [[Pipeline Barriers]] — the image-layout transitions dynamic rendering makes you own
+18. [[Command Buffers]] — recording the clear command (record now, submit later)
+19. [[Synchronization and the Render Loop]] — semaphores/fences and the loop that finally shows the color
 
 **5. Looking ahead — optional, for the curious**
 - [[Shaders - GLSL and SPIR-V]], [[GUI Options]] / [[Self-Built GUI (planned)]], [[Ray Tracing and Path Tracing (future)]], [[Device Selection and Cross-Platform (planned)]]
@@ -77,9 +78,11 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - [[Logical Device and Queues]] ✅ — VkDevice, queue handles, swapchain extension
 - [[Swapchain]] ✅ — the presented-image queue (format, present mode, extent)
 - [[Image Views]] ✅ — how to interpret each swapchain image (the render-pass prerequisite)
-- [[Render Pass]] ✅ — the clear-to-color blueprint (attachments, subpass, `loadOp=CLEAR`)
-- [[Framebuffers]] ✅ — bind image views into the render pass (one per swapchain image)
-- [[Command Buffers]] ✅ — record "begin render pass (clear to orange) / end"
+- [[Dynamic Rendering]] ✅ — jvre's render path (Vulkan 1.3; no render pass / framebuffer)
+- [[Pipeline Barriers]] ✅ — image-layout transitions (what dynamic rendering makes us own)
+- [[Render Pass]] ⚠️ superseded — the classic clear-to-color blueprint (kept for concepts)
+- [[Framebuffers]] ⚠️ superseded — bind image views into a render pass (kept for concepts)
+- [[Command Buffers]] ✅ — record "barrier / clear (dynamic rendering) / barrier"
 - [[Synchronization and the Render Loop]] ✅ — semaphores/fences + the per-frame loop (🟠 first pixels)
 
 ## Status
@@ -96,6 +99,8 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - ✅ [[Framebuffers]] — one per swapchain image (3 created)
 - ✅ [[Command Buffers]] — pool + 3 buffers recorded (clear to bright orange)
 - ✅ [[Synchronization and the Render Loop]] — 🟠 **clear to color achieved!** (orange, FIFO, clean validation)
-- ⏭️ Next phase: **refactor the linear bootstrap into the "elementaries"**, then a first triangle / shader
+- ✅ **Refactor underway** — extracted `Window`/`Instance`/`Surface` (stable layer) + `Device` + `Swapchain` into `jvre.core`
+- ✅ [[Dynamic Rendering]] — switched off render passes/framebuffers (Vulkan 1.3); orange still clean on the Intel UHD 620
+- ⏭️ Next: a `Renderer` coordinator (+ swapchain recreation on resize), then a first triangle / shader
 
 #jvre #moc

@@ -1,5 +1,13 @@
 # Render Pass
 
+> [!note] Superseded in jvre by [[Dynamic Rendering]]
+> jvre no longer uses render passes -- as of 2026-06-10 it renders via
+> [[Dynamic Rendering]] (core in Vulkan 1.3), which drops `VkRenderPass`,
+> `VkFramebuffer`, and subpasses. This note is kept because the *concepts*
+> (attachments, load/store ops, image layouts) carry straight over, and render
+> passes are still valid Vulkan -- they're just not our path. The layout
+> transitions this object did automatically are now explicit [[Pipeline Barriers]].
+
 A **render pass** (`VkRenderPass`) is the **blueprint of a rendering operation** — *not* the rendering itself and *not* the images. It declares which **attachments** (images) are involved, what to do with each at the **start/end**, and which **subpasses** (phases) use them. Framebuffers bind the real [[Image Views|image views]] to it later; the graphics pipeline is built *against* it.
 
 For "clear to color" no shaders/pipeline are needed — **the render pass does the clearing**, via `loadOp = CLEAR`.

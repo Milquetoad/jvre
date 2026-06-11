@@ -13,14 +13,17 @@ import org.lwjgl.vulkan.VkClearValue;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkCommandBufferAllocateInfo;
 import org.lwjgl.vulkan.VkCommandBufferBeginInfo;
+import org.lwjgl.vulkan.VkCommandBufferSubmitInfo;
 import org.lwjgl.vulkan.VkCommandPoolCreateInfo;
+import org.lwjgl.vulkan.VkDependencyInfo;
 import org.lwjgl.vulkan.VkFenceCreateInfo;
-import org.lwjgl.vulkan.VkImageMemoryBarrier;
+import org.lwjgl.vulkan.VkImageMemoryBarrier2;
 import org.lwjgl.vulkan.VkPresentInfoKHR;
 import org.lwjgl.vulkan.VkRenderingAttachmentInfo;
 import org.lwjgl.vulkan.VkRenderingInfo;
 import org.lwjgl.vulkan.VkSemaphoreCreateInfo;
-import org.lwjgl.vulkan.VkSubmitInfo;
+import org.lwjgl.vulkan.VkSemaphoreSubmitInfo;
+import org.lwjgl.vulkan.VkSubmitInfo2;
 
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
@@ -187,11 +190,15 @@ public class Main {
             VkCommandBufferBeginInfo beginInfo = VkCommandBufferBeginInfo.calloc(stack);
             beginInfo.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
 
-            // One reusable image-memory barrier struct; we retarget its image/layouts
-            // per buffer. The subresource range = the whole color image (1 mip, 1
-            // layer), and we don't transfer queue-family ownership.
-            VkImageMemoryBarrier.Buffer barrier = VkImageMemoryBarrier.calloc(1, stack);
-            barrier.sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER);
+            // One reusable image-memory barrier struct, in the synchronization2
+            // spelling: VkImageMemoryBarrier2 carries its OWN src/dst STAGE masks.
+            // (Under 1.0 sync the stages were per-CALL arguments that covered every
+            // barrier in the call -- sync2 moves them onto each barrier, where they
+            // belong.) We retarget image/layouts/stages per buffer. The subresource
+            // range = the whole color image (1 mip, 1 layer), and we don't transfer
+            // queue-family ownership.
+            VkImageMemoryBarrier2.Buffer barrier = VkImageMemoryBarrier2.calloc(1, stack);
+            barrier.sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2);
             barrier.srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
             barrier.dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
             barrier.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT);
@@ -199,6 +206,14 @@ public class Main {
             barrier.subresourceRange().levelCount(1);
             barrier.subresourceRange().baseArrayLayer(0);
             barrier.subresourceRange().layerCount(1);
+
+            // vkCmdPipelineBarrier2 takes ONE bundle struct (VkDependencyInfo)
+            // pointing at the barrier arrays, replacing 1.0's seven-argument call.
+            // We reuse a single bundle for both barriers: it just POINTS at the
+            // barrier struct above, which we mutate between the two calls.
+            VkDependencyInfo depInfo = VkDependencyInfo.calloc(stack);
+            depInfo.sType(VK_STRUCTURE_TYPE_DEPENDENCY_INFO);
+            depInfo.pImageMemoryBarriers(barrier);
 
             // The dynamic-rendering color attachment: render INTO this image's view,
             // CLEAR it to orange on load, STORE the result for presentation. We point
@@ -227,16 +242,16 @@ public class Main {
 
                 // ---- Barrier 1: make the image renderable (UNDEFINED -> COLOR) ----
                 // Gate at COLOR_ATTACHMENT_OUTPUT (the same stage the submit waits on
-                // for image acquisition); nothing read before, color writes after.
+                // for image acquisition); nothing read before (ACCESS_2_NONE), color
+                // writes after.
                 barrier.image(swapchain.image(i));
                 barrier.oldLayout(VK_IMAGE_LAYOUT_UNDEFINED);
                 barrier.newLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-                barrier.srcAccessMask(0);
-                barrier.dstAccessMask(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
-                vkCmdPipelineBarrier(cmd,
-                        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,  // src stage
-                        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,  // dst stage
-                        0, null, null, barrier);
+                barrier.srcStageMask(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
+                barrier.srcAccessMask(VK_ACCESS_2_NONE);
+                barrier.dstStageMask(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
+                barrier.dstAccessMask(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+                vkCmdPipelineBarrier2(cmd, depInfo);
 
                 // ---- Clear, via dynamic rendering (no render pass / framebuffer) ----
                 colorAttachment.imageView(swapchain.imageView(i));  // this image's target
@@ -245,14 +260,17 @@ public class Main {
                 vkCmdEndRendering(cmd);
 
                 // ---- Barrier 2: make it presentable (COLOR -> PRESENT_SRC) ----
+                // dstStage = NONE: nothing INSIDE this command buffer waits on the
+                // transition -- presentation is ordered by the renderFinished
+                // semaphore instead. (1.0 sync spelled this "BOTTOM_OF_PIPE"; sync2
+                // deprecates TOP/BOTTOM_OF_PIPE in favor of the honest NONE.)
                 barrier.oldLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
                 barrier.newLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
-                barrier.srcAccessMask(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
-                barrier.dstAccessMask(0);
-                vkCmdPipelineBarrier(cmd,
-                        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,  // src stage
-                        VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,           // dst stage
-                        0, null, null, barrier);
+                barrier.srcStageMask(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
+                barrier.srcAccessMask(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+                barrier.dstStageMask(VK_PIPELINE_STAGE_2_NONE);
+                barrier.dstAccessMask(VK_ACCESS_2_NONE);
+                vkCmdPipelineBarrier2(cmd, depInfo);
 
                 if (vkEndCommandBuffer(cmd) != VK_SUCCESS) {
                     throw new RuntimeException("Failed to record command buffer " + i);
@@ -336,17 +354,38 @@ public class Main {
                     imageAvailableSemaphore, VK_NULL_HANDLE, pImageIndex);
             int imageIndex = pImageIndex.get(0);
 
-            // 3. Submit that image's command buffer. Wait on imageAvailable at the
-            //    COLOR_ATTACHMENT_OUTPUT stage; signal renderFinished + the fence.
-            VkSubmitInfo submitInfo = VkSubmitInfo.calloc(stack);
-            submitInfo.sType(VK_STRUCTURE_TYPE_SUBMIT_INFO);
-            submitInfo.waitSemaphoreCount(1);
-            submitInfo.pWaitSemaphores(stack.longs(imageAvailableSemaphore));
-            submitInfo.pWaitDstStageMask(stack.ints(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT));
-            submitInfo.pCommandBuffers(stack.pointers(commandBuffers[imageIndex]));
-            submitInfo.pSignalSemaphores(stack.longs(renderFinishedSemaphores[imageIndex]));
+            // 3. Submit that image's command buffer, via synchronization2's
+            //    vkQueueSubmit2. Every participant gets its own little info struct,
+            //    and each SEMAPHORE carries a PER-SEMAPHORE stage mask -- 1.0's
+            //    fragile parallel arrays (pWaitSemaphores + pWaitDstStageMask,
+            //    matched by index) are gone, and the counts are inferred.
 
-            if (vkQueueSubmit(device.graphicsQueue(), submitInfo, inFlightFence) != VK_SUCCESS) {
+            // Wait for imageAvailable, but only block the COLOR_ATTACHMENT_OUTPUT
+            // stage: work in earlier stages may start before the image is acquired.
+            VkSemaphoreSubmitInfo.Buffer waitInfo = VkSemaphoreSubmitInfo.calloc(1, stack);
+            waitInfo.sType(VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO);
+            waitInfo.semaphore(imageAvailableSemaphore);
+            waitInfo.stageMask(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
+
+            VkCommandBufferSubmitInfo.Buffer cmdInfo = VkCommandBufferSubmitInfo.calloc(1, stack);
+            cmdInfo.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO);
+            cmdInfo.commandBuffer(commandBuffers[imageIndex]);
+
+            // Signal renderFinished only once EVERYTHING in the submit completed
+            // (ALL_COMMANDS) -- presentation must not start before the final
+            // layout transition (barrier 2) has executed.
+            VkSemaphoreSubmitInfo.Buffer signalInfo = VkSemaphoreSubmitInfo.calloc(1, stack);
+            signalInfo.sType(VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO);
+            signalInfo.semaphore(renderFinishedSemaphores[imageIndex]);
+            signalInfo.stageMask(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+
+            VkSubmitInfo2.Buffer submitInfo = VkSubmitInfo2.calloc(1, stack);
+            submitInfo.sType(VK_STRUCTURE_TYPE_SUBMIT_INFO_2);
+            submitInfo.pWaitSemaphoreInfos(waitInfo);
+            submitInfo.pCommandBufferInfos(cmdInfo);
+            submitInfo.pSignalSemaphoreInfos(signalInfo);
+
+            if (vkQueueSubmit2(device.graphicsQueue(), submitInfo, inFlightFence) != VK_SUCCESS) {
                 throw new RuntimeException("Failed to submit the draw command buffer");
             }
 

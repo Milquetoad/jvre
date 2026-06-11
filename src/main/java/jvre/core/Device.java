@@ -7,9 +7,9 @@ import org.lwjgl.vulkan.VkDeviceCreateInfo;
 import org.lwjgl.vulkan.VkDeviceQueueCreateInfo;
 import org.lwjgl.vulkan.VkExtensionProperties;
 import org.lwjgl.vulkan.VkPhysicalDevice;
-import org.lwjgl.vulkan.VkPhysicalDeviceDynamicRenderingFeatures;
 import org.lwjgl.vulkan.VkPhysicalDeviceFeatures;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
+import org.lwjgl.vulkan.VkPhysicalDeviceVulkan13Features;
 import org.lwjgl.vulkan.VkQueue;
 import org.lwjgl.vulkan.VkQueueFamilyProperties;
 
@@ -23,7 +23,7 @@ import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.KHRSurface.vkGetPhysicalDeviceSurfaceSupportKHR;
 import static org.lwjgl.vulkan.KHRSwapchain.VK_KHR_SWAPCHAIN_EXTENSION_NAME;
 import static org.lwjgl.vulkan.VK10.*;
-import static org.lwjgl.vulkan.VK13.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES;
+import static org.lwjgl.vulkan.VK13.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
 
 /**
  * The chosen GPU and our connection to it: physical-device SELECTION (the scoring
@@ -76,22 +76,26 @@ public class Device {
 
             VkPhysicalDeviceFeatures deviceFeatures = VkPhysicalDeviceFeatures.calloc(stack);
 
-            // Opt IN to dynamic rendering (core since Vulkan 1.3). Features added
-            // after 1.0 are enabled by CHAINING their feature struct into pNext
-            // rather than via pEnabledFeatures. The driver must support it -- both
-            // our target GPUs do; a portable build would verify via
-            // vkGetPhysicalDeviceFeatures2 before enabling.
-            VkPhysicalDeviceDynamicRenderingFeatures dynamicRendering =
-                    VkPhysicalDeviceDynamicRenderingFeatures.calloc(stack);
-            dynamicRendering.sType(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES);
-            dynamicRendering.dynamicRendering(true);
+            // Opt IN to the post-1.0 features we use. Features added after 1.0 are
+            // enabled by CHAINING a feature struct into pNext rather than via
+            // pEnabledFeatures. Instead of chaining one struct per feature
+            // (VkPhysicalDeviceDynamicRenderingFeatures + ...Synchronization2Features
+            // + ...), each core release ships an AGGREGATE struct holding all of its
+            // promoted feature toggles -- the modern idiom is to chain that once.
+            //   - dynamicRendering: our render path (no render pass/framebuffer).
+            //   - synchronization2: the redesigned barrier/submit API we sync with.
+            VkPhysicalDeviceVulkan13Features features13 =
+                    VkPhysicalDeviceVulkan13Features.calloc(stack);
+            features13.sType(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES);
+            features13.dynamicRendering(true);
+            features13.synchronization2(true);
 
             VkDeviceCreateInfo createInfo = VkDeviceCreateInfo.calloc(stack);
             createInfo.sType(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO);
             createInfo.pQueueCreateInfos(queueCreateInfos);
             createInfo.pEnabledFeatures(deviceFeatures);
             createInfo.ppEnabledExtensionNames(asPointerBuffer(stack, DEVICE_EXTENSIONS));
-            createInfo.pNext(dynamicRendering.address());  // chain the feature in
+            createInfo.pNext(features13.address());  // chain the 1.3 features in
             // No ppEnabledLayerNames: device-level layers are legacy; current
             // validation requires enabledLayerCount == 0 (the instance layer covers
             // device calls).

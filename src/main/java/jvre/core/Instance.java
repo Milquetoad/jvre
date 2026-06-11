@@ -2,6 +2,7 @@ package jvre.core;
 
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.vulkan.VK;
 import org.lwjgl.vulkan.VkApplicationInfo;
 import org.lwjgl.vulkan.VkDebugUtilsMessengerCallbackDataEXT;
 import org.lwjgl.vulkan.VkDebugUtilsMessengerCallbackEXT;
@@ -47,6 +48,16 @@ public class Instance {
         if (!glfwVulkanSupported()) {
             throw new IllegalStateException("Vulkan is not supported by the loader");
         }
+        // Two independent "supports 1.3" questions: the INSTANCE (loader/runtime)
+        // version -- checked here -- and each GPU's own apiVersion, checked during
+        // device selection. A new driver on an old runtime (or vice versa) can
+        // genuinely differ, so both ends get verified.
+        int loaderVersion = VK.getInstanceVersionSupported();
+        if (loaderVersion < VK_API_VERSION_1_3) {
+            throw new IllegalStateException("Vulkan 1.3 required, but the loader supports only "
+                    + VK_VERSION_MAJOR(loaderVersion) + "." + VK_VERSION_MINOR(loaderVersion)
+                    + " -- update the GPU driver / Vulkan runtime");
+        }
         if (validation && !checkValidationLayerSupport()) {
             throw new RuntimeException(
                     "Validation layer requested but not available. Is the Vulkan SDK installed?");
@@ -60,8 +71,9 @@ public class Instance {
             appInfo.applicationVersion(VK_MAKE_VERSION(1, 0, 0));
             appInfo.pEngineName(stack.UTF8("jvre"));
             appInfo.engineVersion(VK_MAKE_VERSION(1, 0, 0));
-            // Require Vulkan 1.3: dynamic rendering (our render path) is core in 1.3.
-            // This is the MAX version we intend to use; the driver must support it.
+            // Require Vulkan 1.3: dynamic rendering + synchronization2 (our render
+            // path) are core in 1.3. This is the MAX version we intend to use; the
+            // loader was verified above, the chosen GPU during device selection.
             appInfo.apiVersion(VK_API_VERSION_1_3);
 
             // ---- Instance recipe ----

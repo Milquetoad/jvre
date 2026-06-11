@@ -8,6 +8,7 @@ import org.lwjgl.vulkan.VkDeviceQueueCreateInfo;
 import org.lwjgl.vulkan.VkExtensionProperties;
 import org.lwjgl.vulkan.VkPhysicalDevice;
 import org.lwjgl.vulkan.VkPhysicalDeviceFeatures;
+import org.lwjgl.vulkan.VkPhysicalDeviceFeatures2;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
 import org.lwjgl.vulkan.VkPhysicalDeviceVulkan13Features;
 import org.lwjgl.vulkan.VkQueue;
@@ -23,6 +24,9 @@ import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.KHRSurface.vkGetPhysicalDeviceSurfaceSupportKHR;
 import static org.lwjgl.vulkan.KHRSwapchain.VK_KHR_SWAPCHAIN_EXTENSION_NAME;
 import static org.lwjgl.vulkan.VK10.*;
+import static org.lwjgl.vulkan.VK11.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+import static org.lwjgl.vulkan.VK11.vkGetPhysicalDeviceFeatures2;
+import static org.lwjgl.vulkan.VK13.VK_API_VERSION_1_3;
 import static org.lwjgl.vulkan.VK13.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
 
 /**
@@ -151,8 +155,11 @@ public class Device {
             for (int i = 0; i < devices.capacity(); i++) {
                 VkPhysicalDevice candidate = new VkPhysicalDevice(devices.get(i), instance.handle());
                 QueueFamilyIndices indices = findQueueFamilies(candidate, surface);
-                // Suitable = has graphics + present queues AND supports swapchain.
-                if (!indices.isComplete() || !checkDeviceExtensionSupport(candidate, stack)) {
+                // Suitable = graphics + present queues, swapchain support, AND the
+                // Vulkan 1.3 API + features our render path actually enables.
+                if (!indices.isComplete()
+                        || !checkDeviceExtensionSupport(candidate, stack)
+                        || !checkApiAndFeatureSupport(candidate, stack)) {
                     continue;
                 }
                 int score = rateDevice(candidate, stack);
@@ -162,8 +169,8 @@ public class Device {
                 }
             }
             if (best == null) {
-                throw new RuntimeException(
-                        "No suitable GPU found (need graphics + present + swapchain)");
+                throw new RuntimeException("No suitable GPU found (need graphics + present "
+                        + "+ swapchain + Vulkan 1.3 with dynamicRendering/synchronization2)");
             }
 
             VkPhysicalDeviceProperties props = VkPhysicalDeviceProperties.malloc(stack);
@@ -189,6 +196,37 @@ public class Device {
         }
         score += props.limits().maxImageDimension2D();
         return score;
+    }
+
+    /**
+     * Does this GPU support what we actually USE: Vulkan 1.3, plus the
+     * dynamicRendering and synchronization2 feature bits? Enabling a feature the
+     * device lacks is invalid (it merely happened to work on our dev GPUs), so
+     * suitability must verify the exact bits the constructor turns on.
+     *
+     * Note the symmetry: vkGetPhysicalDeviceFeatures2 QUERIES through the same
+     * pNext chain we later ENABLE through -- chain an empty feature struct in,
+     * and the driver fills in its supported flags.
+     */
+    private boolean checkApiAndFeatureSupport(VkPhysicalDevice device, MemoryStack stack) {
+        VkPhysicalDeviceProperties props = VkPhysicalDeviceProperties.malloc(stack);
+        vkGetPhysicalDeviceProperties(device, props);
+        // apiVersion = the highest CORE version this device's driver speaks. Gate
+        // on it first -- only then is it valid to ask about 1.3 feature structs.
+        if (props.apiVersion() < VK_API_VERSION_1_3) {
+            return false;
+        }
+
+        VkPhysicalDeviceVulkan13Features features13 =
+                VkPhysicalDeviceVulkan13Features.calloc(stack);
+        features13.sType(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES);
+
+        VkPhysicalDeviceFeatures2 features2 = VkPhysicalDeviceFeatures2.calloc(stack);
+        features2.sType(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2);
+        features2.pNext(features13.address());
+
+        vkGetPhysicalDeviceFeatures2(device, features2);
+        return features13.dynamicRendering() && features13.synchronization2();
     }
 
     /** Does this GPU support every device extension we require (per-GPU enumeration)? */

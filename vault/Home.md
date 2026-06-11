@@ -35,6 +35,8 @@ New here? The Map of Content below is a reference index, not a path. To actually
 18. [[Synchronization2]] — the modern (1.3) spelling of barriers + queue submission jvre uses
 19. [[Command Buffers]] — recording the clear command (record now, submit later)
 20. [[Synchronization and the Render Loop]] — semaphores/fences and the loop that finally shows the color
+21. [[Frames in Flight]] — overlapping CPU recording with GPU rendering (and per-frame re-recording)
+22. [[Swapchain Recreation]] — resize/minimize/out-of-date handling in the Renderer
 
 **5. Looking ahead — optional, for the curious**
 - [[Shaders - GLSL and SPIR-V]], [[GUI Options]] / [[Self-Built GUI (planned)]], [[Ray Tracing and Path Tracing (future)]], [[Device Selection and Cross-Platform (planned)]]
@@ -86,6 +88,8 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - [[Framebuffers]] ⚠️ superseded — bind image views into a render pass (kept for concepts)
 - [[Command Buffers]] ✅ — record "barrier / clear (dynamic rendering) / barrier"
 - [[Synchronization and the Render Loop]] ✅ — semaphores/fences + the per-frame loop (🟠 first pixels)
+- [[Frames in Flight]] ✅ — 2 in flight; per-frame command recording (the modern model)
+- [[Swapchain Recreation]] ✅ — resizable window; OUT_OF_DATE/SUBOPTIMAL/flag triggers; minimize handling
 
 ## Status
 - ✅ Toolchain verified (smoke test passes)
@@ -104,6 +108,9 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - ✅ **Refactor underway** — extracted `Window`/`Instance`/`Surface` (stable layer) + `Device` + `Swapchain` into `jvre.core`
 - ✅ [[Dynamic Rendering]] — switched off render passes/framebuffers (Vulkan 1.3); orange still clean on the Intel UHD 620
 - ✅ [[Synchronization2]] — barriers + submit migrated to the 1.3 sync API; 1.3/feature support now *verified* during device selection; sync-validation + best-practices checks on (all clean on the 4090)
-- ⏭️ Next: a `Renderer` coordinator (+ swapchain recreation on resize), then a first triangle / shader
+- ✅ **`Renderer` extracted** — owns the whole device context (Device, Swapchain, commands, sync); `Main` is wiring only
+- ✅ [[Swapchain Recreation]] — window is resizable (+ minimize); verified by driving the window via user32
+- ✅ [[Frames in Flight]] — 2 in flight, per-frame command recording
+- ⏭️ Next: the first **triangle / shader** — graphics pipeline, GLSL -> SPIR-V, the draw goes inside `recordCommandBuffer`
 
 #jvre #moc

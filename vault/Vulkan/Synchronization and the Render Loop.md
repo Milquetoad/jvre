@@ -6,7 +6,7 @@ The setup steps ran once; the **render loop** runs every frame. Vulkan's definin
 - **Semaphore** — orders **GPU <-> GPU** work (no CPU visibility). Binary: signaled by one operation, waited by another.
 - **Fence** — orders **GPU -> CPU**. The CPU can *wait* on it to know the GPU finished. Created **SIGNALED** here so the very first frame's wait doesn't deadlock on a frame that never ran.
 
-We use: `imageAvailable` (semaphore -- acquire done), `renderFinished` (semaphore -- render done, safe to present), `inFlightFence` (fence -- this frame's GPU work done). **One frame in flight** (simplest correct form).
+We use: `imageAvailable` (semaphore -- acquire done), `renderFinished` (semaphore -- render done, safe to present), `inFlightFence` (fence -- this frame's GPU work done). Originally **one frame in flight** (simplest correct form); since 2026-06-11 there are **two** -- see [[Frames in Flight]] for how the primitives multiplied, and [[Synchronization2]] for the modern API spelling the submit uses now.
 
 ## drawFrame() -- the per-frame dance
 1. **Wait** `inFlightFence` (previous frame done) -> **reset** it.
@@ -21,9 +21,9 @@ The first version used **one shared** `renderFinished` semaphore. The [[Validati
 
 **Fix (the layer literally suggested it):** use **one `renderFinished` semaphore per swapchain image**, indexed by the acquired image. Reuse-safe because an image isn't re-acquired until its prior present released its semaphore. `imageAvailable` and the fence stay single (one frame in flight). Clean run after that.
 
-## Deferred (deliberately)
-- **Frames in flight (>1)** -- overlap CPU recording of frame N+1 with GPU work on frame N for throughput. Needs per-frame fences/semaphores.
-- **Swapchain recreation on resize / out-of-date** -- we ignore `VK_ERROR_OUT_OF_DATE_KHR`/suboptimal because the window is fixed-size. This is the [[Device Selection and Cross-Platform (planned)|device-context]] machinery.
+## Formerly deferred -- both landed 2026-06-11
+- **Frames in flight (>1)** -- now 2; see [[Frames in Flight]].
+- **Swapchain recreation on resize / out-of-date** -- now handled in the `Renderer`; see [[Swapchain Recreation]].
 
 ## Milestone
 **Clear to color achieved** (2026-06-09): bright orange `(1.0, 0.4, 0.0)`, FIFO, on the Intel UHD 620, zero validation output. The full bootstrap (instance -> ... -> render loop) works end to end. Next phase: refactor the linear `Main.java` into the reusable "elementaries" (see [[API Vision - Layered Altitudes]]), then a first triangle / shader.

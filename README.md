@@ -47,8 +47,8 @@ The code is OS-agnostic by design: windowing and surface creation go through GLF
 ## Project layout
 
 ```
-src/main/java/jvre/        Demo entry point (Main.java: command buffers, sync, render loop)
-src/main/java/jvre/core/   Engine elementaries: Window, Instance, Surface, Device, Swapchain
+src/main/java/jvre/        Demo entry point (Main.java -- wiring only)
+src/main/java/jvre/core/   Engine elementaries: Window, Instance, Surface, Device, Swapchain, Renderer
 build.gradle               Build config (LWJGL deps, JDK 21 toolchain, app entry point)
 vault/                     Obsidian learning vault — concepts, Vulkan notes, progress log
 ```
@@ -77,7 +77,8 @@ Current phase — refactor into reusable components + modernize:
 - [x] Stable layer extracted: `Window`, `Instance`, `Surface`
 - [x] Device context extracted: `Device` (selection + logical device + queues), `Swapchain` (+ image views)
 - [x] Migrated to **dynamic rendering** (Vulkan 1.3) — render pass + framebuffers deleted; explicit pipeline barriers drive the image layout transitions
-- [ ] `Renderer` coordinator (owns the device context; swapchain recreation on resize)
+- [x] Migrated to **synchronization2** (Vulkan 1.3) — `vkQueueSubmit2` / `vkCmdPipelineBarrier2`; device selection verifies API version + feature support; sync-validation + best-practices layer checks enabled
+- [x] `Renderer` coordinator — owns the device context; **resizable window** with swapchain recreation (incl. minimize); **2 frames in flight** with per-frame command recording
 - [ ] First triangle — graphics pipeline + shaders
 
 After that: 2D rendering, text, a self-built GUI, 3D, and eventually ray/path tracing.

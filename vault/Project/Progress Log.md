@@ -2,6 +2,13 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-11 — 🌀 Push constants: the triangle SPINS ✅
+- **First per-frame shader data** ([[Push Constants]]): 8 bytes (`{ float time; float aspect; }`) pushed straight into the command buffer each frame by `vkCmdPushConstants` -- no buffer, no descriptors, no sync (spec floor: 128 bytes). The [[Graphics Pipeline|pipeline layout]] got its first real content (a `VkPushConstantRange`, vertex stage). Commit `847bc98`.
+- `triangle.vert` rotates by `time` (1 rad/s; GLSL `mat2` is column-major, and y-down NDC makes it clockwise on screen) and divides x by `aspect` so the spin stays shape-true at any window size (a projection matrix absorbs that later).
+- **The per-frame-recording payoff made visible**: the old pre-recorded model would have frozen `time` at record time -- this milestone is why [[Frames in Flight|that architecture]] matters.
+- **Verified by motion**: two screenshots 1.2 s apart show ~69 degrees of rotation (= 1.2 rad). Sync validation silent.
+- **Next:** index buffers + a quad (vertex reuse), or uniform buffers + descriptor sets (the bigger/shared tier above push constants); then textures, then 3D + depth.
+
 ## 2026-06-11 — Vertex buffers: geometry becomes data 📦 ✅
 - **First GPU memory** ([[Vertex Buffers and GPU Memory]]): new `jvre.core.Buffer` (creative tier) wrapping the `VkBuffer` (typed handle, no storage) + `VkDeviceMemory` (raw allocation) split, married by `vkBindBufferMemory`. The **memory-type hunt** (requirements `typeFilter` x required property flags over `vkGetPhysicalDeviceMemoryProperties`) is the heart of it. One allocation per buffer while learning; VMA inherits the job later.
 - **Two steps, two commits, both verified by screenshot on the 4090** (identical RGB triangle, sync validation silent):

@@ -84,7 +84,8 @@ Current phase — refactor into reusable components + modernize:
 - [x] `Renderer` coordinator — owns the device context; **resizable window** with swapchain recreation (incl. minimize); **2 frames in flight** with per-frame command recording
 - [x] **First triangle** 🔺 — graphics `Pipeline` (dynamic viewport/scissor, dynamic-rendering format hookup) + GLSL shaders compiled to SPIR-V at build time (`glslc` Gradle task)
 - [x] Vertex buffers — `Buffer` elementary (`VkBuffer` + `VkDeviceMemory`, memory-type selection); geometry as data, staged into device-local memory
-- [ ] Index buffers / push constants — shared vertices, first per-frame shader data
+- [x] Push constants 🌀 — the triangle **spins**: per-frame time + aspect pushed straight into the command buffer
+- [ ] Uniform buffers + descriptor sets — the bigger/shared tier of shader data; then textures, 3D + depth
 
 After that: 2D rendering, text, a self-built GUI, 3D, and eventually ray/path tracing.
 

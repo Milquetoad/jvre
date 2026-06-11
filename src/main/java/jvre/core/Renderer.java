@@ -106,6 +106,9 @@ public class Renderer {
     // Which frame-in-flight slot we're on (cycles 0..MAX_FRAMES_IN_FLIGHT-1).
     private int currentFrame = 0;
 
+    // Animation clock: the time push constant counts seconds from here.
+    private final long startNanos = System.nanoTime();
+
     public Renderer(Instance instance, Surface surface, Window window,
                     float clearR, float clearG, float clearB) {
         this.surface = surface;
@@ -294,6 +297,16 @@ public class Renderer {
             // several bindings can be bound in one call.
             vkCmdBindVertexBuffers(cmd, 0,
                     stack.longs(vertexBuffer.handle()), stack.longs(0));
+
+            // Push this frame's constants: [ time, aspect ] -- must match the
+            // shader's push_constant block and the layout's range. THIS is the
+            // per-frame-recording payoff: fresh values every frame, written
+            // straight into the command buffer (the pre-recorded model could
+            // never animate).
+            float time = (System.nanoTime() - startNanos) * 1e-9f;
+            float aspect = swapchain.width() / (float) swapchain.height();
+            vkCmdPushConstants(cmd, pipeline.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0,
+                    stack.floats(time, aspect));
 
             // THE draw: 3 vertices, 1 instance, no offsets. The vertex shader's
             // location 0/1 inputs now stream from the bound buffer, sliced per

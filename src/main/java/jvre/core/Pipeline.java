@@ -13,6 +13,7 @@ import org.lwjgl.vulkan.VkPipelineRenderingCreateInfo;
 import org.lwjgl.vulkan.VkPipelineShaderStageCreateInfo;
 import org.lwjgl.vulkan.VkPipelineVertexInputStateCreateInfo;
 import org.lwjgl.vulkan.VkPipelineViewportStateCreateInfo;
+import org.lwjgl.vulkan.VkPushConstantRange;
 import org.lwjgl.vulkan.VkShaderModuleCreateInfo;
 import org.lwjgl.vulkan.VkVertexInputAttributeDescription;
 import org.lwjgl.vulkan.VkVertexInputBindingDescription;
@@ -172,10 +173,20 @@ public class Pipeline {
 
             // ---- Pipeline layout: the shader's external interface ----
             // Descriptor sets (uniforms/textures) + push constants live here.
-            // Ours is EMPTY -- the triangle needs no external data -- but the
-            // object itself is mandatory.
+            // First real content: a PUSH CONSTANT range -- 8 bytes ({ float
+            // time; float aspect; }) visible to the vertex stage, matching the
+            // shader's push_constant block. The spec guarantees at least 128
+            // bytes of push-constant space; tiny per-frame values like these
+            // are exactly what it's for. (Hardcoded to jvre's one block, like
+            // the vertex layout: parameterized the moment shaders vary.)
+            VkPushConstantRange.Buffer pushRange = VkPushConstantRange.calloc(1, stack);
+            pushRange.stageFlags(VK_SHADER_STAGE_VERTEX_BIT);
+            pushRange.offset(0);
+            pushRange.size(2 * Float.BYTES);
+
             VkPipelineLayoutCreateInfo layoutInfo = VkPipelineLayoutCreateInfo.calloc(stack);
             layoutInfo.sType(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
+            layoutInfo.pPushConstantRanges(pushRange);
 
             LongBuffer pLayout = stack.longs(VK_NULL_HANDLE);
             Vk.check(vkCreatePipelineLayout(device.handle(), layoutInfo, null, pLayout),
@@ -228,6 +239,11 @@ public class Pipeline {
     /** The VkPipeline handle -- for vkCmdBindPipeline. */
     public long handle() {
         return handle;
+    }
+
+    /** The VkPipelineLayout -- vkCmdPushConstants pushes against it. */
+    public long layout() {
+        return layout;
     }
 
     public void close() {

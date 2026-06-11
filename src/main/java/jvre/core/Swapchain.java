@@ -101,9 +101,8 @@ public class Swapchain {
             createInfo.oldSwapchain(VK_NULL_HANDLE);                   // no prior chain to recycle
 
             LongBuffer pSwapchain = stack.longs(VK_NULL_HANDLE);
-            if (vkCreateSwapchainKHR(device.handle(), createInfo, null, pSwapchain) != VK_SUCCESS) {
-                throw new RuntimeException("Failed to create the swapchain");
-            }
+            Vk.check(vkCreateSwapchainKHR(device.handle(), createInfo, null, pSwapchain),
+                    "Failed to create the swapchain");
             handle = pSwapchain.get(0);
 
             // ---- Retrieve the image handles. The driver may make MORE than we
@@ -184,9 +183,8 @@ public class Swapchain {
                 createInfo.subresourceRange().baseArrayLayer(0);
                 createInfo.subresourceRange().layerCount(1);
 
-                if (vkCreateImageView(device.handle(), createInfo, null, pView) != VK_SUCCESS) {
-                    throw new RuntimeException("Failed to create image view " + i);
-                }
+                Vk.check(vkCreateImageView(device.handle(), createInfo, null, pView),
+                        "Failed to create image view " + i);
                 views[i] = pView.get(0);
             }
         }

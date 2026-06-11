@@ -105,9 +105,8 @@ public class Device {
             // device calls).
 
             PointerBuffer pDevice = stack.mallocPointer(1);
-            if (vkCreateDevice(physicalDevice, createInfo, null, pDevice) != VK_SUCCESS) {
-                throw new RuntimeException("Failed to create the logical device");
-            }
+            Vk.check(vkCreateDevice(physicalDevice, createInfo, null, pDevice),
+                    "Failed to create the logical device");
             handle = new VkDevice(pDevice.get(0), physicalDevice, createInfo);
 
             // Queues are created with the device; we only retrieve handles. Index 0

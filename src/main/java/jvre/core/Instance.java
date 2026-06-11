@@ -10,6 +10,7 @@ import org.lwjgl.vulkan.VkDebugUtilsMessengerCreateInfoEXT;
 import org.lwjgl.vulkan.VkInstance;
 import org.lwjgl.vulkan.VkInstanceCreateInfo;
 import org.lwjgl.vulkan.VkLayerProperties;
+import org.lwjgl.vulkan.VkValidationFeaturesEXT;
 
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
@@ -17,6 +18,7 @@ import java.nio.LongBuffer;
 import static org.lwjgl.glfw.GLFWVulkan.*;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.EXTDebugUtils.*;
+import static org.lwjgl.vulkan.EXTValidationFeatures.*;
 import static org.lwjgl.vulkan.VK10.*;
 import static org.lwjgl.vulkan.VK13.VK_API_VERSION_1_3;
 
@@ -90,15 +92,34 @@ public class Instance {
                 VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo =
                         VkDebugUtilsMessengerCreateInfoEXT.calloc(stack);
                 populateDebugMessengerCreateInfo(debugCreateInfo);
-                createInfo.pNext(debugCreateInfo.address());
+
+                // Turn ON two opt-in check sets the layer does NOT run by default:
+                //   - SYNCHRONIZATION: models every execution/memory dependency and
+                //     reports actual HAZARDS (write-after-write, read-before-write),
+                //     not just spec violations. We hand-roll our barriers now, so
+                //     this is the net under exactly the code most likely to be
+                //     subtly wrong.
+                //   - BEST_PRACTICES: vendor-collected "valid but ill-advised"
+                //     warnings (suspicious usage the core checks can't object to).
+                // Config struct, not API: VkValidationFeaturesEXT is read by the
+                // LAYER, which is why it only gets chained when validating.
+                VkValidationFeaturesEXT validationFeatures =
+                        VkValidationFeaturesEXT.calloc(stack);
+                validationFeatures.sType(VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT);
+                validationFeatures.pEnabledValidationFeatures(stack.ints(
+                        VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT,
+                        VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT));
+
+                // pNext chain: createInfo -> validationFeatures -> debugCreateInfo.
+                validationFeatures.pNext(debugCreateInfo.address());
+                createInfo.pNext(validationFeatures.address());
             } else {
                 createInfo.ppEnabledLayerNames(null);
             }
 
             PointerBuffer pInstance = stack.mallocPointer(1);
-            if (vkCreateInstance(createInfo, null, pInstance) != VK_SUCCESS) {
-                throw new RuntimeException("Failed to create the Vulkan instance");
-            }
+            Vk.check(vkCreateInstance(createInfo, null, pInstance),
+                    "Failed to create the Vulkan instance");
             handle = new VkInstance(pInstance.get(0), createInfo);
         }
 
@@ -170,9 +191,8 @@ public class Instance {
             populateDebugMessengerCreateInfo(createInfo);
 
             LongBuffer pMessenger = stack.longs(VK_NULL_HANDLE);
-            if (vkCreateDebugUtilsMessengerEXT(handle, createInfo, null, pMessenger) != VK_SUCCESS) {
-                throw new RuntimeException("Failed to set up the debug messenger");
-            }
+            Vk.check(vkCreateDebugUtilsMessengerEXT(handle, createInfo, null, pMessenger),
+                    "Failed to set up the debug messenger");
             debugMessenger = pMessenger.get(0);
         }
     }

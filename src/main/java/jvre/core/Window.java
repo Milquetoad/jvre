@@ -1,5 +1,7 @@
 package jvre.core;
 
+import org.lwjgl.glfw.GLFWErrorCallback;
+
 import java.nio.IntBuffer;
 
 import static org.lwjgl.glfw.GLFW.*;
@@ -18,7 +20,18 @@ public class Window {
 
     private final long handle;
 
+    // Native callback kept as a field so we can free it at shutdown (off-heap),
+    // same pattern as the debug-messenger callback in Instance.
+    private final GLFWErrorCallback errorCallback;
+
     public Window(int width, int height, CharSequence title) {
+        // GLFW reports errors through a callback, not return codes -- without one
+        // installed, failures (bad hints, missing display, ...) are SILENT and all
+        // you see is the next call misbehaving. Installed before glfwInit so even
+        // init errors are heard.
+        errorCallback = GLFWErrorCallback.createPrint(System.err);
+        glfwSetErrorCallback(errorCallback);
+
         if (!glfwInit()) {
             throw new IllegalStateException("Unable to initialize GLFW");
         }
@@ -53,5 +66,8 @@ public class Window {
     public void close() {
         glfwDestroyWindow(handle);
         glfwTerminate();
+        // Detach before freeing so GLFW can't call into freed memory.
+        glfwSetErrorCallback(null);
+        errorCallback.free();
     }
 }

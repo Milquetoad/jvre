@@ -27,10 +27,8 @@ public class Surface {
             // Output param: glfwCreateWindowSurface writes the new handle here, and
             // returns a Vulkan result code (an int), not the handle itself.
             LongBuffer pSurface = stack.longs(VK_NULL_HANDLE);
-            int result = glfwCreateWindowSurface(instance.handle(), window.handle(), null, pSurface);
-            if (result != VK_SUCCESS) {
-                throw new RuntimeException("Failed to create the window surface: " + result);
-            }
+            Vk.check(glfwCreateWindowSurface(instance.handle(), window.handle(), null, pSurface),
+                    "Failed to create the window surface");
             handle = pSurface.get(0);
         }
         System.out.println("Window surface created.");

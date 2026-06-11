@@ -4,6 +4,7 @@ import jvre.core.Device;
 import jvre.core.Instance;
 import jvre.core.Surface;
 import jvre.core.Swapchain;
+import jvre.core.Vk;
 import jvre.core.Window;
 
 import org.lwjgl.PointerBuffer;
@@ -142,9 +143,8 @@ public class Main {
             // re-records every frame would use RESET_COMMAND_BUFFER_BIT instead.
 
             LongBuffer pPool = stack.longs(VK_NULL_HANDLE);
-            if (vkCreateCommandPool(device.handle(), poolInfo, null, pPool) != VK_SUCCESS) {
-                throw new RuntimeException("Failed to create the command pool");
-            }
+            Vk.check(vkCreateCommandPool(device.handle(), poolInfo, null, pPool),
+                    "Failed to create the command pool");
             commandPool = pPool.get(0);
         }
         System.out.println("Command pool created.");
@@ -175,9 +175,8 @@ public class Main {
             allocInfo.commandBufferCount(count);
 
             PointerBuffer pBuffers = stack.mallocPointer(count);
-            if (vkAllocateCommandBuffers(device.handle(), allocInfo, pBuffers) != VK_SUCCESS) {
-                throw new RuntimeException("Failed to allocate command buffers");
-            }
+            Vk.check(vkAllocateCommandBuffers(device.handle(), allocInfo, pBuffers),
+                    "Failed to allocate command buffers");
             for (int i = 0; i < count; i++) {
                 commandBuffers[i] = new VkCommandBuffer(pBuffers.get(i), device.handle());
             }
@@ -236,9 +235,8 @@ public class Main {
             for (int i = 0; i < count; i++) {
                 VkCommandBuffer cmd = commandBuffers[i];
 
-                if (vkBeginCommandBuffer(cmd, beginInfo) != VK_SUCCESS) {
-                    throw new RuntimeException("Failed to begin command buffer " + i);
-                }
+                Vk.check(vkBeginCommandBuffer(cmd, beginInfo),
+                        "Failed to begin command buffer " + i);
 
                 // ---- Barrier 1: make the image renderable (UNDEFINED -> COLOR) ----
                 // Gate at COLOR_ATTACHMENT_OUTPUT (the same stage the submit waits on
@@ -272,9 +270,8 @@ public class Main {
                 barrier.dstAccessMask(VK_ACCESS_2_NONE);
                 vkCmdPipelineBarrier2(cmd, depInfo);
 
-                if (vkEndCommandBuffer(cmd) != VK_SUCCESS) {
-                    throw new RuntimeException("Failed to record command buffer " + i);
-                }
+                Vk.check(vkEndCommandBuffer(cmd),
+                        "Failed to record command buffer " + i);
             }
         }
         System.out.println("Recorded " + count + " command buffers (clear to orange, dynamic rendering).");
@@ -300,24 +297,21 @@ public class Main {
             fenceInfo.flags(VK_FENCE_CREATE_SIGNALED_BIT);  // start signaled
 
             LongBuffer p = stack.longs(VK_NULL_HANDLE);
-            if (vkCreateSemaphore(device.handle(), semInfo, null, p) != VK_SUCCESS) {
-                throw new RuntimeException("Failed to create imageAvailable semaphore");
-            }
+            Vk.check(vkCreateSemaphore(device.handle(), semInfo, null, p),
+                    "Failed to create imageAvailable semaphore");
             imageAvailableSemaphore = p.get(0);
 
             // One renderFinished semaphore per swapchain image (reuse-safe: an image
             // isn't re-acquired until its prior present has consumed the semaphore).
             renderFinishedSemaphores = new long[swapchain.imageCount()];
             for (int i = 0; i < renderFinishedSemaphores.length; i++) {
-                if (vkCreateSemaphore(device.handle(), semInfo, null, p) != VK_SUCCESS) {
-                    throw new RuntimeException("Failed to create renderFinished semaphore " + i);
-                }
+                Vk.check(vkCreateSemaphore(device.handle(), semInfo, null, p),
+                        "Failed to create renderFinished semaphore " + i);
                 renderFinishedSemaphores[i] = p.get(0);
             }
 
-            if (vkCreateFence(device.handle(), fenceInfo, null, p) != VK_SUCCESS) {
-                throw new RuntimeException("Failed to create in-flight fence");
-            }
+            Vk.check(vkCreateFence(device.handle(), fenceInfo, null, p),
+                    "Failed to create in-flight fence");
             inFlightFence = p.get(0);
         }
         System.out.println("Sync objects created.");
@@ -344,7 +338,10 @@ public class Main {
     private void drawFrame() {
         try (MemoryStack stack = stackPush()) {
             // 1. Block until the previous frame finished, then reset the fence.
-            vkWaitForFences(device.handle(), stack.longs(inFlightFence), true, NO_TIMEOUT);
+            //    (With an infinite timeout the only non-SUCCESS results are real
+            //    errors like DEVICE_LOST -- so check, don't ignore.)
+            Vk.check(vkWaitForFences(device.handle(), stack.longs(inFlightFence), true, NO_TIMEOUT),
+                    "Failed waiting for the in-flight fence");
             vkResetFences(device.handle(), stack.longs(inFlightFence));
 
             // 2. Acquire the next swapchain image (GPU signals imageAvailable when
@@ -385,9 +382,8 @@ public class Main {
             submitInfo.pCommandBufferInfos(cmdInfo);
             submitInfo.pSignalSemaphoreInfos(signalInfo);
 
-            if (vkQueueSubmit2(device.graphicsQueue(), submitInfo, inFlightFence) != VK_SUCCESS) {
-                throw new RuntimeException("Failed to submit the draw command buffer");
-            }
+            Vk.check(vkQueueSubmit2(device.graphicsQueue(), submitInfo, inFlightFence),
+                    "Failed to submit the draw command buffer");
 
             // 4. Present: hand the finished image back to the swapchain to display,
             //    once renderFinished is signaled. (We ignore out-of-date/suboptimal

@@ -37,5 +37,5 @@ Recorded around `vkCmdBeginRendering`/`End` in `Main.createCommandBuffers`:
 ## Gotcha
 Barriers are easy to get subtly wrong (wrong stage/access -> validation warnings or real races). The [[Validation Layer and Debug Messenger|validation layer]] is the safety net here: it flags missing/incorrect barriers, which is how you learn them. jvre's two ran validation-clean on the Intel UHD 620.
 
-## Later
-`vkCmdPipelineBarrier` is the **Vulkan 1.0** API. Vulkan 1.3 also offers **synchronization2** (`vkCmdPipelineBarrier2` + `VkImageMemoryBarrier2`, finer stage/access masks). jvre uses the classic API for now to keep one new concept at a time; sync2 is a possible later cleanup.
+## Now in the synchronization2 spelling
+As of 2026-06-11 jvre records these barriers through **[[Synchronization2]]** (`vkCmdPipelineBarrier2` + `VkImageMemoryBarrier2` via a `VkDependencyInfo` bundle): each barrier carries its **own** stage masks instead of inheriting them from the call, and barrier 2's `dst = BOTTOM_OF_PIPE` became the honest `dstStageMask = NONE`. Everything above -- layouts, the two transitions, the access masks, the gating rationale -- is unchanged; only the API shape moved.

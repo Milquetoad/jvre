@@ -18,7 +18,7 @@ The render pass used to do **image layout transitions automatically** via `initi
 
 ## How jvre uses it
 
-1. **Enable it.** Request **Vulkan 1.3** at instance creation (`appInfo.apiVersion`), and enable the **`dynamicRendering`** device feature -- chained into `VkDeviceCreateInfo.pNext` via `VkPhysicalDeviceDynamicRenderingFeatures` (post-1.0 features are opted into through `pNext`, not `pEnabledFeatures`). A portable build would first verify support with `vkGetPhysicalDeviceFeatures2`.
+1. **Enable it.** Request **Vulkan 1.3** at instance creation (`appInfo.apiVersion`), and enable the **`dynamicRendering`** device feature -- chained into `VkDeviceCreateInfo.pNext` via the aggregate `VkPhysicalDeviceVulkan13Features` struct, together with `synchronization2` (post-1.0 features are opted into through `pNext`, not `pEnabledFeatures`). Since 2026-06-11, device *selection* verifies the GPU's `apiVersion >= 1.3` and these exact feature bits via `vkGetPhysicalDeviceFeatures2`, and `Instance` verifies the loader -- support is checked, not assumed.
 2. **Record each command buffer** (`Main.createCommandBuffers`), per [[Swapchain]] image:
    - [[Pipeline Barriers|barrier]]: `UNDEFINED -> COLOR_ATTACHMENT_OPTIMAL` (now renderable).
    - `VkRenderingAttachmentInfo`: point `.imageView()` at this image's [[Image Views|view]], `loadOp = CLEAR` (the orange), `storeOp = STORE`, `imageLayout = COLOR_ATTACHMENT_OPTIMAL`.

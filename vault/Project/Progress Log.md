@@ -2,6 +2,13 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-11 — Modernization sweep: [[Synchronization2]] + verified features + sync validation ✅
+- **Migrated to synchronization2** (core 1.3; the review's #1 item). `Device` now enables `dynamicRendering` + `synchronization2` through the aggregate `VkPhysicalDeviceVulkan13Features` (one struct per core release, not one per feature). Barriers became `VkImageMemoryBarrier2` (each carries its OWN stage masks; calls bundle through `VkDependencyInfo`); the present barrier's `BOTTOM_OF_PIPE` became the honest `STAGE_2_NONE`. Submit became `vkQueueSubmit2` with per-semaphore stage masks (`VkSemaphoreSubmitInfo`) -- 1.0's index-matched parallel arrays are gone. Present is unchanged (no sync2 variant; the semaphore orders it). New note: [[Synchronization2]].
+- **Support is now verified, not assumed** (review #2): device selection requires `apiVersion >= 1.3` + the exact feature bits we enable (queried via `vkGetPhysicalDeviceFeatures2` -- same pNext chain we enable through), and `Instance` checks the loader version separately. Selection message + "no suitable GPU" error updated.
+- **Validation turned up** (review #3): chained `VkValidationFeaturesEXT` to enable **synchronization validation** (actual hazard detection under our hand-rolled barriers) and **best-practices** checks. Plus the small stuff: GLFW error callback in `Window` (errors were silent before), and a `Vk.check` helper so every create/submit failure reports its `VkResult` (acquire/present deliberately stay unchecked -- their codes are resize control flow for the `Renderer`).
+- **Verified on HAL-9000's RTX 4090** (running locally this time, not over SSH): full bootstrap -> orange -> graceful close, exit 0, and *zero* validation output even with the two new check modes on. Commits `6f03670`, `c7a8045`, `8665eae`.
+- **Next:** the `Renderer` coordinator (owns the device context + swapchain recreation on resize, frames-in-flight), then the first **triangle / shader**.
+
 ## 2026-06-11 — Status review + doc sync ✅
 - Pulled the refactor/dynamic-rendering work onto this machine; `gradlew build` clean. Synced the stale docs: README (requirements now say Vulkan 1.3, project layout shows `jvre.core`, roadmap shows the refactor phase) and the local working agreement.
 - **Code review verdict: structure is on-plan and the render path is modern** (1.3 + dynamic rendering + per-image renderFinished semaphores is current guidance). Items queued from the review, roughly in order:

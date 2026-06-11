@@ -1,6 +1,6 @@
 # Validation Layer & Debug Messenger
 
-The **safety net.** Vulkan is silent on misuse; the validation layer checks every call, and the debug messenger is the callback that delivers those results to us. **Always develop with this on** (see [[Vulkan Overview]]). In `jvre.Main`.
+The **safety net.** Vulkan is silent on misuse; the validation layer checks every call, and the debug messenger is the callback that delivers those results to us. **Always develop with this on** (see [[Vulkan Overview]]). Lives in `jvre.core.Instance` (extracted from `Main` in the 2026-06 refactor).
 
 ## The pieces (3)
 1. **Enable the layer** `VK_LAYER_KHRONOS_validation` in the instance's `ppEnabledLayerNames` — but only after confirming it's available (`checkValidationLayerSupport`).
@@ -37,6 +37,13 @@ Deliberately skipped destroying the messenger before the instance → validation
 VkDebugUtilsMessengerEXT ...  (VUID-vkDestroyInstance-instance-00629, + spec link)
 ```
 Printed **twice** = both messengers (standalone + pNext) received it → confirms the pNext trick. An *invisible* bug in raw Vulkan became a precise, spec-cited message.
+
+## Opt-in check modes (added 2026-06-11)
+The layer's defaults don't run everything it can do. jvre chains a **`VkValidationFeaturesEXT`** struct into the instance create-info (only when validating -- it's *configuration for the layer*, not core API) to enable two extra modes:
+- **`SYNCHRONIZATION_VALIDATION`** — models every execution/memory dependency and reports actual **hazards** (write-after-write, read-before-write), not just spec violations. Since [[Dynamic Rendering]] made us hand-roll [[Pipeline Barriers|barriers]] ([[Synchronization2]] spelling), this is the net under exactly the code most likely to be subtly wrong.
+- **`BEST_PRACTICES`** — vendor-collected "valid but ill-advised" warnings the core checks can't object to.
+
+The `pNext` chain becomes: `createInfo -> validationFeatures -> debugCreateInfo`. Both modes ran **silent** over the full bootstrap + render loop + cleanup on the RTX 4090.
 
 ## Cleanup order
 `vkDestroyDebugUtilsMessengerEXT` (child) → `vkDestroyInstance` (parent) → `debugCallback.free()` (after the instance that referenced it is gone).

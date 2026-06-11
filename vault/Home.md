@@ -32,8 +32,9 @@ New here? The Map of Content below is a reference index, not a path. To actually
 15. [[Render Pass]] + [[Framebuffers]] — the *classic* clear path (now **superseded** in jvre, but the concepts carry over)
 16. [[Dynamic Rendering]] — the **modern** path jvre actually uses (no render pass / framebuffer; core in Vulkan 1.3)
 17. [[Pipeline Barriers]] — the image-layout transitions dynamic rendering makes you own
-18. [[Command Buffers]] — recording the clear command (record now, submit later)
-19. [[Synchronization and the Render Loop]] — semaphores/fences and the loop that finally shows the color
+18. [[Synchronization2]] — the modern (1.3) spelling of barriers + queue submission jvre uses
+19. [[Command Buffers]] — recording the clear command (record now, submit later)
+20. [[Synchronization and the Render Loop]] — semaphores/fences and the loop that finally shows the color
 
 **5. Looking ahead — optional, for the curious**
 - [[Shaders - GLSL and SPIR-V]], [[GUI Options]] / [[Self-Built GUI (planned)]], [[Ray Tracing and Path Tracing (future)]], [[Device Selection and Cross-Platform (planned)]]
@@ -80,6 +81,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - [[Image Views]] ✅ — how to interpret each swapchain image (the render-pass prerequisite)
 - [[Dynamic Rendering]] ✅ — jvre's render path (Vulkan 1.3; no render pass / framebuffer)
 - [[Pipeline Barriers]] ✅ — image-layout transitions (what dynamic rendering makes us own)
+- [[Synchronization2]] ✅ — per-barrier stage masks, VkDependencyInfo, vkQueueSubmit2 (core 1.3)
 - [[Render Pass]] ⚠️ superseded — the classic clear-to-color blueprint (kept for concepts)
 - [[Framebuffers]] ⚠️ superseded — bind image views into a render pass (kept for concepts)
 - [[Command Buffers]] ✅ — record "barrier / clear (dynamic rendering) / barrier"
@@ -101,6 +103,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - ✅ [[Synchronization and the Render Loop]] — 🟠 **clear to color achieved!** (orange, FIFO, clean validation)
 - ✅ **Refactor underway** — extracted `Window`/`Instance`/`Surface` (stable layer) + `Device` + `Swapchain` into `jvre.core`
 - ✅ [[Dynamic Rendering]] — switched off render passes/framebuffers (Vulkan 1.3); orange still clean on the Intel UHD 620
+- ✅ [[Synchronization2]] — barriers + submit migrated to the 1.3 sync API; 1.3/feature support now *verified* during device selection; sync-validation + best-practices checks on (all clean on the 4090)
 - ⏭️ Next: a `Renderer` coordinator (+ swapchain recreation on resize), then a first triangle / shader
 
 #jvre #moc

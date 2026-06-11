@@ -14,6 +14,8 @@ import org.lwjgl.vulkan.VkPipelineShaderStageCreateInfo;
 import org.lwjgl.vulkan.VkPipelineVertexInputStateCreateInfo;
 import org.lwjgl.vulkan.VkPipelineViewportStateCreateInfo;
 import org.lwjgl.vulkan.VkShaderModuleCreateInfo;
+import org.lwjgl.vulkan.VkVertexInputAttributeDescription;
+import org.lwjgl.vulkan.VkVertexInputBindingDescription;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -83,13 +85,35 @@ public class Pipeline {
             stages.get(1).module(fragModule);
             stages.get(1).pName(stack.UTF8("main"));
 
-            // ---- Vertex input: EMPTY on purpose ----
-            // No bindings/attributes -- the triangle's vertices are hardcoded in
-            // the vertex shader (gl_VertexIndex). Vertex buffers plug in here
-            // in the next step.
+            // ---- Vertex input: how the bound vertex buffer is sliced up ----
+            // Two halves:
+            //   BINDING = the buffer slot. We use one (binding 0), advancing by
+            //   STRIDE bytes per vertex (per-instance data would use RATE_INSTANCE).
+            //   ATTRIBUTES = what each shader `location` reads out of a binding.
+            //   Formats double as "data shapes": R32G32_SFLOAT = vec2, etc.
+            // Interleaved layout, 5 floats per vertex: [x y | r g b]
+            //   location 0 (vec2 inPosition) <- offset 0
+            //   location 1 (vec3 inColor)    <- offset 8 (after the 2 floats)
+            // (Hardcoded to jvre's one vertex layout for now; becomes a
+            // parameter the moment a second layout exists.)
+            VkVertexInputBindingDescription.Buffer binding =
+                    VkVertexInputBindingDescription.calloc(1, stack);
+            binding.binding(0);
+            binding.stride(5 * Float.BYTES);
+            binding.inputRate(VK_VERTEX_INPUT_RATE_VERTEX);
+
+            VkVertexInputAttributeDescription.Buffer attributes =
+                    VkVertexInputAttributeDescription.calloc(2, stack);
+            attributes.get(0).location(0).binding(0)
+                    .format(VK_FORMAT_R32G32_SFLOAT).offset(0);
+            attributes.get(1).location(1).binding(0)
+                    .format(VK_FORMAT_R32G32B32_SFLOAT).offset(2 * Float.BYTES);
+
             VkPipelineVertexInputStateCreateInfo vertexInput =
                     VkPipelineVertexInputStateCreateInfo.calloc(stack);
             vertexInput.sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO);
+            vertexInput.pVertexBindingDescriptions(binding);
+            vertexInput.pVertexAttributeDescriptions(attributes);
 
             // ---- Input assembly: how vertices group into primitives ----
             // TRIANGLE_LIST: every 3 consecutive vertices = one independent triangle.

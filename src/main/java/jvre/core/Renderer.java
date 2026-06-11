@@ -57,9 +57,21 @@ public class Renderer {
     private static final String TRIANGLE_VERT = "/shaders/triangle.vert.spv";
     private static final String TRIANGLE_FRAG = "/shaders/triangle.frag.spv";
 
+    // The demo triangle's GEOMETRY -- interleaved, 5 floats per vertex,
+    // matching Pipeline's binding/attribute descriptions: [x y | r g b].
+    // NDC coordinates (y DOWN). Like the clear color and shaders: demo content,
+    // destined to become API (L1 users hand us their geometry).
+    private static final float[] TRIANGLE_VERTICES = {
+            //   x      y      r     g     b
+             0.0f, -0.5f,  1.0f, 0.0f, 0.0f,   // top center, red
+             0.5f,  0.5f,  0.0f, 1.0f, 0.0f,   // bottom right, green
+            -0.5f,  0.5f,  0.0f, 0.0f, 1.0f,   // bottom left, blue
+    };
+
     private final Device device;
     private Swapchain swapchain;
     private Pipeline pipeline;
+    private Buffer vertexBuffer;
 
     // The clear color (RGBA in [0,1]); becomes real API once there is more to
     // render than a clear. The swapchain is an sRGB format, so these linear
@@ -107,6 +119,18 @@ public class Renderer {
         this.device = new Device(instance, surface);
         this.swapchain = new Swapchain(device, surface, window);
         this.pipeline = new Pipeline(device, swapchain.imageFormat(), TRIANGLE_VERT, TRIANGLE_FRAG);
+
+        // The vertex buffer, simplest correct form first: HOST_VISIBLE memory
+        // the CPU maps and writes directly. The GPU reads it over the PCIe bus
+        // every frame -- fine for 60 bytes, wrong for real meshes; the staging
+        // upload to DEVICE_LOCAL memory is the next step.
+        long vertexBytes = (long) TRIANGLE_VERTICES.length * Float.BYTES;
+        this.vertexBuffer = new Buffer(device, vertexBytes,
+                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        vertexBuffer.uploadFloats(TRIANGLE_VERTICES);
+        System.out.println("Vertex buffer created (" + vertexBytes + " bytes, host-visible).");
+
         createCommandPool();
         createCommandBuffers();
         createSyncObjects();
@@ -264,9 +288,15 @@ public class Renderer {
             scissor.extent().width(swapchain.width()).height(swapchain.height());
             vkCmdSetScissor(cmd, 0, scissor);
 
-            // THE draw: 3 vertices, 1 instance, no offsets. No vertex buffer is
-            // bound -- the vertex shader fabricates the corners from
-            // gl_VertexIndex (0, 1, 2).
+            // Bind the vertex buffer into BINDING 0 (matching the pipeline's
+            // binding description), starting at byte offset 0. Arrays because
+            // several bindings can be bound in one call.
+            vkCmdBindVertexBuffers(cmd, 0,
+                    stack.longs(vertexBuffer.handle()), stack.longs(0));
+
+            // THE draw: 3 vertices, 1 instance, no offsets. The vertex shader's
+            // location 0/1 inputs now stream from the bound buffer, sliced per
+            // the pipeline's attribute descriptions.
             vkCmdDraw(cmd, 3, 1, 0, 0);
 
             vkCmdEndRendering(cmd);
@@ -558,6 +588,9 @@ public class Renderer {
         // Destroying the command pool also frees the command buffers from it.
         if (commandPool != VK_NULL_HANDLE) {
             vkDestroyCommandPool(device.handle(), commandPool, null);
+        }
+        if (vertexBuffer != null) {
+            vertexBuffer.close();
         }
         pipeline.close();
         // Swapchain.close() destroys our image views, then the swapchain (which

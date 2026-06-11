@@ -20,7 +20,7 @@ public class Main {
 
     private static final int WIDTH = 800;
     private static final int HEIGHT = 600;
-    private static final CharSequence TITLE = "jvre - clear to color";
+    private static final CharSequence TITLE = "jvre - first triangle";
 
     // Bright orange (RGB in [0,1]) -- the renderer clears to this every frame.
     private static final float CLEAR_R = 1.0f;
@@ -57,7 +57,7 @@ public class Main {
     }
 
     private void mainLoop() {
-        System.out.println("Entering render loop -- clearing to orange. Close the window to exit.");
+        System.out.println("Entering render loop -- RGB triangle on orange. Close the window to exit.");
         while (!window.shouldClose()) {
             window.pollEvents();
             renderer.drawFrame();

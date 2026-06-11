@@ -12,11 +12,13 @@ import org.lwjgl.vulkan.VkDependencyInfo;
 import org.lwjgl.vulkan.VkFenceCreateInfo;
 import org.lwjgl.vulkan.VkImageMemoryBarrier2;
 import org.lwjgl.vulkan.VkPresentInfoKHR;
+import org.lwjgl.vulkan.VkRect2D;
 import org.lwjgl.vulkan.VkRenderingAttachmentInfo;
 import org.lwjgl.vulkan.VkRenderingInfo;
 import org.lwjgl.vulkan.VkSemaphoreCreateInfo;
 import org.lwjgl.vulkan.VkSemaphoreSubmitInfo;
 import org.lwjgl.vulkan.VkSubmitInfo2;
+import org.lwjgl.vulkan.VkViewport;
 
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
@@ -49,8 +51,15 @@ public class Renderer {
     private final Surface surface;
     private final Window window;
 
+    // The demo triangle's shaders, compiled GLSL -> SPIR-V by the Gradle
+    // compileShaders task and loaded from the classpath. Becomes real API once
+    // users bring their own shaders (the L2 Shadertoy altitude).
+    private static final String TRIANGLE_VERT = "/shaders/triangle.vert.spv";
+    private static final String TRIANGLE_FRAG = "/shaders/triangle.frag.spv";
+
     private final Device device;
     private Swapchain swapchain;
+    private Pipeline pipeline;
 
     // The clear color (RGBA in [0,1]); becomes real API once there is more to
     // render than a clear. The swapchain is an sRGB format, so these linear
@@ -93,9 +102,11 @@ public class Renderer {
         this.clearG = clearG;
         this.clearB = clearB;
 
-        // The device context, top to bottom.
+        // The device context, top to bottom. The pipeline needs the swapchain's
+        // image format (dynamic rendering's one remaining coupling).
         this.device = new Device(instance, surface);
         this.swapchain = new Swapchain(device, surface, window);
+        this.pipeline = new Pipeline(device, swapchain.imageFormat(), TRIANGLE_VERT, TRIANGLE_FRAG);
         createCommandPool();
         createCommandBuffers();
         createSyncObjects();
@@ -230,10 +241,34 @@ public class Renderer {
             barrier.dstAccessMask(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
             vkCmdPipelineBarrier2(cmd, depInfo);
 
-            // ---- Clear, via dynamic rendering (no render pass / framebuffer) ----
+            // ---- Render, via dynamic rendering (no render pass / framebuffer) ----
+            // loadOp=CLEAR has already filled the image (the orange background)
+            // by the time the triangle is drawn over it.
             vkCmdBeginRendering(cmd, renderingInfo);
-            // (loadOp=CLEAR fills the image; nothing else to draw for clear-to-color.
-            //  The first triangle's draw commands land RIGHT HERE.)
+
+            // Bind the pipeline: ONE call swaps in the shaders + all the baked
+            // fixed-function state.
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
+
+            // Viewport + scissor are DYNAMIC pipeline state (so resize never
+            // rebuilds the pipeline) -- set them every frame, here.
+            // Viewport = NDC -> pixels mapping; scissor = hard pixel clip.
+            VkViewport.Buffer viewport = VkViewport.calloc(1, stack);
+            viewport.x(0.0f).y(0.0f);
+            viewport.width(swapchain.width()).height(swapchain.height());
+            viewport.minDepth(0.0f).maxDepth(1.0f);
+            vkCmdSetViewport(cmd, 0, viewport);
+
+            VkRect2D.Buffer scissor = VkRect2D.calloc(1, stack);
+            scissor.offset().x(0).y(0);
+            scissor.extent().width(swapchain.width()).height(swapchain.height());
+            vkCmdSetScissor(cmd, 0, scissor);
+
+            // THE draw: 3 vertices, 1 instance, no offsets. No vertex buffer is
+            // bound -- the vertex shader fabricates the corners from
+            // gl_VertexIndex (0, 1, 2).
+            vkCmdDraw(cmd, 3, 1, 0, 0);
+
             vkCmdEndRendering(cmd);
 
             // ---- Barrier 2: make it presentable (COLOR -> PRESENT_SRC) ----
@@ -464,6 +499,7 @@ public class Renderer {
 
         // Tear down the swapchain-dependent slice, in reverse order...
         destroyRenderFinishedSemaphores();
+        int oldFormat = swapchain.imageFormat();
         swapchain.close();
 
         // ...and rebuild it. Only the per-IMAGE pieces depend on the swapchain
@@ -472,6 +508,15 @@ public class Renderer {
         // pool and per-frame sync objects survive untouched.
         swapchain = new Swapchain(device, surface, window);
         createRenderFinishedSemaphores();
+
+        // The pipeline baked the attachment FORMAT (not the extent -- viewport
+        // is dynamic), and the rebuilt swapchain renegotiated it. Same format
+        // (the overwhelmingly common case): keep the pipeline. Changed (e.g.
+        // window dragged to a monitor with different surface support): rebake.
+        if (swapchain.imageFormat() != oldFormat) {
+            pipeline.close();
+            pipeline = new Pipeline(device, swapchain.imageFormat(), TRIANGLE_VERT, TRIANGLE_FRAG);
+        }
 
         // Drop any resize flag raised by the burst of events we just handled --
         // otherwise one drag rebuilds the swapchain several times at the same
@@ -514,6 +559,7 @@ public class Renderer {
         if (commandPool != VK_NULL_HANDLE) {
             vkDestroyCommandPool(device.handle(), commandPool, null);
         }
+        pipeline.close();
         // Swapchain.close() destroys our image views, then the swapchain (which
         // frees the images it owns). The swapchain was created FROM the device,
         // so it goes before the device.

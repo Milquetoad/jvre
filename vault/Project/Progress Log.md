@@ -2,6 +2,17 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-11 — 🔺 FIRST TRIANGLE — shaders + graphics pipeline ✅
+
+![[first-triangle.png]]
+
+- **The first geometry**: an RGB triangle (red/green/blue corners, rasterizer-interpolated) on the orange clear, drawn by the first [[Shaders - GLSL and SPIR-V|shaders]] through the first [[Graphics Pipeline]]. Verified by DPI-aware screenshot on the 4090 (above); sync validation silent. Commits `06f748a` (shaders + build) and `20daac2` (pipeline + draw).
+- **Shaders** (`src/main/glsl/`): `triangle.vert` hardcodes 3 NDC positions + colors indexed by `gl_VertexIndex` (no vertex buffer yet -- isolates pipeline machinery from memory machinery); `triangle.frag` writes the interpolated color. The **planned `glslc` Gradle automation is real**: `compileShaders` -> `build/generated/shaders` -> classpath `/shaders/<name>.spv`.
+- **`jvre.core.Pipeline`** (first *creative-tier* elementary): the big bake -- stages + all fixed-function state in one immutable object. Key choices: **viewport/scissor DYNAMIC** (resize never rebuilds it; only the attachment *format* is baked, checked on [[Swapchain Recreation|recreation]]); **culling OFF** for the first triangle (a winding mistake with culling on = silently empty screen); `VkPipelineRenderingCreateInfo` declares the format in `pNext`, `renderPass = NULL` ([[Dynamic Rendering]]); shader modules destroyed right after the bake; empty vertex-input and layout = the seams for vertex buffers and descriptors.
+- **Draw**: `recordCommandBuffer` binds the pipeline, sets viewport/scissor, `vkCmdDraw(3, 1, 0, 0)`.
+- **Tooling war story**: my first verification screenshots captured the wrong screen region -- PowerShell isn't DPI-aware, so `GetWindowRect` returned virtualized coords while the capture used physical pixels. The same screen-coords-vs-pixels lesson the swapchain already taught, now biting the *test harness*. `SetProcessDPIAware()` fixed it.
+- **Next:** **vertex buffers** -- real vertex data through the pipeline's vertex-input state; first GPU memory allocation (`VkBuffer` + `VkDeviceMemory`, staging, and the VMA conversation).
+
 ## 2026-06-11 — `Renderer` coordinator: extraction + resize + [[Frames in Flight]] 🎛️ ✅
 - **`Renderer` extracted** (`0c0416f`, pure move): command pool/buffers, sync, `drawFrame` and device-context cleanup left `Main` for `jvre.core.Renderer`, which **owns** `Device` + `Swapchain` (constructs them itself). Instance + Surface stay above, long-lived; the Renderer is the tear-down-and-rebuild seam for future GPU switching. `Main` is ~90 lines of wiring -- a preview of the L1 feel.
 - **[[Swapchain Recreation]]** (`59fa11c`): the window is **resizable** (+ minimizable) for the first time. Three triggers (OUT_OF_DATE at acquire/present, SUBOPTIMAL after present, a GLFW framebuffer-resize *flag* for drivers that never complain); fence reset deferred until a submit is guaranteed (the classic OUT_OF_DATE early-return deadlock); minimize parks in `glfwWaitEvents`. **Verified by driving the window via user32** (grow/shrink/minimize/restore/close) -- recreations logged at DPI-scaled pixel sizes (asked for 1200x900, got a 2672x1946 framebuffer -- the pixels-vs-screen-coords lesson, live), sync validation silent.

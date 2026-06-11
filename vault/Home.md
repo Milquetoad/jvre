@@ -38,8 +38,12 @@ New here? The Map of Content below is a reference index, not a path. To actually
 21. [[Frames in Flight]] — overlapping CPU recording with GPU rendering (and per-frame re-recording)
 22. [[Swapchain Recreation]] — resize/minimize/out-of-date handling in the Renderer
 
-**5. Looking ahead — optional, for the curious**
-- [[Shaders - GLSL and SPIR-V]], [[GUI Options]] / [[Self-Built GUI (planned)]], [[Ray Tracing and Path Tracing (future)]], [[Device Selection and Cross-Platform (planned)]]
+**5. Drawing actual geometry — the creative tier begins**
+23. [[Shaders - GLSL and SPIR-V]] — GLSL, the `glslc` build step, locations, interpolation
+24. [[Graphics Pipeline]] — the big bake; dynamic state; the first triangle 🔺
+
+**6. Looking ahead — optional, for the curious**
+- [[GUI Options]] / [[Self-Built GUI (planned)]], [[Ray Tracing and Path Tracing (future)]], [[Device Selection and Cross-Platform (planned)]]
 
 > Prefer a story to an index? [[Progress Log]] is the dated, diary-form version of this same journey.
 
@@ -90,6 +94,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - [[Synchronization and the Render Loop]] ✅ — semaphores/fences + the per-frame loop (🟠 first pixels)
 - [[Frames in Flight]] ✅ — 2 in flight; per-frame command recording (the modern model)
 - [[Swapchain Recreation]] ✅ — resizable window; OUT_OF_DATE/SUBOPTIMAL/flag triggers; minimize handling
+- [[Graphics Pipeline]] ✅ — the big bake; dynamic viewport/scissor; dynamic-rendering format hookup (🔺 first triangle)
 
 ## Status
 - ✅ Toolchain verified (smoke test passes)
@@ -111,6 +116,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - ✅ **`Renderer` extracted** — owns the whole device context (Device, Swapchain, commands, sync); `Main` is wiring only
 - ✅ [[Swapchain Recreation]] — window is resizable (+ minimize); verified by driving the window via user32
 - ✅ [[Frames in Flight]] — 2 in flight, per-frame command recording
-- ⏭️ Next: the first **triangle / shader** — graphics pipeline, GLSL -> SPIR-V, the draw goes inside `recordCommandBuffer`
+- ✅ 🔺 **FIRST TRIANGLE** — [[Graphics Pipeline]] + [[Shaders - GLSL and SPIR-V|shaders]] (RGB-interpolated, on the orange clear; screenshot in [[Progress Log]])
+- ⏭️ Next: **vertex buffers** — feed real vertex data through the pipeline's (currently empty) vertex-input state; the first GPU memory allocation
 
 #jvre #moc

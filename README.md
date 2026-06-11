@@ -1,5 +1,7 @@
 # jvre — Java Vulkan Rendering Engine
 
+![The first triangle: RGB-interpolated, on an orange clear](vault/assets/first-triangle.png)
+
 A general-purpose rendering framework written **from scratch in Java on top of [Vulkan](https://www.vulkan.org/)** (via [LWJGL](https://www.lwjgl.org/)). The goal is twofold:
 
 1. **Learn graphics from first principles** — understand every layer, from the Vulkan instance up to a full render loop, with no engine hiding the details.
@@ -48,8 +50,9 @@ The code is OS-agnostic by design: windowing and surface creation go through GLF
 
 ```
 src/main/java/jvre/        Demo entry point (Main.java -- wiring only)
-src/main/java/jvre/core/   Engine elementaries: Window, Instance, Surface, Device, Swapchain, Renderer
-build.gradle               Build config (LWJGL deps, JDK 21 toolchain, app entry point)
+src/main/java/jvre/core/   Engine elementaries: Window, Instance, Surface, Device, Swapchain, Pipeline, Renderer
+src/main/glsl/             GLSL shader sources (compiled to SPIR-V at build time by glslc)
+build.gradle               Build config (LWJGL deps, JDK 21 toolchain, shader compilation)
 vault/                     Obsidian learning vault — concepts, Vulkan notes, progress log
 ```
 
@@ -79,7 +82,8 @@ Current phase — refactor into reusable components + modernize:
 - [x] Migrated to **dynamic rendering** (Vulkan 1.3) — render pass + framebuffers deleted; explicit pipeline barriers drive the image layout transitions
 - [x] Migrated to **synchronization2** (Vulkan 1.3) — `vkQueueSubmit2` / `vkCmdPipelineBarrier2`; device selection verifies API version + feature support; sync-validation + best-practices layer checks enabled
 - [x] `Renderer` coordinator — owns the device context; **resizable window** with swapchain recreation (incl. minimize); **2 frames in flight** with per-frame command recording
-- [ ] First triangle — graphics pipeline + shaders
+- [x] **First triangle** 🔺 — graphics `Pipeline` (dynamic viewport/scissor, dynamic-rendering format hookup) + GLSL shaders compiled to SPIR-V at build time (`glslc` Gradle task)
+- [ ] Vertex buffers — real vertex data; the first GPU memory allocation
 
 After that: 2D rendering, text, a self-built GUI, 3D, and eventually ray/path tracing.
 

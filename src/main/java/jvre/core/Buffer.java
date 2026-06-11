@@ -2,16 +2,23 @@ package jvre.core;
 
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.vulkan.VkBufferCopy;
 import org.lwjgl.vulkan.VkBufferCreateInfo;
+import org.lwjgl.vulkan.VkCommandBuffer;
+import org.lwjgl.vulkan.VkCommandBufferAllocateInfo;
+import org.lwjgl.vulkan.VkCommandBufferBeginInfo;
+import org.lwjgl.vulkan.VkCommandBufferSubmitInfo;
 import org.lwjgl.vulkan.VkMemoryAllocateInfo;
 import org.lwjgl.vulkan.VkMemoryRequirements;
 import org.lwjgl.vulkan.VkPhysicalDeviceMemoryProperties;
+import org.lwjgl.vulkan.VkSubmitInfo2;
 
 import java.nio.LongBuffer;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.memFloatBuffer;
 import static org.lwjgl.vulkan.VK10.*;
+import static org.lwjgl.vulkan.VK13.*;
 
 /**
  * A VkBuffer plus the VkDeviceMemory backing it -- jvre's first GPU memory.
@@ -36,6 +43,38 @@ public class Buffer {
     private final long handle;  // VkBuffer
     private final long memory;  // VkDeviceMemory backing it
     private final long size;    // bytes
+
+    /**
+     * Build a DEVICE_LOCAL buffer (VRAM -- the memory the GPU reads fastest)
+     * filled with the given floats, via the canonical STAGING upload. On a
+     * discrete GPU the CPU usually cannot map VRAM at all, so the data takes
+     * two hops:
+     *
+     *   CPU writes  -> staging buffer (HOST_VISIBLE,  TRANSFER_SRC)
+     *   GPU copies  -> result buffer  (DEVICE_LOCAL,  TRANSFER_DST | usage)
+     *
+     * The copy is a GPU command like any other, recorded into a one-shot
+     * command buffer on the graphics queue (every graphics queue implicitly
+     * supports transfer). The staging buffer is destroyed as soon as the copy
+     * lands. (On integrated GPUs one memory type is often both DEVICE_LOCAL
+     * and HOST_VISIBLE -- the two hops still work, just redundantly.)
+     */
+    public static Buffer deviceLocal(Device device, long commandPool, float[] data, int usage) {
+        long bytes = (long) data.length * Float.BYTES;
+
+        Buffer staging = new Buffer(device, bytes,
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        staging.uploadFloats(data);
+
+        Buffer result = new Buffer(device, bytes,
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        copy(device, commandPool, staging, result, bytes);
+
+        staging.close();  // served its purpose; the data lives in VRAM now
+        return result;
+    }
 
     /**
      * Create a buffer of {@code size} bytes with the given USAGE (what commands
@@ -128,6 +167,58 @@ public class Buffer {
     // ------------------------------------------------------------------
     // internals
     // ------------------------------------------------------------------
+
+    /** Record + submit a one-shot GPU copy from src to dst, and wait for it. */
+    private static void copy(Device device, long commandPool, Buffer src, Buffer dst, long bytes) {
+        try (MemoryStack stack = stackPush()) {
+            // A throwaway command buffer from the renderer's pool.
+            VkCommandBufferAllocateInfo allocInfo = VkCommandBufferAllocateInfo.calloc(stack);
+            allocInfo.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
+            allocInfo.commandPool(commandPool);
+            allocInfo.level(VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+            allocInfo.commandBufferCount(1);
+
+            PointerBuffer pCmd = stack.mallocPointer(1);
+            Vk.check(vkAllocateCommandBuffers(device.handle(), allocInfo, pCmd),
+                    "Failed to allocate the transfer command buffer");
+            VkCommandBuffer cmd = new VkCommandBuffer(pCmd.get(0), device.handle());
+
+            // ONE_TIME_SUBMIT: recorded, submitted once, thrown away -- the
+            // driver may skip optimizing it for replay.
+            VkCommandBufferBeginInfo beginInfo = VkCommandBufferBeginInfo.calloc(stack);
+            beginInfo.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
+            beginInfo.flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+            Vk.check(vkBeginCommandBuffer(cmd, beginInfo),
+                    "Failed to begin the transfer command buffer");
+
+            VkBufferCopy.Buffer region = VkBufferCopy.calloc(1, stack);
+            region.size(bytes);  // src/dst offsets stay 0
+            vkCmdCopyBuffer(cmd, src.handle(), dst.handle(), region);
+
+            Vk.check(vkEndCommandBuffer(cmd),
+                    "Failed to record the transfer command buffer");
+
+            // Submit with no semaphores/fence and just block the queue until it
+            // lands (vkQueueWaitIdle is also a full memory barrier, so the
+            // vertex-input reads that follow later are safe). Crude but right
+            // for startup uploads; streaming assets mid-frame would use a fence
+            // and overlap instead.
+            VkCommandBufferSubmitInfo.Buffer cmdInfo = VkCommandBufferSubmitInfo.calloc(1, stack);
+            cmdInfo.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO);
+            cmdInfo.commandBuffer(cmd);
+
+            VkSubmitInfo2.Buffer submitInfo = VkSubmitInfo2.calloc(1, stack);
+            submitInfo.sType(VK_STRUCTURE_TYPE_SUBMIT_INFO_2);
+            submitInfo.pCommandBufferInfos(cmdInfo);
+
+            Vk.check(vkQueueSubmit2(device.graphicsQueue(), submitInfo, VK_NULL_HANDLE),
+                    "Failed to submit the buffer copy");
+            Vk.check(vkQueueWaitIdle(device.graphicsQueue()),
+                    "Failed waiting for the buffer copy");
+
+            vkFreeCommandBuffers(device.handle(), commandPool, pCmd);
+        }
+    }
 
     /**
      * The memory-type hunt. The GPU advertises a small table of memory TYPES

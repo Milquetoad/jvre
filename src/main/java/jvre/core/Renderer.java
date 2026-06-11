@@ -120,18 +120,19 @@ public class Renderer {
         this.swapchain = new Swapchain(device, surface, window);
         this.pipeline = new Pipeline(device, swapchain.imageFormat(), TRIANGLE_VERT, TRIANGLE_FRAG);
 
-        // The vertex buffer, simplest correct form first: HOST_VISIBLE memory
-        // the CPU maps and writes directly. The GPU reads it over the PCIe bus
-        // every frame -- fine for 60 bytes, wrong for real meshes; the staging
-        // upload to DEVICE_LOCAL memory is the next step.
-        long vertexBytes = (long) TRIANGLE_VERTICES.length * Float.BYTES;
-        this.vertexBuffer = new Buffer(device, vertexBytes,
-                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        vertexBuffer.uploadFloats(TRIANGLE_VERTICES);
-        System.out.println("Vertex buffer created (" + vertexBytes + " bytes, host-visible).");
-
+        // Pool first: the vertex-buffer upload below records a one-shot
+        // transfer command buffer from it.
         createCommandPool();
+
+        // The vertex buffer, in DEVICE_LOCAL memory (VRAM) via a staging
+        // upload -- static geometry belongs where the GPU reads fastest. (The
+        // first version of this used plain HOST_VISIBLE memory: simpler, but
+        // the GPU then re-reads it over the bus every frame.)
+        this.vertexBuffer = Buffer.deviceLocal(device, commandPool,
+                TRIANGLE_VERTICES, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+        System.out.println("Vertex buffer created ("
+                + vertexBuffer.size() + " bytes, device-local via staging).");
+
         createCommandBuffers();
         createSyncObjects();
     }

@@ -51,6 +51,37 @@ application {
     mainClass = 'jvre.Main'
 }
 
+// ---------------------------------------------------------------------------
+// Shaders: compile GLSL -> SPIR-V at build time with glslc (ships with the
+// Vulkan SDK). Vulkan consumes SPIR-V binaries, never GLSL source. Each
+// src/main/glsl/*.vert|frag|comp becomes build/generated/shaders/shaders/
+// <name>.spv, which rides into the jar as a classpath resource
+// (/shaders/<name>.spv) -- that's where the engine loads it from.
+// ---------------------------------------------------------------------------
+def shaderSrcDir = layout.projectDirectory.dir('src/main/glsl')
+def shaderOutDir = layout.buildDirectory.dir('generated/shaders')
+
+tasks.register('compileShaders') {
+    description = 'Compiles GLSL shaders to SPIR-V with glslc'
+    inputs.dir(shaderSrcDir)
+    outputs.dir(shaderOutDir)
+    doLast {
+        def outDir = new File(shaderOutDir.get().asFile, 'shaders')
+        outDir.mkdirs()
+        shaderSrcDir.asFile.eachFileMatch(~/.+\.(vert|frag|comp)$/) { src ->
+            def dst = new File(outDir, src.name + '.spv')
+            exec {
+                // glslc infers the shader stage from the file extension.
+                commandLine 'glslc', src.absolutePath, '-o', dst.absolutePath
+            }
+        }
+    }
+}
+
+// Treat the generated .spv files as ordinary resources, built before them.
+sourceSets.main.resources.srcDir(shaderOutDir)
+tasks.named('processResources') { dependsOn 'compileShaders' }
+
 // Make `gradle run` flush native crash logs etc. nicely; harmless defaults.
 tasks.named('run') {
     // GLFW must own the main thread. On macOS this needs -XstartOnFirstThread;

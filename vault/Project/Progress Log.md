@@ -2,6 +2,13 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-11 — Vertex buffers: geometry becomes data 📦 ✅
+- **First GPU memory** ([[Vertex Buffers and GPU Memory]]): new `jvre.core.Buffer` (creative tier) wrapping the `VkBuffer` (typed handle, no storage) + `VkDeviceMemory` (raw allocation) split, married by `vkBindBufferMemory`. The **memory-type hunt** (requirements `typeFilter` x required property flags over `vkGetPhysicalDeviceMemoryProperties`) is the heart of it. One allocation per buffer while learning; VMA inherits the job later.
+- **Two steps, two commits, both verified by screenshot on the 4090** (identical RGB triangle, sync validation silent):
+  1. `42dab03` -- HOST_VISIBLE|HOST_COHERENT buffer, `vkMapMemory` upload (coherent = no manual flush to forget). `triangle.vert` swaps `gl_VertexIndex` arrays for `location 0/1` vertex INPUTS; `Pipeline` gains the binding (stride 20, RATE_VERTEX) + attribute descriptions (vec2 pos @0, vec3 color @8 -- image formats as "data shapes"); `Renderer` owns the interleaved demo vertices and binds the buffer before the draw.
+  2. `3edcc3e` -- **staging upload to DEVICE_LOCAL** (`Buffer.deviceLocal`): CPU -> staging (TRANSFER_SRC) -> one-shot `vkCmdCopyBuffer` (ONE_TIME_SUBMIT, `vkQueueSubmit2`, `vkQueueWaitIdle`) -> VRAM (TRANSFER_DST|VERTEX_BUFFER); staging destroyed after. Exists because on discrete GPUs HOST_VISIBLE and DEVICE_LOCAL are *different memory types* -- the CPU can't map VRAM.
+- **Next:** index buffers + a quad (reuse vertices), or push constants (animate the triangle -- first per-frame data into a shader); then uniforms/descriptors, textures, 3D.
+
 ## 2026-06-11 — 🔺 FIRST TRIANGLE — shaders + graphics pipeline ✅
 
 ![[first-triangle.png]]

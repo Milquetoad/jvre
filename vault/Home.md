@@ -41,6 +41,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 **5. Drawing actual geometry — the creative tier begins**
 23. [[Shaders - GLSL and SPIR-V]] — GLSL, the `glslc` build step, locations, interpolation
 24. [[Graphics Pipeline]] — the big bake; dynamic state; the first triangle 🔺
+25. [[Vertex Buffers and GPU Memory]] — VkBuffer vs VkDeviceMemory, memory types, staging uploads
 
 **6. Looking ahead — optional, for the curious**
 - [[GUI Options]] / [[Self-Built GUI (planned)]], [[Ray Tracing and Path Tracing (future)]], [[Device Selection and Cross-Platform (planned)]]
@@ -95,6 +96,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - [[Frames in Flight]] ✅ — 2 in flight; per-frame command recording (the modern model)
 - [[Swapchain Recreation]] ✅ — resizable window; OUT_OF_DATE/SUBOPTIMAL/flag triggers; minimize handling
 - [[Graphics Pipeline]] ✅ — the big bake; dynamic viewport/scissor; dynamic-rendering format hookup (🔺 first triangle)
+- [[Vertex Buffers and GPU Memory]] ✅ — Buffer elementary; memory-type hunt; staging -> DEVICE_LOCAL
 
 ## Status
 - ✅ Toolchain verified (smoke test passes)
@@ -117,6 +119,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - ✅ [[Swapchain Recreation]] — window is resizable (+ minimize); verified by driving the window via user32
 - ✅ [[Frames in Flight]] — 2 in flight, per-frame command recording
 - ✅ 🔺 **FIRST TRIANGLE** — [[Graphics Pipeline]] + [[Shaders - GLSL and SPIR-V|shaders]] (RGB-interpolated, on the orange clear; screenshot in [[Progress Log]])
-- ⏭️ Next: **vertex buffers** — feed real vertex data through the pipeline's (currently empty) vertex-input state; the first GPU memory allocation
+- ✅ [[Vertex Buffers and GPU Memory]] — geometry is data now: `Buffer` elementary, host-visible first, then staging to DEVICE_LOCAL
+- ⏭️ Next: **index buffers + a quad**, or **push constants** (animate the triangle) — then uniforms/descriptors, textures, 3D
 
 #jvre #moc

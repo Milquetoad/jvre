@@ -2,7 +2,14 @@
 
 Reverse-chronological diary. Newest at top.
 
-## 2026-06-10 — Switched to dynamic rendering 🟠 (render passes out) ✅
+## 2026-06-11 — Status review + doc sync ✅
+- Pulled the refactor/dynamic-rendering work onto this machine; `gradlew build` clean. Synced the stale docs: README (requirements now say Vulkan 1.3, project layout shows `jvre.core`, roadmap shows the refactor phase) and the local working agreement.
+- **Code review verdict: structure is on-plan and the render path is modern** (1.3 + dynamic rendering + per-image renderFinished semaphores is current guidance). Items queued from the review, roughly in order:
+  1. **Synchronization2** (`vkQueueSubmit2`/`vkCmdPipelineBarrier2`, core 1.3) -- we bumped to 1.3 for dynamic rendering but still use the 1.0 sync API; adopting sync2 is the natural companion step (new concept to learn before/with the `Renderer`).
+  2. **Device suitability must check what we use:** selection doesn't verify the GPU's `apiVersion >= 1.3` or the `dynamicRendering` feature bit (via `vkGetPhysicalDeviceFeatures2`) -- fine on our two GPUs, a portability gap elsewhere. Belongs in the suitability filter next to the swapchain-extension check.
+  3. Turn on the validation layer's **sync validation + best-practices checks** in debug -- we hand-roll barriers now, that's exactly what sync-val catches.
+  4. Smaller: GLFW error callback is never set; acquire/present/wait results are ignored (known, waits for `Renderer`); per-image pre-recorded command buffers will become per-frame recording once anything is dynamic.
+- **Next:** unchanged -- the `Renderer` coordinator, then the first triangle.
 - Owner read that render passes are a criticized early-Vulkan design; we confirmed and **migrated to [[Dynamic Rendering]]** (`VK_KHR_dynamic_rendering`, core in **Vulkan 1.3**). Render passes aren't deprecated/removed (and subpasses earn their keep on *tiled mobile* GPUs), but on desktop they're verbose for little gain and tightly couple pipeline<->pass -- so 1.3's dynamic rendering is the modern default. See [[Dynamic Rendering]].
 - Changes: `Instance` now requests **Vulkan 1.3** (was 1.0); `Device` enables the **`dynamicRendering`** feature (chained via `pNext` with `VkPhysicalDeviceDynamicRenderingFeatures`); `Swapchain` gained `image(i)` (barriers act on images, not views); `Main` **deleted `createRenderPass()` + `createFramebuffers()`** and now records each command buffer as **[[Pipeline Barriers|barrier]] -> `vkCmdBeginRendering` (orange clear into the image view) -> `vkCmdEndRendering` -> barrier**.
 - **New concept: [[Pipeline Barriers]] + image layouts.** The render pass used to transition the image's layout for free (`initialLayout`/`finalLayout`); now we do it by hand -- `UNDEFINED -> COLOR_ATTACHMENT_OPTIMAL` before, `COLOR_ATTACHMENT_OPTIMAL -> PRESENT_SRC_KHR` after. `oldLayout = UNDEFINED` each frame is safe (we pre-record once and re-clear). Barriers operate on **images**, gated at `COLOR_ATTACHMENT_OUTPUT` to line up with the acquire-semaphore wait.

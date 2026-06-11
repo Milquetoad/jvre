@@ -22,7 +22,7 @@ Longer-term: a self-built immediate-mode GUI, 3D rendering, and (reachable, not 
 |---|---|---|
 | JDK | 21 | Gradle toolchain will enforce this |
 | Vulkan SDK | 1.3+ | Needed for the validation layers and `glslc`; install from [LunarG](https://vulkan.lunarg.com/) |
-| GPU + driver | Vulkan-capable | Any vendor; a discrete GPU is preferred automatically |
+| GPU + driver | Vulkan 1.3 | Dynamic rendering (the render path) is core in 1.3; any vendor, a discrete GPU is preferred automatically |
 
 LWJGL (Vulkan + GLFW bindings) is pulled in by Gradle — no manual install. The Vulkan **loader** itself (`vulkan-1.dll` / `libvulkan.so`) comes from your system / GPU driver, not from LWJGL.
 
@@ -47,9 +47,10 @@ The code is OS-agnostic by design: windowing and surface creation go through GLF
 ## Project layout
 
 ```
-src/main/java/jvre/   Engine + demo source (currently a single linear bootstrap in Main.java)
-build.gradle          Build config (LWJGL deps, JDK 21 toolchain, app entry point)
-vault/                Obsidian learning vault — concepts, Vulkan notes, progress log
+src/main/java/jvre/        Demo entry point (Main.java: command buffers, sync, render loop)
+src/main/java/jvre/core/   Engine elementaries: Window, Instance, Surface, Device, Swapchain
+build.gradle               Build config (LWJGL deps, JDK 21 toolchain, app entry point)
+vault/                     Obsidian learning vault — concepts, Vulkan notes, progress log
 ```
 
 The [`vault/`](vault/) directory is a companion **Obsidian knowledge base** maintained alongside the code: every concept we cover gets a note, and `vault/Project/Progress Log.md` is a dated diary of progress. Start at `vault/Home.md`.
@@ -65,14 +66,21 @@ Path to first pixels ("clear to color"):
 - [x] Logical device + queues
 - [x] Swapchain
 - [x] Image views
-- [x] Render pass
-- [x] Framebuffers
+- [x] Render pass + framebuffers *(since replaced — see below)*
 - [x] Command pool + buffers
 - [x] Synchronization + render loop → **clear to a color** ✅
 
 🟠 **Milestone reached: the window clears to a solid color.** The full Vulkan bootstrap — instance through the render loop — runs end to end with the validation layers clean.
 
-After that: refactor the linear bootstrap into reusable components, then 2D rendering, text, a self-built GUI, 3D, and eventually ray/path tracing.
+Current phase — refactor into reusable components + modernize:
+
+- [x] Stable layer extracted: `Window`, `Instance`, `Surface`
+- [x] Device context extracted: `Device` (selection + logical device + queues), `Swapchain` (+ image views)
+- [x] Migrated to **dynamic rendering** (Vulkan 1.3) — render pass + framebuffers deleted; explicit pipeline barriers drive the image layout transitions
+- [ ] `Renderer` coordinator (owns the device context; swapchain recreation on resize)
+- [ ] First triangle — graphics pipeline + shaders
+
+After that: 2D rendering, text, a self-built GUI, 3D, and eventually ray/path tracing.
 
 ## Contributing
 

@@ -29,6 +29,8 @@ vault/.trash/
 
 # Claude Code per-machine settings (local permissions, not for the repo)
 .claude/settings.local.json
+# Local AI working-agreement (kept out of the public repo by choice)
+CLAUDE.md
 
 # Logs / misc
 *.log

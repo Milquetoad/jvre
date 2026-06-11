@@ -1,6 +1,7 @@
 package jvre.core;
 
 import org.lwjgl.glfw.GLFWErrorCallback;
+import org.lwjgl.glfw.GLFWFramebufferSizeCallback;
 
 import java.nio.IntBuffer;
 
@@ -20,9 +21,16 @@ public class Window {
 
     private final long handle;
 
-    // Native callback kept as a field so we can free it at shutdown (off-heap),
+    // Native callbacks kept as fields so we can free them at shutdown (off-heap),
     // same pattern as the debug-messenger callback in Instance.
     private final GLFWErrorCallback errorCallback;
+    private final GLFWFramebufferSizeCallback resizeCallback;
+
+    // Set by the resize callback, consumed by the renderer. A FLAG rather than
+    // reacting inside the callback: GLFW may fire it many times during one drag,
+    // and mid-callback is no place to rebuild a swapchain -- the render loop
+    // picks it up at a safe point in its own frame.
+    private boolean framebufferResized = false;
 
     public Window(int width, int height, CharSequence title) {
         // GLFW reports errors through a callback, not return codes -- without one
@@ -36,12 +44,15 @@ public class Window {
             throw new IllegalStateException("Unable to initialize GLFW");
         }
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);  // no OpenGL context -- Vulkan owns drawing
-        glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);    // fixed until we add swapchain recreation
+        // Resizable: the renderer recreates the swapchain when the size changes.
 
         handle = glfwCreateWindow(width, height, title, NULL, NULL);
         if (handle == NULL) {
             throw new RuntimeException("Failed to create the GLFW window");
         }
+
+        resizeCallback = GLFWFramebufferSizeCallback.create((win, w, h) -> framebufferResized = true);
+        glfwSetFramebufferSizeCallback(handle, resizeCallback);
     }
 
     /** Raw GLFW handle -- needed for Vulkan surface creation and size queries. */
@@ -62,12 +73,25 @@ public class Window {
         glfwGetFramebufferSize(handle, w, h);
     }
 
+    /** Did the framebuffer change size since the last call? (Reading clears the flag.) */
+    public boolean consumeFramebufferResized() {
+        boolean was = framebufferResized;
+        framebufferResized = false;
+        return was;
+    }
+
+    /** Sleep until SOME window event arrives (used to idle while minimized). */
+    public void waitEvents() {
+        glfwWaitEvents();
+    }
+
     /** Destroy the window and shut GLFW down. */
     public void close() {
-        glfwDestroyWindow(handle);
+        glfwDestroyWindow(handle);  // also detaches per-window callbacks
         glfwTerminate();
         // Detach before freeing so GLFW can't call into freed memory.
         glfwSetErrorCallback(null);
         errorCallback.free();
+        resizeCallback.free();
     }
 }

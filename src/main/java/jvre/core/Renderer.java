@@ -261,20 +261,33 @@ public class Renderer {
                     "Failed to create imageAvailable semaphore");
             imageAvailableSemaphore = p.get(0);
 
-            // One renderFinished semaphore per swapchain image (reuse-safe: an image
-            // isn't re-acquired until its prior present has consumed the semaphore).
+            Vk.check(vkCreateFence(device.handle(), fenceInfo, null, p),
+                    "Failed to create in-flight fence");
+            inFlightFence = p.get(0);
+        }
+        createRenderFinishedSemaphores();
+        System.out.println("Sync objects created.");
+    }
+
+    /**
+     * One renderFinished semaphore PER swapchain image, indexed by acquired image
+     * (reuse-safe: an image isn't re-acquired until its prior present has consumed
+     * the semaphore). Split out from the other sync objects because the IMAGE
+     * COUNT can change when the swapchain is recreated -- these rebuild with it.
+     */
+    private void createRenderFinishedSemaphores() {
+        try (MemoryStack stack = stackPush()) {
+            VkSemaphoreCreateInfo semInfo = VkSemaphoreCreateInfo.calloc(stack);
+            semInfo.sType(VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO);
+
+            LongBuffer p = stack.longs(VK_NULL_HANDLE);
             renderFinishedSemaphores = new long[swapchain.imageCount()];
             for (int i = 0; i < renderFinishedSemaphores.length; i++) {
                 Vk.check(vkCreateSemaphore(device.handle(), semInfo, null, p),
                         "Failed to create renderFinished semaphore " + i);
                 renderFinishedSemaphores[i] = p.get(0);
             }
-
-            Vk.check(vkCreateFence(device.handle(), fenceInfo, null, p),
-                    "Failed to create in-flight fence");
-            inFlightFence = p.get(0);
         }
-        System.out.println("Sync objects created.");
     }
 
     // ------------------------------------------------------------------
@@ -285,22 +298,39 @@ public class Renderer {
      * Render one frame: wait the previous frame's fence, acquire an image, submit
      * its pre-recorded command buffer (wait on imageAvailable, signal
      * renderFinished + the fence), then present (wait on renderFinished).
+     * Acquire/present results drive swapchain recreation on resize.
      */
     public void drawFrame() {
         try (MemoryStack stack = stackPush()) {
-            // 1. Block until the previous frame finished, then reset the fence.
-            //    (With an infinite timeout the only non-SUCCESS results are real
-            //    errors like DEVICE_LOST -- so check, don't ignore.)
+            // 1. Block until the previous frame finished. (With an infinite
+            //    timeout the only non-SUCCESS results are real errors like
+            //    DEVICE_LOST -- so check, don't ignore.)
             Vk.check(vkWaitForFences(device.handle(), stack.longs(inFlightFence), true, NO_TIMEOUT),
                     "Failed waiting for the in-flight fence");
-            vkResetFences(device.handle(), stack.longs(inFlightFence));
 
             // 2. Acquire the next swapchain image (GPU signals imageAvailable when
-            //    it's genuinely ready to be drawn into).
+            //    it's genuinely ready to be drawn into). OUT_OF_DATE = the surface
+            //    changed and this swapchain can no longer present to it AT ALL:
+            //    rebuild and skip the frame. SUBOPTIMAL = it still works, just not
+            //    perfectly -- render this frame, deal with it after present.
             IntBuffer pImageIndex = stack.ints(0);
-            vkAcquireNextImageKHR(device.handle(), swapchain.handle(), NO_TIMEOUT,
+            int acquired = vkAcquireNextImageKHR(device.handle(), swapchain.handle(), NO_TIMEOUT,
                     imageAvailableSemaphore, VK_NULL_HANDLE, pImageIndex);
+            if (acquired == VK_ERROR_OUT_OF_DATE_KHR) {
+                recreateSwapchain();
+                return;
+            }
+            if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) {
+                throw new RuntimeException(
+                        "Failed to acquire a swapchain image (VkResult " + acquired + ")");
+            }
             int imageIndex = pImageIndex.get(0);
+
+            // Reset the fence ONLY now that we know a submit will follow. The
+            // classic deadlock: reset BEFORE acquire, then early-return on
+            // OUT_OF_DATE -- the fence is left unsignaled, no submit ever signals
+            // it, and the next drawFrame waits on it forever.
+            vkResetFences(device.handle(), stack.longs(inFlightFence));
 
             // 3. Submit that image's command buffer, via synchronization2's
             //    vkQueueSubmit2. Every participant gets its own little info struct,
@@ -337,8 +367,7 @@ public class Renderer {
                     "Failed to submit the draw command buffer");
 
             // 4. Present: hand the finished image back to the swapchain to display,
-            //    once renderFinished is signaled. (We ignore out-of-date/suboptimal
-            //    results -- the window is fixed size, so no swapchain recreation yet.)
+            //    once renderFinished is signaled.
             VkPresentInfoKHR presentInfo = VkPresentInfoKHR.calloc(stack);
             presentInfo.sType(VK_STRUCTURE_TYPE_PRESENT_INFO_KHR);
             presentInfo.pWaitSemaphores(stack.longs(renderFinishedSemaphores[imageIndex]));
@@ -346,7 +375,89 @@ public class Renderer {
             presentInfo.pSwapchains(stack.longs(swapchain.handle()));
             presentInfo.pImageIndices(pImageIndex);
 
-            vkQueuePresentKHR(device.presentQueue(), presentInfo);
+            int presented = vkQueuePresentKHR(device.presentQueue(), presentInfo);
+
+            // 5. React to "the surface changed". At present-time BOTH out-of-date
+            //    and suboptimal trigger a rebuild (the frame already went out; now
+            //    is the cheap moment to fix the mismatch). The window's resize
+            //    flag is checked too because some drivers keep presenting happily
+            //    while the window stretches -- without the flag we'd render
+            //    forever at the old size.
+            boolean resized = window.consumeFramebufferResized();
+            if (presented == VK_ERROR_OUT_OF_DATE_KHR
+                    || presented == VK_SUBOPTIMAL_KHR
+                    || resized) {
+                recreateSwapchain();
+            } else {
+                Vk.check(presented, "Failed to present the swapchain image");
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Swapchain recreation (resize)
+    // ------------------------------------------------------------------
+
+    /**
+     * Rebuild everything that depends on the swapchain, against the surface's
+     * CURRENT state. The swapchain itself renegotiates extent/format from the
+     * live surface; the pre-recorded command buffers bake in image handles,
+     * views and the extent, so they must be re-recorded; the per-IMAGE
+     * renderFinished semaphores rebuild because the image count can change.
+     *
+     * Strategy: brute-force-but-correct -- wait for the GPU to go fully idle,
+     * destroy, recreate. (The no-stall version hands oldSwapchain to the new
+     * chain and retires the old one asynchronously; that seam stays documented
+     * in Swapchain for later.)
+     */
+    private void recreateSwapchain() {
+        // A minimized window has a 0x0 framebuffer, and a 0x0 swapchain is
+        // illegal -- sleep on events until we're restored to a real size.
+        try (MemoryStack stack = stackPush()) {
+            IntBuffer w = stack.ints(0);
+            IntBuffer h = stack.ints(0);
+            window.framebufferSize(w, h);
+            while (w.get(0) == 0 || h.get(0) == 0) {
+                window.waitEvents();
+                window.framebufferSize(w, h);
+            }
+        }
+
+        waitIdle();
+
+        // Tear down the swapchain-dependent slice, in reverse order...
+        destroyRenderFinishedSemaphores();
+        freeCommandBuffers();
+        swapchain.close();
+
+        // ...and rebuild it. (The command POOL and the per-frame sync objects
+        // don't depend on the swapchain and survive untouched.)
+        swapchain = new Swapchain(device, surface, window);
+        createCommandBuffers();
+        createRenderFinishedSemaphores();
+
+        // Drop any resize flag raised by the burst of events we just handled --
+        // otherwise one drag rebuilds the swapchain several times at the same
+        // size. (If a REAL resize sneaks in right here, the driver's OUT_OF_DATE
+        // on the next acquire/present catches it.)
+        window.consumeFramebufferResized();
+        System.out.println("Swapchain recreated.");
+    }
+
+    private void destroyRenderFinishedSemaphores() {
+        for (long s : renderFinishedSemaphores) {
+            vkDestroySemaphore(device.handle(), s, null);
+        }
+    }
+
+    /** Return the buffers to the pool (recreation reallocates; close() lets the pool do it). */
+    private void freeCommandBuffers() {
+        try (MemoryStack stack = stackPush()) {
+            PointerBuffer pBuffers = stack.mallocPointer(commandBuffers.length);
+            for (VkCommandBuffer cmd : commandBuffers) {
+                pBuffers.put(cmd);
+            }
+            vkFreeCommandBuffers(device.handle(), commandPool, pBuffers.rewind());
         }
     }
 
@@ -364,9 +475,7 @@ public class Renderer {
             vkDestroySemaphore(device.handle(), imageAvailableSemaphore, null);
         }
         if (renderFinishedSemaphores != null) {
-            for (long s : renderFinishedSemaphores) {
-                vkDestroySemaphore(device.handle(), s, null);
-            }
+            destroyRenderFinishedSemaphores();
         }
         if (inFlightFence != VK_NULL_HANDLE) {
             vkDestroyFence(device.handle(), inFlightFence, null);

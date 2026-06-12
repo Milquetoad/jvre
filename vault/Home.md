@@ -47,6 +47,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 28. [[Uniform Buffers and Descriptor Sets]] — layouts, pools, sets, per-frame UBOs (the orbit)
 29. [[Textures - Images, Views and Samplers]] — VkImage, tiling/layout transitions, samplers (NEAREST), `COMBINED_IMAGE_SAMPLER` (the checkerboard 🖼️)
 30. [[3D and the Depth Buffer]] — perspective MVP (JOML), the depth buffer, a solid cube (the 🎲)
+31. [[VMA - Vulkan Memory Allocator]] — sub-allocation, intent-over-flags, dedicated attachments (the advisories hit 0 🧹)
 
 **6. Looking ahead — optional, for the curious**
 - [[GUI Options]] / [[Self-Built GUI (planned)]], [[Ray Tracing and Path Tracing (future)]], [[Device Selection and Cross-Platform (planned)]]
@@ -109,6 +110,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - [[Uniform Buffers and Descriptor Sets]] ✅ — layout/pool/set machinery; per-frame mat4 UBO; write-once-rewrite-contents
 - [[Textures - Images, Views and Samplers]] ✅ — VkImage + tiling + layout transitions; view + NEAREST sampler; COMBINED_IMAGE_SAMPLER descriptor; UV attribute
 - [[3D and the Depth Buffer]] ✅ — perspective MVP (JOML, Vulkan Y-flip + zZeroToOne); depth image in the Swapchain; depth test/write; the cube
+- [[VMA - Vulkan Memory Allocator]] ✅ — Device-owned allocator; vmaCreateBuffer/Image; intent over flags; dedicated depth allocation; findMemoryType retired
 
 ## Status
 - ✅ Toolchain verified (smoke test passes)
@@ -139,6 +141,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - ✅ 🪟 **Alpha blending** — REPLACE → src-over-dst alpha; half the checker cells transparent so sprites can have transparent backgrounds (verified on the 4090; see [[Textures - Images, Views and Samplers]])
 - ✅ 🎲 [[3D and the Depth Buffer]] — **a solid spinning cube**: perspective MVP (JOML), a depth buffer in the Swapchain, depth test/write occluding far faces (verified on the 4090)
 - ✅ 🔄 **Back-face culling** — BACK + CCW front faces; the two-mirror winding lesson (first attempt rendered inside-out; see [[3D and the Depth Buffer]])
-- ⏭️ Next: the **VMA milestone** (sub-allocation; retire the standing best-practices advisories), then MSAA
+- ✅ 🧹 [[VMA - Vulkan Memory Allocator]] — **advisories 6 → 0, stderr silent**: sub-allocation via a Device-owned VmaAllocator; intent over flags; the hand-rolled memory hunt retired
+- ⏭️ Next: **MSAA** — multisampled color target + resolve (dynamic rendering `resolveMode`); all prerequisites in hand
 
 #jvre #moc

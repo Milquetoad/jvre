@@ -11,6 +11,15 @@ Reverse-chronological diary. Newest at top.
 - **Three constraints with deadlines** (shape code being written now — keep expressible, don't build): (1) **multithreaded command recording** — don't bake single-threaded pool ownership; (2) **offscreen render targets** — structure `drawFrame` as "render to a target (today = swapchain)," not one hardcoded swapchain pass; (3) **queue-set abstraction** — "queues by capability," not "the graphics queue" (cross-linked from [[Device Selection and Cross-Platform (planned)]]).
 - Pure design session — no code. Reinforces [[API Vision - Layered Altitudes]] / [[Design North Star]]: all Tier-2 is the public-L1 half of the thesis.
 
+## 2026-06-12 — VMA: the standing ticket closes, 6 -> 0 🧹 ✅
+- **The memory milestone** ([[VMA - Vulkan Memory Allocator]]): every best-practices allocation advisory -- accruing since the first vertex buffer -- is gone. stderr **fully silent** on the 4090; clean shutdown (vmaDestroyAllocator's leak assert = a free leak detector, passing).
+- **Why**: drivers cap allocations (`maxMemoryAllocationCount` can be 4096), `vkAllocateMemory` is slow, and real engines SUB-allocate from few big blocks -- a library-sized problem; VMA (AMD) is the industry standard. LWJGL's `lwjgl-vma` (real natives, unlike lwjgl-vulkan).
+- **Integration**: `Device` owns the `VmaAllocator` (device-scoped; created after queues, destroyed before the device -- the recreatable-context seam holds); `VmaVulkanFunctions` hands VMA the dynamically-loaded function pointers.
+- **The conceptual shift -- intent over flags**: `Buffer(.., boolean hostVisible)` replaces memory-property flags; `vmaCreateBuffer`/`vmaCreateImage` collapse create/hunt/allocate/bind into one call. `Device.findMemoryType` retired with zero callers (concept stays in [[Vertex Buffers and GPU Memory]] + git history). Uploads now `vmaMap/vmaUnmap/vmaFlush` (flush no-ops on coherent -- correct on ANY memory VMA picks).
+- **Attachment exception**: the depth image gets `DEDICATED_MEMORY_BIT` (large, long-lived, resize-recreated, driver-optimizable) -- pooling is for the many-small case; MSAA's color target will be the same.
+- **Migration invisible by design**: only the memory half changed; cube renders pixel-identically. Empirical arc: 6 warns -> 1 (Buffer done) -> 0 (images done).
+- **Next: MSAA** -- all prerequisites (own-VkImage, depth, dedicated-attachment idiom) now in hand.
+
 ## 2026-06-12 — Back-face culling: the two-mirror winding lesson 🔄 ✅
 - **Culling ON** (`BACK` + `frontFace = COUNTER_CLOCKWISE`): half the cube's faces dropped by winding before any fragment work. Depth made it correct; culling makes the hidden half free. ([[3D and the Depth Buffer]], follow-up section.)
 - **Got it wrong first, instructively**: reasoned "Y-flip = mirror = winding reverses -> CLOCKWISE"; the cube rendered **inside-out** (front faces culled -- hollow shell, instantly recognizable). The true account: **two mirrors cancel** -- Vulkan's y-down NDC is one mirror vs the GL conventions, the negated `m11` is the second; net zero, authored CCW survives to screen. One-word fix.

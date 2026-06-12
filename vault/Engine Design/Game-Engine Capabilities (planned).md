@@ -18,7 +18,7 @@ A game engine is rendering **+ audio + input + physics + assets + scene/ECS + sc
 
 **Tier 0 — already have:** geometry (vertex/index), per-frame UBO + push constants, device-local staging upload, [[Frames in Flight|frames-in-flight]], [[Physical Device and Queue Families|scored GPU selection]], resizable window.
 
-**Tier 1 — on the roadmap:** textures (+ sampler modes, the sub-rect seam), depth/stencil, MSAA, VMA, runtime GPU switching.
+**Tier 1 — on the roadmap:** textures (+ sampler modes, the sub-rect seam), depth/stencil, MSAA, VMA, runtime GPU switching. *(All but GPU switching DONE as of 2026-06-12.)* MSAA detail pinned after the milestone: the creation-time AA option **must include OFF** (`samples = 1`) — the pixel-art profile is `1x + NEAREST + integer upscale`, and MSAA would soften rotated-sprite silhouettes. Filter mode (per-sampler) and MSAA (per-target, creation-time) are **independent knobs** — all four combinations legal, mixable per-texture within one scene. Framerate: vsync-class capping = jvre mechanism (the present-mode row below); arbitrary fps caps = game-layer policy, possible TODAY via you-own-the-loop (don't call `drawFrame` early); a jvre convenience limiter would be optional sugar.
 
 **Tier 2 — implied by "any game engine," not yet roadmapped.** All of this is **L1 capability** (the low-level altitude); the game engine *composes* it. None pulls jvre toward being a game engine.
 

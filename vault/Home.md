@@ -57,6 +57,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - [[Progress Log]] — dated diary of what we've done
 - [[API Vision - Layered Altitudes]] — the engine's north star (high-level + shader-art on one stack)
 - [[Design North Star]] — the sweet spot (smaller than Processing; powerful, flexible, approachable) + how we measure it
+- [[L2 Feature Set - Renderer2D]] — the formal "just draw" surface: principles, primitives, the no-modes decision (draft)
 - [[Device Selection and Cross-Platform (planned)]] — flexible GPU choice + OS-agnostic (post-MVP)
 
 ### Foundations (Java ↔ native)

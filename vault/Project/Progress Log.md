@@ -2,6 +2,12 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-12 — Design: L2 feature set formalized (draft) 📐
+- New note: [[L2 Feature Set - Renderer2D]] — principles + v1 primitive set for the "just draw" altitude, coined on Processing but deliberately smaller.
+- **Headline decision (owner's call, confirmed): NO declaration modes.** Processing's `rectMode(CENTER)`-style switches are rejected -- global mutable state, action at a distance, composes badly; the user-side translation is one self-documenting subtraction. Refinements: one *natural* convention per shape (rect = corner+size, circle = centre+radius -- no single global rule), and the real demand behind CENTER mode (rotation about the centre) is answered by the **transform stack** (`push/translate/rotate/pop`, the one sanctioned state because it's scoped), not by declaration modes. Stateless escape if ever needed: a distinct name (`rectCentered`), never a mode.
+- Also pinned: pixels/top-left/y-down (no NDC at L2), immediate mode (fits per-frame recording exactly), L2-speaking errors, per-call color as default position. Open questions logged in the note: per-call color vs Style object, stroke variants in v1, `rect` vs `fillRect` naming.
+- Also assessed (2026-06-12, conversation): **Vulkan 1.4** -- no refactor warranted. It's a consolidation release (push descriptors, dynamic-rendering local read, optional host image copy go core); our 1.3 path (dynamic rendering + sync2) remains the modern default, and the UHD 620's driver tops out at 1.3, so raising the floor would break the craptop. Revisit per-feature via extensions when needed (`VK_KHR_push_descriptor` at the descriptor milestone, host image copy at textures).
+
 ## 2026-06-12 — Index buffers: the quad ⬛ ✅
 - **Vertex reuse** ([[Index Buffers]]): the triangle became a four-color quad -- 4 unique vertices (R/G/B/W corners) + 6 UINT16 indices `{0,1,2, 2,3,0}` sharing the diagonal, drawn with `vkCmdBindIndexBuffer` + `vkCmdDrawIndexed`. At mesh scale (~6 triangles per vertex) indexing roughly halves vertex memory/bandwidth. `Buffer` grew `uploadShorts` + a `short[]` `deviceLocal` overload (staging/promote plumbing factored into shared helpers). The push-constant spin carried over untouched. Commit `2216e73`.
 - **Observed**: the visible diagonal "seam" is a Mach-band illusion (shared-edge interpolation agrees exactly; only the gradient *direction* changes) -- logged in the note.

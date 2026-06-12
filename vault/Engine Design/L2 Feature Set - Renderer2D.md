@@ -66,6 +66,8 @@ Verdict: the choice is *audience-relative* -- stateful is right for Processing's
 
 Each call appends vertices into a **per-frame dynamic vertex buffer** (one big host-visible ring; the [[Vertex Buffers and GPU Memory|Buffer]] elementary grows an arena mode — likely the VMA trigger), flushed at `end()` into the current command buffer with one pipeline per primitive class. Transform stack applied CPU-side at append time (v1) — keeps the shader trivial. Batching is its own milestone; this spec is the *surface*, fixed first so the machinery has a target.
 
+**Study reference: raylib** (github.com/raysan5/raylib) — the closest existing API to this spec (stateless, per-call color, you-own-the-loop; independent validation of the surface). Its small readable C source solves our exact implementation problems: `rshapes.c` (circle/ring/rounded-rect tessellation, thick lines as triangles — they avoid GPU line width too), `rtext.c` (a complete font-atlas pipeline), and `rlgl`'s default batch (accumulate vertices, flush on texture switch/overflow — our per-frame arena, in C). What jvre does differently is the rest of the thesis: Vulkan substrate, a *modern* public L1 instead of rlgl's pseudo-GL-1.1 escape hatch, native Java.
+
 ## Naming (decided 2026-06-12)
 
 **Symmetric verb pairs for closed shapes (`fillRect`/`strokeRect`, ...); bare names for one-form primitives (`line`, `text`, `image`).** The reasoning:

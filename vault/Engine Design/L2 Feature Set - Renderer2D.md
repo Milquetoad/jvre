@@ -1,6 +1,6 @@
 # L2 Feature Set — Renderer2D (draft)
 
-Status (2026-06-12): **principles decided, primitive set proposed, open questions at the bottom.** This formalizes the "just draw" altitude from [[API Vision - Layered Altitudes]]. Modeled on Processing, deliberately smaller ([[Design North Star]]): every omission below is a choice, not an oversight.
+Status (2026-06-12): **principles + style/outline decisions made; naming recommendation pending owner's nod.** This formalizes the "just draw" altitude from [[API Vision - Layered Altitudes]]. Modeled on Processing, deliberately smaller ([[Design North Star]]): every omission below is a choice, not an oversight.
 
 ## Principles (decided)
 
@@ -16,16 +16,22 @@ Status (2026-06-12): **principles decided, primitive set proposed, open question
 5. **Immediate mode; the user owns the loop.** `begin()` / draw calls / `end()` per frame — a perfect fit for the [[Frames in Flight|per-frame recording]] architecture: L2 calls batch into the current frame's recording.
 6. **Errors speak L2.** A misuse (`end()` without `begin()`, negative radius) throws a plain message; an L2 user never sees a VUID ([[Design North Star]] rule 3).
 
-## Primitive set, v1 (proposed)
+## Style and outlines (decided 2026-06-12)
+
+- **Per-call color, no ambient style state** — `fill(red)`-then-`rect(...)` has the same action-at-a-distance disease as `rectMode`. If signatures grow heavy later (anti-aliasing options, dash patterns), the stateless upgrade is an immutable `Style` value object passed per call — never renderer state.
+- **Outlined shapes are v1 citizens**, not a later add-on (owner's call: complicated but essential). Consequence for the API: fill and outline want *different signatures* (outlines carry a `thickness`), which is the structural argument for separate methods over a variant parameter.
+- **Implementation rule: no `wideLines`.** Vulkan's `lineWidth > 1` is an optional, non-portable feature. Thick lines and outlines are **triangulated CPU-side** (a thick line = a quad; a stroked rect = an 8-triangle frame; the honest work is join/corner geometry). It all feeds the same vertex batch as fills.
+
+## Primitive set, v1 (proposed; naming per the recommendation below)
 
 | Call | Convention | Notes |
 |---|---|---|
-| `line(x1, y1, x2, y2, color)` | endpoints | thickness: open question 2 |
-| `rect(x, y, w, h, color)` | corner + size | |
-| `triangle(x1, y1, x2, y2, x3, y3, color)` | explicit vertices | |
-| `quad(x1, y1, ... x4, y4, color)` | explicit vertices | convex; triangulated on the 0-2 diagonal ([[Index Buffers]]) |
-| `circle(cx, cy, r, color)` | centre + radius | tessellated; SDF rendering later |
-| `ellipse(cx, cy, rx, ry, color)` | centre + radii | |
+| `line(x1, y1, x2, y2, thickness, color)` | endpoints | inherently a stroke -- no fill/stroke pair |
+| `fillRect` / `strokeRect(x, y, w, h, [thickness], color)` | corner + size | |
+| `fillTriangle` / `strokeTriangle(x1..y3, ...)` | explicit vertices | |
+| `fillQuad` / `strokeQuad(x1..y4, ...)` | explicit vertices | convex; triangulated on the 0-2 diagonal ([[Index Buffers]]) |
+| `fillCircle` / `strokeCircle(cx, cy, r, ...)` | centre + radius | tessellated; SDF rendering later |
+| `fillEllipse` / `strokeEllipse(cx, cy, rx, ry, ...)` | centre + radii | |
 
 **Milestone-gated additions** (specified now, shipped when the L1 machinery exists):
 
@@ -49,10 +55,13 @@ Status (2026-06-12): **principles decided, primitive set proposed, open question
 
 Each call appends vertices into a **per-frame dynamic vertex buffer** (one big host-visible ring; the [[Vertex Buffers and GPU Memory|Buffer]] elementary grows an arena mode — likely the VMA trigger), flushed at `end()` into the current command buffer with one pipeline per primitive class. Transform stack applied CPU-side at append time (v1) — keeps the shader trivial. Batching is its own milestone; this spec is the *surface*, fixed first so the machinery has a target.
 
-## Open questions (to settle conversationally)
+## Naming (recommended 2026-06-12, pending owner's nod)
 
-1. **Style: per-call color vs a `Style` value object?** Per-call is the default position (stateless, matches the original sketch). If signatures get heavy once stroke width/anti-aliasing options arrive, the stateless upgrade is an immutable `Style` object passed per call — *not* ambient state.
-2. **Stroke/outline variants in v1, or fill-only first?** (`rect` + `strokeRect`-style pairs vs shipping fills first and adding outlines with the line-thickness work.)
-3. **Naming: `rect()` vs `fillRect()`?** The original sketch said `fillRect`; if outlines become `strokeRect`, the pair is canvas-style and self-explaining. If v1 is fill-only, plain `rect()` is cleaner. Tied to question 2.
+**Symmetric verb pairs for closed shapes (`fillRect`/`strokeRect`, ...); bare names for one-form primitives (`line`, `text`, `image`).** The reasoning:
+- In a stateless API the fill/outline distinction must live at the call site: ambient state is rejected, and a variant *parameter* fights the signatures (outlines carry `thickness`, fills don't) -- so it goes in the **name**.
+- **Symmetry signals status**: `rect()` + `rectOutline()` would brand outlines an afterthought; they're v1 citizens.
+- Precedents: HTML canvas (`fillRect`/`strokeRect`, the largest immediate-mode-2D mindshare) vs java.awt (`fillRect`/`drawRect` -- "draw" meaning outline is a famous naming mistake; "draw" is out). **"stroke" over "outline"**: it is the domain's word (canvas, SVG, Skia, Processing, design tools) and L2 naming is "intuitive and domain-facing".
+- The pairing is deliberately *ragged*: only closed shapes pair. A line IS a stroke (`strokeLine` is nonsense); text is fill-only; `image` is neither.
+- The classic autocomplete objection to verb-first naming (typing `rect` won't find `fillRect`) is obsolete for our audience: IntelliJ's camel-hump matching surfaces both.
 
 #design #api #L2 #draft

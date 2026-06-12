@@ -322,8 +322,9 @@ public class Renderer {
      * Generate a {@code width} x {@code height} RGBA checkerboard, {@code cell}
      * texels per square, as tightly-packed R8G8B8A8 bytes (row-major,
      * top-to-bottom). Demo content like QUAD_VERTICES -- destined to become
-     * "load a PNG" once there is an image decoder. Two opaque colors (magenta /
-     * charcoal) so the squares read clearly when we finally sample it.
+     * "load a PNG" once there is an image decoder. One opaque color (magenta)
+     * and one FULLY TRANSPARENT cell (alpha 0) so alpha blending is visible: the
+     * clear-color background shows through in a checker pattern.
      */
     private static byte[] checkerboardPixels(int width, int height, int cell) {
         byte[] px = new byte[width * height * 4];
@@ -334,7 +335,7 @@ public class Renderer {
                 px[i]     = (byte) (on ? 0xFF : 0x20);  // R
                 px[i + 1] = (byte) (on ? 0x00 : 0x20);  // G
                 px[i + 2] = (byte) (on ? 0xFF : 0x20);  // B
-                px[i + 3] = (byte) 0xFF;                // A (opaque)
+                px[i + 3] = (byte) (on ? 0xFF : 0x00);  // A: magenta opaque, other cells transparent
             }
         }
         return px;

@@ -154,11 +154,29 @@ public class Pipeline {
             multisampling.sType(VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO);
             multisampling.rasterizationSamples(VK_SAMPLE_COUNT_1_BIT);
 
-            // ---- Color blending: REPLACE (no blend), write all RGBA channels ----
-            // One attachment state per color attachment; blending (alpha etc.)
-            // would be configured here.
+            // ---- Color blending: straight ALPHA blending (src "over" dst) ----
+            // One attachment state per color attachment. Per channel the hardware
+            // computes  result = src*srcFactor <op> dst*dstFactor. The classic
+            // "source over destination" (transparency):
+            //   color = src.rgb*src.a + dst.rgb*(1 - src.a)        [ADD]
+            //   alpha = src.a*1       + dst.a*(1 - src.a)
+            // so a fragment with alpha 0 leaves the background untouched and alpha
+            // 1 fully replaces it -- the sprite transparency seam. The framebuffer
+            // is sRGB, so the GPU blends in LINEAR space and re-encodes on store
+            // (gamma-correct blending for free); the alpha of an _SRGB format is
+            // itself linear, so src.a is the raw texel value.
+            // (Straight, not premultiplied, alpha: fine here -- NEAREST + binary
+            // texture alpha means no partial-alpha edge texels to fringe. Filtered
+            // or mipmapped sprites would prefer premultiplied to avoid dark halos.)
             VkPipelineColorBlendAttachmentState.Buffer blendAttachment =
                     VkPipelineColorBlendAttachmentState.calloc(1, stack);
+            blendAttachment.blendEnable(true);
+            blendAttachment.srcColorBlendFactor(VK_BLEND_FACTOR_SRC_ALPHA);
+            blendAttachment.dstColorBlendFactor(VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA);
+            blendAttachment.colorBlendOp(VK_BLEND_OP_ADD);
+            blendAttachment.srcAlphaBlendFactor(VK_BLEND_FACTOR_ONE);
+            blendAttachment.dstAlphaBlendFactor(VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA);
+            blendAttachment.alphaBlendOp(VK_BLEND_OP_ADD);
             blendAttachment.colorWriteMask(
                     VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
                     | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT);

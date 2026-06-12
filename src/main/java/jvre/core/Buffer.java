@@ -17,6 +17,7 @@ import java.nio.LongBuffer;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.memFloatBuffer;
+import static org.lwjgl.system.MemoryUtil.memShortBuffer;
 import static org.lwjgl.vulkan.VK10.*;
 import static org.lwjgl.vulkan.VK13.*;
 
@@ -32,7 +33,10 @@ import static org.lwjgl.vulkan.VK13.*;
  * allocate few big VkDeviceMemory blocks and sub-allocate many buffers into
  * them (drivers cap total allocations -- maxMemoryAllocationCount can be as
  * low as 4096). We do one allocation per buffer while learning; that job
- * eventually goes to VMA (the Vulkan Memory Allocator).
+ * eventually goes to VMA (the Vulkan Memory Allocator). KNOWN ADVISORY: the
+ * best-practices validation layer warns about exactly this at startup
+ * ("smaller buffers should be sub-allocated from larger memory blocks") --
+ * that warning is the standing ticket for the VMA milestone, not a bug.
  *
  * Creative tier: Buffer is one of the objects L1 users will eventually touch
  * (vertex data, uniforms), like Pipeline.
@@ -60,18 +64,31 @@ public class Buffer {
      * and HOST_VISIBLE -- the two hops still work, just redundantly.)
      */
     public static Buffer deviceLocal(Device device, long commandPool, float[] data, int usage) {
-        long bytes = (long) data.length * Float.BYTES;
+        Buffer staging = stagingBuffer(device, (long) data.length * Float.BYTES);
+        staging.uploadFloats(data);
+        return promoteToDeviceLocal(device, commandPool, staging, usage);
+    }
 
-        Buffer staging = new Buffer(device, bytes,
+    /** Same staging upload, for 16-bit data (e.g. UINT16 index buffers). */
+    public static Buffer deviceLocal(Device device, long commandPool, short[] data, int usage) {
+        Buffer staging = stagingBuffer(device, (long) data.length * Short.BYTES);
+        staging.uploadShorts(data);
+        return promoteToDeviceLocal(device, commandPool, staging, usage);
+    }
+
+    private static Buffer stagingBuffer(Device device, long bytes) {
+        return new Buffer(device, bytes,
                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        staging.uploadFloats(data);
+    }
 
-        Buffer result = new Buffer(device, bytes,
+    /** Copy a filled staging buffer into a fresh DEVICE_LOCAL one, then destroy it. */
+    private static Buffer promoteToDeviceLocal(Device device, long commandPool,
+                                               Buffer staging, int usage) {
+        Buffer result = new Buffer(device, staging.size(),
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        copy(device, commandPool, staging, result, bytes);
-
+        copy(device, commandPool, staging, result, staging.size());
         staging.close();  // served its purpose; the data lives in VRAM now
         return result;
     }
@@ -145,6 +162,22 @@ public class Buffer {
                     "Failed to map buffer memory");
             // Wrap the raw mapped pointer as a FloatBuffer and bulk-copy.
             memFloatBuffer(pData.get(0), data.length).put(data);
+            vkUnmapMemory(device.handle(), memory);
+        }
+    }
+
+    /** Same as {@link #uploadFloats}, for 16-bit values (index data). */
+    public void uploadShorts(short[] data) {
+        long bytes = (long) data.length * Short.BYTES;
+        if (bytes > size) {
+            throw new IllegalArgumentException(
+                    "Upload of " + bytes + " bytes into a " + size + "-byte buffer");
+        }
+        try (MemoryStack stack = stackPush()) {
+            PointerBuffer pData = stack.mallocPointer(1);
+            Vk.check(vkMapMemory(device.handle(), memory, 0, bytes, 0, pData),
+                    "Failed to map buffer memory");
+            memShortBuffer(pData.get(0), data.length).put(data);
             vkUnmapMemory(device.handle(), memory);
         }
     }

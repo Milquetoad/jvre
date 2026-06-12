@@ -57,21 +57,33 @@ public class Renderer {
     private static final String TRIANGLE_VERT = "/shaders/triangle.vert.spv";
     private static final String TRIANGLE_FRAG = "/shaders/triangle.frag.spv";
 
-    // The demo triangle's GEOMETRY -- interleaved, 5 floats per vertex,
-    // matching Pipeline's binding/attribute descriptions: [x y | r g b].
-    // NDC coordinates (y DOWN). Like the clear color and shaders: demo content,
-    // destined to become API (L1 users hand us their geometry).
-    private static final float[] TRIANGLE_VERTICES = {
+    // The demo QUAD's geometry -- interleaved, 5 floats per vertex, matching
+    // Pipeline's binding/attribute descriptions: [x y | r g b]. NDC coordinates
+    // (y DOWN). Only the 4 UNIQUE corners are stored; the index buffer below
+    // describes which corners form which triangle. Like the clear color and
+    // shaders: demo content, destined to become API.
+    private static final float[] QUAD_VERTICES = {
             //   x      y      r     g     b
-             0.0f, -0.5f,  1.0f, 0.0f, 0.0f,   // top center, red
-             0.5f,  0.5f,  0.0f, 1.0f, 0.0f,   // bottom right, green
-            -0.5f,  0.5f,  0.0f, 0.0f, 1.0f,   // bottom left, blue
+            -0.5f, -0.5f,  1.0f, 0.0f, 0.0f,   // 0: top left, red
+             0.5f, -0.5f,  0.0f, 1.0f, 0.0f,   // 1: top right, green
+             0.5f,  0.5f,  0.0f, 0.0f, 1.0f,   // 2: bottom right, blue
+            -0.5f,  0.5f,  1.0f, 1.0f, 1.0f,   // 3: bottom left, white
+    };
+
+    // Two triangles sharing the 0-2 diagonal: 6 indices, 4 vertices. At quad
+    // scale this saves 2 vertices; in a real mesh nearly every vertex is shared
+    // by ~6 triangles, so indexing roughly halves vertex memory/bandwidth.
+    // shorts = VK_INDEX_TYPE_UINT16 (fine below 65k vertices; UINT32 above).
+    private static final short[] QUAD_INDICES = {
+            0, 1, 2,   // top-left, top-right, bottom-right
+            2, 3, 0,   // bottom-right, bottom-left, top-left
     };
 
     private final Device device;
     private Swapchain swapchain;
     private Pipeline pipeline;
     private Buffer vertexBuffer;
+    private Buffer indexBuffer;
 
     // The clear color (RGBA in [0,1]); becomes real API once there is more to
     // render than a clear. The swapchain is an sRGB format, so these linear
@@ -127,14 +139,17 @@ public class Renderer {
         // transfer command buffer from it.
         createCommandPool();
 
-        // The vertex buffer, in DEVICE_LOCAL memory (VRAM) via a staging
-        // upload -- static geometry belongs where the GPU reads fastest. (The
+        // Vertex + index buffers, in DEVICE_LOCAL memory (VRAM) via staging
+        // uploads -- static geometry belongs where the GPU reads fastest. (The
         // first version of this used plain HOST_VISIBLE memory: simpler, but
         // the GPU then re-reads it over the bus every frame.)
         this.vertexBuffer = Buffer.deviceLocal(device, commandPool,
-                TRIANGLE_VERTICES, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-        System.out.println("Vertex buffer created ("
-                + vertexBuffer.size() + " bytes, device-local via staging).");
+                QUAD_VERTICES, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+        this.indexBuffer = Buffer.deviceLocal(device, commandPool,
+                QUAD_INDICES, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+        System.out.println("Vertex + index buffers created ("
+                + vertexBuffer.size() + " + " + indexBuffer.size()
+                + " bytes, device-local via staging).");
 
         createCommandBuffers();
         createSyncObjects();
@@ -298,6 +313,10 @@ public class Renderer {
             vkCmdBindVertexBuffers(cmd, 0,
                     stack.longs(vertexBuffer.handle()), stack.longs(0));
 
+            // Bind the index buffer (one per draw, unlike the vertex-buffer
+            // ARRAY) and tell Vulkan how wide each index is.
+            vkCmdBindIndexBuffer(cmd, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT16);
+
             // Push this frame's constants: [ time, aspect ] -- must match the
             // shader's push_constant block and the layout's range. THIS is the
             // per-frame-recording payoff: fresh values every frame, written
@@ -308,10 +327,12 @@ public class Renderer {
             vkCmdPushConstants(cmd, pipeline.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0,
                     stack.floats(time, aspect));
 
-            // THE draw: 3 vertices, 1 instance, no offsets. The vertex shader's
-            // location 0/1 inputs now stream from the bound buffer, sliced per
-            // the pipeline's attribute descriptions.
-            vkCmdDraw(cmd, 3, 1, 0, 0);
+            // THE draw, now INDEXED: walk 6 indices, fetch each index's vertex
+            // from the bound vertex buffer (shared vertices fetched from cache,
+            // not duplicated). Offsets: first index 0, vertex offset 0 (added
+            // to every index -- handy for packing many meshes in one buffer),
+            // first instance 0.
+            vkCmdDrawIndexed(cmd, QUAD_INDICES.length, 1, 0, 0, 0);
 
             vkCmdEndRendering(cmd);
 
@@ -602,6 +623,9 @@ public class Renderer {
         // Destroying the command pool also frees the command buffers from it.
         if (commandPool != VK_NULL_HANDLE) {
             vkDestroyCommandPool(device.handle(), commandPool, null);
+        }
+        if (indexBuffer != null) {
+            indexBuffer.close();
         }
         if (vertexBuffer != null) {
             vertexBuffer.close();

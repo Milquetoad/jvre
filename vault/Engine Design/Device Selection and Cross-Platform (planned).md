@@ -14,6 +14,8 @@ Almost everything in Vulkan hangs off the chosen GPU: logical device, queues, sw
 
 **Seam:** keep the GPU-agnostic part (instance + [[Windowing - GLFW and the Surface|surface]]) **stable and long-lived**; put everything device-dependent inside ONE recreatable unit — a **"device context" / renderer** — that can be disposed and rebuilt. This is the *same* machinery needed for **window-resize swapchain recreation**, so building the seam once buys both features. Structure the elementaries around a disposable device-and-below layer. See [[API Vision - Layered Altitudes]], [[Roadmap - Clear to Color]].
 
+**Related forward constraint:** queue selection currently hunts graphics+present; the day **compute** matters, the device/queue layer should already think "a set of queues by capability," not "the graphics queue." Logged with two sibling Renderer-shape constraints (multithreaded command recording, offscreen render targets) in [[Game-Engine Capabilities (planned)]].
+
 ## 2. OS-agnostic (Windows + Linux required; macOS nice-to-have)
 The chosen stack is cross-platform **by construction**, and the code so far is **already portable**:
 - `glfwGetRequiredInstanceExtensions()` returns the right surface extensions per OS (`VK_KHR_win32_surface` on Windows, `VK_KHR_xcb_surface`/`VK_KHR_wayland_surface` on Linux). We never hard-code the Windows one.

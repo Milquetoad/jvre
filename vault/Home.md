@@ -45,6 +45,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 26. [[Push Constants]] — per-frame data straight into the command buffer (the spin 🌀)
 27. [[Index Buffers]] — unique vertices + indices; `vkCmdDrawIndexed` (the quad)
 28. [[Uniform Buffers and Descriptor Sets]] — layouts, pools, sets, per-frame UBOs (the orbit)
+29. [[Textures - Images, Views and Samplers]] — VkImage, tiling/layout transitions, samplers (NEAREST), `COMBINED_IMAGE_SAMPLER` (the checkerboard 🖼️)
 
 **6. Looking ahead — optional, for the curious**
 - [[GUI Options]] / [[Self-Built GUI (planned)]], [[Ray Tracing and Path Tracing (future)]], [[Device Selection and Cross-Platform (planned)]]
@@ -59,6 +60,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - [[API Vision - Layered Altitudes]] — the engine's north star (high-level + shader-art on one stack)
 - [[Design North Star]] — the sweet spot (smaller than Processing; powerful, flexible, approachable) + how we measure it
 - [[L2 Feature Set - Renderer2D]] — the formal "just draw" surface: principles, primitives, the no-modes decision (draft)
+- [[Game-Engine Capabilities (planned)]] — what L1 must expose so a game engine can be built on jvre: the mechanism/policy rule, the Tier-2 target, text/camera/3D scope, the 3 Renderer-shape constraints
 - [[Device Selection and Cross-Platform (planned)]] — flexible GPU choice + OS-agnostic (post-MVP)
 
 ### Foundations (Java ↔ native)
@@ -104,6 +106,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - [[Push Constants]] ✅ — VkPushConstantRange + vkCmdPushConstants + push_constant block (time/aspect)
 - [[Index Buffers]] ✅ — UINT16 indices, vkCmdBindIndexBuffer + vkCmdDrawIndexed (the quad)
 - [[Uniform Buffers and Descriptor Sets]] ✅ — layout/pool/set machinery; per-frame mat4 UBO; write-once-rewrite-contents
+- [[Textures - Images, Views and Samplers]] ✅ — VkImage + tiling + layout transitions; view + NEAREST sampler; COMBINED_IMAGE_SAMPLER descriptor; UV attribute
 
 ## Status
 - ✅ Toolchain verified (smoke test passes)
@@ -130,6 +133,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - ✅ 🌀 [[Push Constants]] — **the triangle spins** (time + aspect pushed per frame; the per-frame-recording payoff)
 - ✅ [[Index Buffers]] — **the quad**: 4 unique vertices + 6 indices, `vkCmdDrawIndexed` (best-practices layer now files the VMA ticket at startup — known advisory)
 - ✅ [[Uniform Buffers and Descriptor Sets]] — **the quad orbits**: CPU-built mat4 through a per-frame UBO + descriptor set; push constant moved to the fragment stage (pulse) — both tiers side by side
-- ⏭️ Next: **textures** — images + samplers + COMBINED_IMAGE_SAMPLER descriptors (the descriptor half is now learned); then 3D + depth, then MSAA
+- ✅ 🖼️ [[Textures - Images, Views and Samplers]] — **a picture on the quad**: checkerboard sampled via VkImage + layout transitions + NEAREST sampler + COMBINED_IMAGE_SAMPLER descriptor (verified on the 4090; validation clean but the known VMA advisory)
+- ⏭️ Next: **alpha blending** (the transparency seam — pipeline is still REPLACE); then 3D + depth, then MSAA
 
 #jvre #moc

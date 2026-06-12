@@ -2,10 +2,9 @@ package jvre.core;
 
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.util.vma.VmaAllocationCreateInfo;
 import org.lwjgl.vulkan.VkBufferCopy;
 import org.lwjgl.vulkan.VkBufferCreateInfo;
-import org.lwjgl.vulkan.VkMemoryAllocateInfo;
-import org.lwjgl.vulkan.VkMemoryRequirements;
 
 import java.nio.LongBuffer;
 
@@ -13,24 +12,33 @@ import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.memByteBuffer;
 import static org.lwjgl.system.MemoryUtil.memFloatBuffer;
 import static org.lwjgl.system.MemoryUtil.memShortBuffer;
+import static org.lwjgl.util.vma.Vma.*;
 import static org.lwjgl.vulkan.VK10.*;
 
 /**
- * A VkBuffer plus the VkDeviceMemory backing it -- jvre's first GPU memory.
+ * A VkBuffer plus the VMA ALLOCATION backing it.
  *
- * Vulkan splits "a buffer" into two objects you wire together yourself:
- *   1. The BUFFER (VkBuffer): a typed handle -- size + usage flags. Owns no
- *      storage at all.
- *   2. The MEMORY (VkDeviceMemory): a raw allocation from one of the GPU's
- *      memory HEAPS, chosen by memory-TYPE index.
- * vkBindBufferMemory marries them. The split exists because real engines
- * allocate few big VkDeviceMemory blocks and sub-allocate many buffers into
- * them (drivers cap total allocations -- maxMemoryAllocationCount can be as
- * low as 4096). We do one allocation per buffer while learning; that job
- * eventually goes to VMA (the Vulkan Memory Allocator). KNOWN ADVISORY: the
- * best-practices validation layer warns about exactly this at startup
- * ("smaller buffers should be sub-allocated from larger memory blocks") --
- * that warning is the standing ticket for the VMA milestone, not a bug.
+ * History note (the learning arc): the first Buffer did Vulkan memory by hand --
+ * create the VkBuffer, query its requirements, HUNT a compatible memory type,
+ * vkAllocateMemory one dedicated VkDeviceMemory, bind. Educational, and exactly
+ * what the best-practices layer warned about: drivers cap total allocations
+ * (maxMemoryAllocationCount may be as low as 4096) and vkAllocateMemory is slow,
+ * so real engines allocate FEW big blocks and SUB-allocate many resources into
+ * them. That allocator is a library-sized problem -- VMA (AMD's Vulkan Memory
+ * Allocator) is the industry-standard answer, and {@link Device} now owns one.
+ *
+ * What changed at this seam:
+ *   - vmaCreateBuffer does create+place+bind in one call; we hold a VmaAllocation
+ *     handle instead of raw VkDeviceMemory (the memory block is VMA's business,
+ *     shared with other resources).
+ *   - Memory-type FLAGS became INTENT: callers say {@code hostVisible} (CPU will
+ *     write it: staging, UBOs) or not (VRAM-resident: vertex/index data). VMA
+ *     picks the memory type -- the hand-rolled hunt retired with the manual path
+ *     (preserved in git history and the vault notes).
+ *   - Mapping goes through vmaMapMemory/vmaUnmapMemory, and uploads finish with
+ *     vmaFlushAllocation: a no-op on coherent memory (the desktop norm) and the
+ *     required flush on anything else -- correctness by default, no
+ *     flush-forgetting bug class.
  *
  * Creative tier: Buffer is one of the objects L1 users will eventually touch
  * (vertex data, uniforms), like Pipeline.
@@ -38,24 +46,21 @@ import static org.lwjgl.vulkan.VK10.*;
 public class Buffer {
 
     private final Device device;
-    private final long handle;  // VkBuffer
-    private final long memory;  // VkDeviceMemory backing it
-    private final long size;    // bytes
+    private final long handle;      // VkBuffer
+    private final long allocation;  // VmaAllocation -- our slice of a VMA-owned block
+    private final long size;        // bytes
 
     /**
-     * Build a DEVICE_LOCAL buffer (VRAM -- the memory the GPU reads fastest)
-     * filled with the given floats, via the canonical STAGING upload. On a
-     * discrete GPU the CPU usually cannot map VRAM at all, so the data takes
-     * two hops:
+     * Build a VRAM-resident buffer filled with the given floats, via the
+     * canonical STAGING upload. On a discrete GPU the CPU usually cannot map
+     * VRAM at all, so the data takes two hops:
      *
-     *   CPU writes  -> staging buffer (HOST_VISIBLE,  TRANSFER_SRC)
-     *   GPU copies  -> result buffer  (DEVICE_LOCAL,  TRANSFER_DST | usage)
+     *   CPU writes  -> staging buffer (host-visible,  TRANSFER_SRC)
+     *   GPU copies  -> result buffer  (device-local,  TRANSFER_DST | usage)
      *
-     * The copy is a GPU command like any other, recorded into a one-shot
-     * command buffer on the graphics queue (every graphics queue implicitly
-     * supports transfer). The staging buffer is destroyed as soon as the copy
-     * lands. (On integrated GPUs one memory type is often both DEVICE_LOCAL
-     * and HOST_VISIBLE -- the two hops still work, just redundantly.)
+     * The copy is a GPU command like any other (Commands.oneShot on the graphics
+     * queue -- every graphics queue implicitly supports transfer). The staging
+     * buffer is destroyed as soon as the copy lands.
      */
     public static Buffer deviceLocal(Device device, long commandPool, float[] data, int usage) {
         Buffer staging = stagingBuffer(device, (long) data.length * Float.BYTES);
@@ -71,17 +76,14 @@ public class Buffer {
     }
 
     private static Buffer stagingBuffer(Device device, long bytes) {
-        return new Buffer(device, bytes,
-                VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        return new Buffer(device, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
     }
 
-    /** Copy a filled staging buffer into a fresh DEVICE_LOCAL one, then destroy it. */
+    /** Copy a filled staging buffer into a fresh device-local one, then destroy it. */
     private static Buffer promoteToDeviceLocal(Device device, long commandPool,
                                                Buffer staging, int usage) {
         Buffer result = new Buffer(device, staging.size(),
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage, false);
         copy(device, commandPool, staging, result, staging.size());
         staging.close();  // served its purpose; the data lives in VRAM now
         return result;
@@ -89,16 +91,19 @@ public class Buffer {
 
     /**
      * Create a buffer of {@code size} bytes with the given USAGE (what commands
-     * may touch it: vertex input, transfer src/dst, ...) backed by memory with
-     * the given PROPERTIES (where it lives / who can see it -- see
-     * {@link #findMemoryType}).
+     * may touch it: vertex input, transfer src/dst, ...). {@code hostVisible}
+     * declares INTENT, not a memory type: true = the CPU will write into it
+     * sequentially (staging buffers, per-frame UBOs), false = GPU-only residency
+     * (VMA prefers VRAM). VMA translates intent into a concrete memory type and
+     * places the buffer inside one of its big shared blocks.
      */
-    public Buffer(Device device, long size, int usage, int memoryProperties) {
+    public Buffer(Device device, long size, int usage, boolean hostVisible) {
         this.device = device;
         this.size = size;
 
         try (MemoryStack stack = stackPush()) {
-            // ---- 1. The buffer object: size + usage, no storage yet ----
+            // The buffer description is unchanged from the manual days -- VMA
+            // replaces the MEMORY half, not the buffer object itself.
             VkBufferCreateInfo bufferInfo = VkBufferCreateInfo.calloc(stack);
             bufferInfo.sType(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO);
             bufferInfo.size(size);
@@ -107,92 +112,77 @@ public class Buffer {
             // single-queue story as the swapchain images).
             bufferInfo.sharingMode(VK_SHARING_MODE_EXCLUSIVE);
 
+            // The intent declaration. AUTO lets VMA choose the memory type from
+            // how the buffer is described + these flags. HOST_ACCESS_SEQUENTIAL_
+            // WRITE promises "the CPU only streams data IN, never reads back" --
+            // the cheapest host-visible flavor (write-combined memory is fine).
+            VmaAllocationCreateInfo allocInfo = VmaAllocationCreateInfo.calloc(stack);
+            allocInfo.usage(VMA_MEMORY_USAGE_AUTO);
+            if (hostVisible) {
+                allocInfo.flags(VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            }
+
+            // One call: create the VkBuffer, find/grow a block, bind at an offset.
             LongBuffer pBuffer = stack.longs(VK_NULL_HANDLE);
-            Vk.check(vkCreateBuffer(device.handle(), bufferInfo, null, pBuffer),
+            PointerBuffer pAllocation = stack.mallocPointer(1);
+            Vk.check(vmaCreateBuffer(device.allocator(), bufferInfo, allocInfo,
+                            pBuffer, pAllocation, null),
                     "Failed to create a buffer (" + size + " bytes)");
             handle = pBuffer.get(0);
-
-            // ---- 2. What does THIS buffer need from memory? ----
-            // The driver answers: actual size (may exceed ours for alignment),
-            // alignment, and a BITMASK of which memory types are acceptable.
-            VkMemoryRequirements memReq = VkMemoryRequirements.malloc(stack);
-            vkGetBufferMemoryRequirements(device.handle(), handle, memReq);
-
-            // ---- 3. Allocate from a compatible memory type ----
-            VkMemoryAllocateInfo allocInfo = VkMemoryAllocateInfo.calloc(stack);
-            allocInfo.sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
-            allocInfo.allocationSize(memReq.size());
-            allocInfo.memoryTypeIndex(
-                    device.findMemoryType(memReq.memoryTypeBits(), memoryProperties));
-
-            LongBuffer pMemory = stack.longs(VK_NULL_HANDLE);
-            Vk.check(vkAllocateMemory(device.handle(), allocInfo, null, pMemory),
-                    "Failed to allocate " + memReq.size() + " bytes of device memory");
-            memory = pMemory.get(0);
-
-            // ---- 4. Marry them (offset 0: the allocation is all ours) ----
-            Vk.check(vkBindBufferMemory(device.handle(), handle, memory, 0),
-                    "Failed to bind buffer memory");
+            allocation = pAllocation.get(0);
         }
     }
 
     /**
-     * Copy floats into the buffer through the CPU. Requires HOST_VISIBLE
-     * memory: vkMapMemory hands us a raw pointer into the allocation, we write,
-     * we unmap. With HOST_COHERENT (we always pair it) the write is visible to
-     * the GPU without an explicit vkFlushMappedMemoryRanges -- the simple
-     * trade: coherent traffic may be a little slower, but there is no
-     * flush-forgetting bug to hunt.
+     * Copy floats into the buffer through the CPU. Requires a {@code hostVisible}
+     * buffer: vmaMapMemory hands us a raw pointer into the allocation's slice of
+     * its block, we write, we unmap, and vmaFlushAllocation makes the write
+     * visible to the GPU (a no-op when VMA picked coherent memory -- the desktop
+     * norm -- and the required flush anywhere else).
      */
     public void uploadFloats(float[] data) {
         long bytes = (long) data.length * Float.BYTES;
-        if (bytes > size) {
-            throw new IllegalArgumentException(
-                    "Upload of " + bytes + " bytes into a " + size + "-byte buffer");
-        }
+        checkFits(bytes);
         try (MemoryStack stack = stackPush()) {
             PointerBuffer pData = stack.mallocPointer(1);
-            Vk.check(vkMapMemory(device.handle(), memory, 0, bytes, 0, pData),
+            Vk.check(vmaMapMemory(device.allocator(), allocation, pData),
                     "Failed to map buffer memory");
             // Wrap the raw mapped pointer as a FloatBuffer and bulk-copy.
             memFloatBuffer(pData.get(0), data.length).put(data);
-            vkUnmapMemory(device.handle(), memory);
+            vmaUnmapMemory(device.allocator(), allocation);
+            vmaFlushAllocation(device.allocator(), allocation, 0, bytes);
         }
     }
 
     /** Same as {@link #uploadFloats}, for 16-bit values (index data). */
     public void uploadShorts(short[] data) {
         long bytes = (long) data.length * Short.BYTES;
-        if (bytes > size) {
-            throw new IllegalArgumentException(
-                    "Upload of " + bytes + " bytes into a " + size + "-byte buffer");
-        }
+        checkFits(bytes);
         try (MemoryStack stack = stackPush()) {
             PointerBuffer pData = stack.mallocPointer(1);
-            Vk.check(vkMapMemory(device.handle(), memory, 0, bytes, 0, pData),
+            Vk.check(vmaMapMemory(device.allocator(), allocation, pData),
                     "Failed to map buffer memory");
             memShortBuffer(pData.get(0), data.length).put(data);
-            vkUnmapMemory(device.handle(), memory);
+            vmaUnmapMemory(device.allocator(), allocation);
+            vmaFlushAllocation(device.allocator(), allocation, 0, bytes);
         }
     }
 
     /**
      * Same as {@link #uploadFloats}, for raw bytes -- used to stage texture
-     * PIXELS (e.g. R8G8B8A8 = 4 bytes/texel) into a HOST_VISIBLE buffer before
+     * PIXELS (e.g. R8G8B8A8 = 4 bytes/texel) into a host-visible buffer before
      * the GPU copies them into an image ({@link Texture}).
      */
     public void uploadBytes(byte[] data) {
         long bytes = data.length;
-        if (bytes > size) {
-            throw new IllegalArgumentException(
-                    "Upload of " + bytes + " bytes into a " + size + "-byte buffer");
-        }
+        checkFits(bytes);
         try (MemoryStack stack = stackPush()) {
             PointerBuffer pData = stack.mallocPointer(1);
-            Vk.check(vkMapMemory(device.handle(), memory, 0, bytes, 0, pData),
+            Vk.check(vmaMapMemory(device.allocator(), allocation, pData),
                     "Failed to map buffer memory");
             memByteBuffer(pData.get(0), data.length).put(data);
-            vkUnmapMemory(device.handle(), memory);
+            vmaUnmapMemory(device.allocator(), allocation);
+            vmaFlushAllocation(device.allocator(), allocation, 0, bytes);
         }
     }
 
@@ -205,15 +195,21 @@ public class Buffer {
         return size;
     }
 
-    /** Destroy the buffer, then free its memory (child before parent, as ever). */
+    /** Destroy the buffer and release its slice back to VMA's block in one call. */
     public void close() {
-        vkDestroyBuffer(device.handle(), handle, null);
-        vkFreeMemory(device.handle(), memory, null);
+        vmaDestroyBuffer(device.allocator(), handle, allocation);
     }
 
     // ------------------------------------------------------------------
     // internals
     // ------------------------------------------------------------------
+
+    private void checkFits(long bytes) {
+        if (bytes > size) {
+            throw new IllegalArgumentException(
+                    "Upload of " + bytes + " bytes into a " + size + "-byte buffer");
+        }
+    }
 
     /** Record + submit a one-shot GPU copy from src to dst, and wait for it. */
     private static void copy(Device device, long commandPool, Buffer src, Buffer dst, long bytes) {

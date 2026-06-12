@@ -230,13 +230,13 @@ public class Renderer {
     // Uniform buffers + descriptors
     // ------------------------------------------------------------------
 
-    /** One 64-byte (mat4) host-visible UBO per frame in flight. */
+    /** One 64-byte (mat4) host-writable UBO per frame in flight (rewritten every
+     *  frame, so staging to VRAM would just add a copy -- hostVisible intent). */
     private void createUniformBuffers() {
         uniformBuffers = new Buffer[MAX_FRAMES_IN_FLIGHT];
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
             uniformBuffers[i] = new Buffer(device, 16 * Float.BYTES,
-                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
         }
     }
 

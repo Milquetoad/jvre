@@ -2,6 +2,8 @@ package jvre.core;
 
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.util.vma.VmaAllocatorCreateInfo;
+import org.lwjgl.util.vma.VmaVulkanFunctions;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkDeviceCreateInfo;
 import org.lwjgl.vulkan.VkDeviceQueueCreateInfo;
@@ -9,7 +11,6 @@ import org.lwjgl.vulkan.VkExtensionProperties;
 import org.lwjgl.vulkan.VkPhysicalDevice;
 import org.lwjgl.vulkan.VkPhysicalDeviceFeatures;
 import org.lwjgl.vulkan.VkPhysicalDeviceFeatures2;
-import org.lwjgl.vulkan.VkPhysicalDeviceMemoryProperties;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
 import org.lwjgl.vulkan.VkPhysicalDeviceVulkan13Features;
 import org.lwjgl.vulkan.VkQueue;
@@ -22,6 +23,7 @@ import java.util.HashSet;
 import java.util.Set;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
+import static org.lwjgl.util.vma.Vma.*;
 import static org.lwjgl.vulkan.KHRSurface.vkGetPhysicalDeviceSurfaceSupportKHR;
 import static org.lwjgl.vulkan.KHRSwapchain.VK_KHR_SWAPCHAIN_EXTENSION_NAME;
 import static org.lwjgl.vulkan.VK10.*;
@@ -53,6 +55,7 @@ public class Device {
     private final VkQueue presentQueue;
     private final int graphicsFamily;
     private final int presentFamily;
+    private final long allocator;  // VmaAllocator -- device-scoped, owns the memory blocks
 
     public Device(Instance instance, Surface surface) {
         this.physicalDevice = pickPhysicalDevice(instance, surface);
@@ -117,11 +120,40 @@ public class Device {
             graphicsQueue = new VkQueue(pQueue.get(0), handle);
             vkGetDeviceQueue(handle, presentFamily, 0, pQueue);
             presentQueue = new VkQueue(pQueue.get(0), handle);
+
+            // ---- The VMA allocator: real-engine memory management ----
+            // VMA sub-allocates many buffers/images out of FEW big VkDeviceMemory
+            // blocks -- the pattern drivers expect (maxMemoryAllocationCount may
+            // be as low as 4096, and vkAllocateMemory is slow). It also takes
+            // over memory-TYPE selection: callers declare INTENT (auto / host
+            // access) instead of hunting type bits. Replaces jvre's deliberate
+            // one-allocation-per-resource learning scaffolding.
+            //
+            // VMA is a C++ library that itself calls Vulkan; LWJGL loads Vulkan
+            // dynamically, so we must hand VMA the function pointers
+            // (VmaVulkanFunctions.set resolves them from instance + device).
+            VmaVulkanFunctions vulkanFunctions = VmaVulkanFunctions.calloc(stack)
+                    .set(instance.handle(), handle);
+
+            VmaAllocatorCreateInfo allocatorInfo = VmaAllocatorCreateInfo.calloc(stack);
+            allocatorInfo.instance(instance.handle());
+            allocatorInfo.physicalDevice(physicalDevice);
+            allocatorInfo.device(handle);
+            allocatorInfo.pVulkanFunctions(vulkanFunctions);
+            // Tell VMA which CORE Vulkan it may rely on (we verified 1.3 in
+            // device selection, so this is honest).
+            allocatorInfo.vulkanApiVersion(VK_API_VERSION_1_3);
+
+            PointerBuffer pAllocator = stack.mallocPointer(1);
+            Vk.check(vmaCreateAllocator(allocatorInfo, pAllocator),
+                    "Failed to create the VMA allocator");
+            allocator = pAllocator.get(0);
         }
 
         boolean shared = graphicsFamily == presentFamily;
         System.out.println("Logical device created; graphics + present queues retrieved"
                 + (shared ? " (shared family)." : " (separate families)."));
+        System.out.println("VMA allocator created (Vulkan 1.3).");
     }
 
     public VkPhysicalDevice physicalDevice() { return physicalDevice; }
@@ -130,41 +162,18 @@ public class Device {
     public VkQueue presentQueue()            { return presentQueue; }
     public int graphicsFamily()              { return graphicsFamily; }
     public int presentFamily()               { return presentFamily; }
+    public long allocator()                  { return allocator; }  // VmaAllocator
 
-    /**
-     * The memory-type hunt -- owned HERE because the PHYSICAL DEVICE is what
-     * advertises the GPU's table of memory TYPES (each pointing into a HEAP --
-     * e.g. 24 GB of VRAM, or system RAM). Both {@link Buffer} and {@link Texture}
-     * need it: given the resource's allowed-types bitmask (from
-     * vkGet{Buffer,Image}MemoryRequirements) and the PROPERTIES we require,
-     * return the index of a memory type that satisfies BOTH:
-     *   - the resource allows it: bit {@code i} set in {@code typeFilter}, AND
-     *   - it has every property asked for: HOST_VISIBLE (CPU can map it),
-     *     HOST_COHERENT (no manual flushes), DEVICE_LOCAL (in VRAM), ...
-     * On discrete GPUs HOST_VISIBLE and DEVICE_LOCAL are usually DIFFERENT types
-     * -- that split is exactly why staging uploads exist.
-     */
-    public int findMemoryType(int typeFilter, int required) {
-        try (MemoryStack stack = stackPush()) {
-            VkPhysicalDeviceMemoryProperties memProps =
-                    VkPhysicalDeviceMemoryProperties.malloc(stack);
-            vkGetPhysicalDeviceMemoryProperties(physicalDevice, memProps);
-
-            for (int i = 0; i < memProps.memoryTypeCount(); i++) {
-                boolean allowed = (typeFilter & (1 << i)) != 0;
-                boolean hasProps =
-                        (memProps.memoryTypes(i).propertyFlags() & required) == required;
-                if (allowed && hasProps) {
-                    return i;
-                }
-            }
-            throw new RuntimeException("No memory type with properties 0x"
-                    + Integer.toHexString(required) + " (filter 0x"
-                    + Integer.toHexString(typeFilter) + ")");
-        }
-    }
+    // (The hand-rolled findMemoryType -- the memory-type hunt both Buffer and
+    // Texture once used -- retired when VMA took over type selection. The
+    // concept is preserved in the vault's Vertex Buffers / Textures notes and
+    // in git history.)
 
     public void close() {
+        // The allocator holds VkDeviceMemory blocks from this device -- it must
+        // go first (child before parent, as ever). If any vmaCreate*'d resource
+        // is still alive here, VMA asserts loudly -- a free leak detector.
+        vmaDestroyAllocator(allocator);
         vkDestroyDevice(handle, null);
     }
 

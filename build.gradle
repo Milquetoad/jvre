@@ -42,6 +42,13 @@ dependencies {
     implementation "org.lwjgl:lwjgl-glfw"
     implementation "org.lwjgl:lwjgl-vulkan"
 
+    // VMA (Vulkan Memory Allocator, AMD): sub-allocates many buffers/images out
+    // of few big VkDeviceMemory blocks -- the real-engine memory pattern. Retires
+    // jvre's one-allocation-per-resource learning scaffolding (and the
+    // hand-rolled memory-type hunt: VMA picks the type from declared intent).
+    // Unlike lwjgl-vulkan this IS a native library (C++), so it has natives.
+    implementation "org.lwjgl:lwjgl-vma"
+
     // JOML (Java OpenGL Math Library): vectors + matrices, pure Java (no natives).
     // Arrives now, WITH 3D -- the hand-rolled 2D affine matrix is retired. Builds
     // the per-frame model-view-projection (perspective, translate/rotate, ...).
@@ -50,6 +57,7 @@ dependencies {
     // Native libraries (.dll) for this platform, needed only at runtime.
     runtimeOnly "org.lwjgl:lwjgl::$lwjglNatives"
     runtimeOnly "org.lwjgl:lwjgl-glfw::$lwjglNatives"
+    runtimeOnly "org.lwjgl:lwjgl-vma::$lwjglNatives"
     // (no lwjgl-vulkan natives on Windows — the loader is system-provided)
 }
 

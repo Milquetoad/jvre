@@ -1,18 +1,19 @@
 package jvre.core;
 
+import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.util.vma.VmaAllocationCreateInfo;
 import org.lwjgl.vulkan.VkBufferImageCopy;
 import org.lwjgl.vulkan.VkDependencyInfo;
 import org.lwjgl.vulkan.VkImageCreateInfo;
 import org.lwjgl.vulkan.VkImageMemoryBarrier2;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
-import org.lwjgl.vulkan.VkMemoryAllocateInfo;
-import org.lwjgl.vulkan.VkMemoryRequirements;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
 
 import java.nio.LongBuffer;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
+import static org.lwjgl.util.vma.Vma.*;
 import static org.lwjgl.vulkan.VK10.*;
 import static org.lwjgl.vulkan.VK13.*;
 
@@ -44,10 +45,10 @@ import static org.lwjgl.vulkan.VK13.*;
  *      (w x h x depth), mip levels, array layers, sample count -- none of which
  *      a buffer has.
  *
- * The MEMORY half, though, is identical to Buffer: ask requirements, find a
- * compatible memory type ({@link Device#findMemoryType}), allocate, bind. (One
- * allocation per image while learning -- VMA inherits the job, same standing
- * ticket as Buffer.)
+ * The MEMORY half, though, is identical to Buffer: VMA-backed (vmaCreateImage
+ * creates, places, and binds in one call; the hand-rolled
+ * requirements/type-hunt/allocate/bind path is preserved in git history and
+ * the vault notes).
  *
  * Creative tier: Texture is an object L1 users will eventually touch, like
  * Buffer and Pipeline.
@@ -55,8 +56,8 @@ import static org.lwjgl.vulkan.VK13.*;
 public class Texture {
 
     private final Device device;
-    private final long image;   // VkImage -- the picture handle (owns no storage)
-    private final long memory;  // VkDeviceMemory backing it
+    private final long image;       // VkImage -- the picture handle (owns no storage)
+    private final long allocation;  // VmaAllocation -- our slice of a VMA-owned block
     private final int width;
     private final int height;
     private final int format;   // VkFormat the texels are stored as
@@ -86,13 +87,11 @@ public class Texture {
         }
 
         Buffer staging = new Buffer(device, imageBytes,
-                VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);  // hostVisible: CPU writes the pixels in
         staging.uploadBytes(pixels);
 
         Texture texture = new Texture(device, width, height, VK_FORMAT_R8G8B8A8_SRGB,
-                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
         texture.uploadFrom(commandPool, staging);
         texture.createViewAndSampler();
 
@@ -103,13 +102,11 @@ public class Texture {
     /**
      * Create an image of {@code width} x {@code height} in {@code format}, with
      * the given USAGE (what may touch it: TRANSFER_DST to copy into, SAMPLED to
-     * be read by a shader, ...) backed by memory with the given PROPERTIES
-     * (DEVICE_LOCAL = VRAM, where the GPU samples fastest). The image starts in
-     * layout UNDEFINED with no contents; filling + transitioning it is the next
-     * beat.
+     * be read by a shader, ...), VMA-backed in GPU-preferred memory (VRAM, where
+     * the GPU samples fastest). The image starts in layout UNDEFINED with no
+     * contents; filling + transitioning it comes after.
      */
-    public Texture(Device device, int width, int height, int format,
-                   int usage, int memoryProperties) {
+    public Texture(Device device, int width, int height, int format, int usage) {
         this.device = device;
         this.width = width;
         this.height = height;
@@ -130,32 +127,22 @@ public class Texture {
             imageInfo.sharingMode(VK_SHARING_MODE_EXCLUSIVE);    // graphics queue only (same as our buffers)
             imageInfo.samples(VK_SAMPLE_COUNT_1_BIT);       // no MSAA (that is its own milestone)
 
+            // ---- 2. The memory: one VMA call (create + place + bind) ----
+            // The manual path (query requirements -> hunt a memory type ->
+            // vkAllocateMemory -> vkBindImageMemory) retired with Buffer's; VMA
+            // places the image inside one of its big shared blocks. AUTO with no
+            // host-access flags = GPU-only residency (OPTIMAL-tiled images are
+            // never CPU-mapped anyway -- that's what staging is for).
+            VmaAllocationCreateInfo allocInfo = VmaAllocationCreateInfo.calloc(stack);
+            allocInfo.usage(VMA_MEMORY_USAGE_AUTO);
+
             LongBuffer pImage = stack.longs(VK_NULL_HANDLE);
-            Vk.check(vkCreateImage(device.handle(), imageInfo, null, pImage),
+            PointerBuffer pAllocation = stack.mallocPointer(1);
+            Vk.check(vmaCreateImage(device.allocator(), imageInfo, allocInfo,
+                            pImage, pAllocation, null),
                     "Failed to create a " + width + "x" + height + " image");
             image = pImage.get(0);
-
-            // ---- 2. What does THIS image need from memory? ----
-            // Like buffers, the driver answers actual size + alignment + a
-            // bitmask of acceptable memory types -- but via the IMAGE query.
-            VkMemoryRequirements memReq = VkMemoryRequirements.malloc(stack);
-            vkGetImageMemoryRequirements(device.handle(), image, memReq);
-
-            // ---- 3. Allocate from a compatible memory type ----
-            VkMemoryAllocateInfo allocInfo = VkMemoryAllocateInfo.calloc(stack);
-            allocInfo.sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
-            allocInfo.allocationSize(memReq.size());
-            allocInfo.memoryTypeIndex(
-                    device.findMemoryType(memReq.memoryTypeBits(), memoryProperties));
-
-            LongBuffer pMemory = stack.longs(VK_NULL_HANDLE);
-            Vk.check(vkAllocateMemory(device.handle(), allocInfo, null, pMemory),
-                    "Failed to allocate image memory");
-            memory = pMemory.get(0);
-
-            // ---- 4. Marry them (offset 0: the allocation is all ours) ----
-            Vk.check(vkBindImageMemory(device.handle(), image, memory, 0),
-                    "Failed to bind image memory");
+            allocation = pAllocation.get(0);
         }
     }
 
@@ -310,7 +297,7 @@ public class Texture {
     public int height() { return height; }
     public int format() { return format; }
 
-    /** Destroy sampler + view, then the image, then free its memory (children first). */
+    /** Destroy sampler + view, then the image (its slice returns to VMA's block). */
     public void close() {
         if (sampler != VK_NULL_HANDLE) {
             vkDestroySampler(device.handle(), sampler, null);
@@ -318,7 +305,6 @@ public class Texture {
         if (view != VK_NULL_HANDLE) {
             vkDestroyImageView(device.handle(), view, null);
         }
-        vkDestroyImage(device.handle(), image, null);
-        vkFreeMemory(device.handle(), memory, null);
+        vmaDestroyImage(device.allocator(), image, allocation);
     }
 }

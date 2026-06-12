@@ -1,12 +1,12 @@
 package jvre.core;
 
+import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.util.vma.VmaAllocationCreateInfo;
 import org.lwjgl.vulkan.VkExtent2D;
 import org.lwjgl.vulkan.VkFormatProperties;
 import org.lwjgl.vulkan.VkImageCreateInfo;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
-import org.lwjgl.vulkan.VkMemoryAllocateInfo;
-import org.lwjgl.vulkan.VkMemoryRequirements;
 import org.lwjgl.vulkan.VkSurfaceCapabilitiesKHR;
 import org.lwjgl.vulkan.VkSurfaceFormatKHR;
 import org.lwjgl.vulkan.VkSwapchainCreateInfoKHR;
@@ -15,6 +15,7 @@ import java.nio.IntBuffer;
 import java.nio.LongBuffer;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
+import static org.lwjgl.util.vma.Vma.*;
 import static org.lwjgl.vulkan.KHRSurface.*;
 import static org.lwjgl.vulkan.KHRSwapchain.*;
 import static org.lwjgl.vulkan.VK10.*;
@@ -49,7 +50,7 @@ public class Swapchain {
     // directly in the constructor body.
     private int depthFormat;
     private long depthImage;
-    private long depthMemory;
+    private long depthAllocation;  // VmaAllocation
     private long depthView;
 
     public Swapchain(Device device, Surface surface, Window window) {
@@ -157,8 +158,7 @@ public class Swapchain {
     /** Destroy depth resources + our image views, then the swapchain (which frees its images). */
     public void close() {
         vkDestroyImageView(device.handle(), depthView, null);
-        vkDestroyImage(device.handle(), depthImage, null);
-        vkFreeMemory(device.handle(), depthMemory, null);
+        vmaDestroyImage(device.allocator(), depthImage, depthAllocation);
         for (long view : imageViews) {
             vkDestroyImageView(device.handle(), view, null);
         }
@@ -236,26 +236,23 @@ public class Swapchain {
             imageInfo.samples(VK_SAMPLE_COUNT_1_BIT);
             imageInfo.sharingMode(VK_SHARING_MODE_EXCLUSIVE);
 
+            // VMA-backed, GPU-only (AUTO, no host access). One extra hint:
+            // DEDICATED_MEMORY -- full-screen attachments (depth, later MSAA
+            // color) are the textbook case for a dedicated allocation rather
+            // than a slot in a shared block: large, long-lived, recreated on
+            // resize, and drivers can optimize dedicated attachment memory.
+            // VMA exposes the choice as a flag; small textures stay pooled.
+            VmaAllocationCreateInfo allocInfo = VmaAllocationCreateInfo.calloc(stack);
+            allocInfo.usage(VMA_MEMORY_USAGE_AUTO);
+            allocInfo.flags(VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT);
+
             LongBuffer pImage = stack.longs(VK_NULL_HANDLE);
-            Vk.check(vkCreateImage(device.handle(), imageInfo, null, pImage),
+            PointerBuffer pAllocation = stack.mallocPointer(1);
+            Vk.check(vmaCreateImage(device.allocator(), imageInfo, allocInfo,
+                            pImage, pAllocation, null),
                     "Failed to create the depth image");
             depthImage = pImage.get(0);
-
-            VkMemoryRequirements memReq = VkMemoryRequirements.malloc(stack);
-            vkGetImageMemoryRequirements(device.handle(), depthImage, memReq);
-
-            VkMemoryAllocateInfo allocInfo = VkMemoryAllocateInfo.calloc(stack);
-            allocInfo.sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
-            allocInfo.allocationSize(memReq.size());
-            allocInfo.memoryTypeIndex(device.findMemoryType(
-                    memReq.memoryTypeBits(), VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
-
-            LongBuffer pMem = stack.longs(VK_NULL_HANDLE);
-            Vk.check(vkAllocateMemory(device.handle(), allocInfo, null, pMem),
-                    "Failed to allocate depth image memory");
-            depthMemory = pMem.get(0);
-            Vk.check(vkBindImageMemory(device.handle(), depthImage, depthMemory, 0),
-                    "Failed to bind depth image memory");
+            depthAllocation = pAllocation.get(0);
 
             VkImageViewCreateInfo viewInfo = VkImageViewCreateInfo.calloc(stack);
             viewInfo.sType(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);

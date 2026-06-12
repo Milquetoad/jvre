@@ -42,6 +42,17 @@ Status (2026-06-12): **v1 surface settled** (principles, primitives, style, outl
 
 `Color`: an immutable value type (`Color.rgb(r,g,b)`, `Color.rgba(...)`, common constants), linear-vs-sRGB handled internally — the user thinks in normal 0-255 / hex colors.
 
+## Steelman: would stateful/modes make more sense? (explored 2026-06-12, decision stands)
+
+Pressure-tested before settling. The honest survey:
+- **The stateful lineage is real**: Processing/p5, canvas (its *style* is ambient -- we borrowed its naming, not its state model), Cairo, awt, Love2D, OpenGL. Its genuine wins: the brush metaphor (minimal concepts for beginner/artist audiences), DRY bulk drawing, setter-based extensibility, subtree-contextual drawing.
+- **The modern direction is the other way**: Skia and Flutter pass an immutable-ish **Paint per call** (= our `Style` general form); **Raylib is per-call color, fully stateless**; ImGui's style state is **scoped push/pop stacks**, never free mutation; declarative UI (React/SwiftUI/Compose) moved the whole industry away from hidden mutable context; Vulkan's pipeline bake is the endpoint of the same arc -- L2 stateless is philosophically continuous with jvre's substrate.
+- **Coordinate-interpretation modes (`rectMode`) aren't even close**: a Processing-ism no other major API adopted. Style-state bugs are shallow (wrong color); interpretation-mode bugs are deep (wrong *place* -- looks like broken math). Even state-comfortable APIs never touched them.
+- **Each stateful win has a stateless home here**: bulk homogeneity = a local `Color` variable (our audience uses variables -- [[Design North Star]]); extensibility = the `Style` object (Skia's Paint proves it scales); subtree context = scoped stacks (Processing itself had to add `pushStyle/popStyle` -- ambient-without-scoping failed even them).
+- **Managed weakness**: per-call args + no named arguments in Java -> pin an **argument-order convention: geometry first, style params after, color always last.** Every call scans the same way; IDE inlay hints do the rest.
+
+Verdict: the choice is *audience-relative* -- stateful is right for Processing's beginners, stateless is right for jvre's documented audience. Same neighborhood as Skia/Flutter/Raylib. Decision stands with confidence.
+
 ## Deliberately absent (the "smaller than Processing" list)
 
 - `rectMode` / `ellipseMode` / `colorMode` — modes are hidden state (principle 1).

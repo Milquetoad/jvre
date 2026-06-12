@@ -1,6 +1,6 @@
 # L2 Feature Set — Renderer2D (draft)
 
-Status (2026-06-12): **principles + style/outline decisions made; naming recommendation pending owner's nod.** This formalizes the "just draw" altitude from [[API Vision - Layered Altitudes]]. Modeled on Processing, deliberately smaller ([[Design North Star]]): every omission below is a choice, not an oversight.
+Status (2026-06-12): **v1 surface settled** (principles, primitives, style, outlines, naming). This formalizes the "just draw" altitude from [[API Vision - Layered Altitudes]]. Modeled on Processing, deliberately smaller ([[Design North Star]]): every omission below is a choice, not an oversight.
 
 ## Principles (decided)
 
@@ -55,7 +55,7 @@ Status (2026-06-12): **principles + style/outline decisions made; naming recomme
 
 Each call appends vertices into a **per-frame dynamic vertex buffer** (one big host-visible ring; the [[Vertex Buffers and GPU Memory|Buffer]] elementary grows an arena mode — likely the VMA trigger), flushed at `end()` into the current command buffer with one pipeline per primitive class. Transform stack applied CPU-side at append time (v1) — keeps the shader trivial. Batching is its own milestone; this spec is the *surface*, fixed first so the machinery has a target.
 
-## Naming (recommended 2026-06-12, pending owner's nod)
+## Naming (decided 2026-06-12)
 
 **Symmetric verb pairs for closed shapes (`fillRect`/`strokeRect`, ...); bare names for one-form primitives (`line`, `text`, `image`).** The reasoning:
 - In a stateless API the fill/outline distinction must live at the call site: ambient state is rejected, and a variant *parameter* fights the signatures (outlines carry `thickness`, fills don't) -- so it goes in the **name**.
@@ -63,5 +63,19 @@ Each call appends vertices into a **per-frame dynamic vertex buffer** (one big h
 - Precedents: HTML canvas (`fillRect`/`strokeRect`, the largest immediate-mode-2D mindshare) vs java.awt (`fillRect`/`drawRect` -- "draw" meaning outline is a famous naming mistake; "draw" is out). **"stroke" over "outline"**: it is the domain's word (canvas, SVG, Skia, Processing, design tools) and L2 naming is "intuitive and domain-facing".
 - The pairing is deliberately *ragged*: only closed shapes pair. A line IS a stroke (`strokeLine` is nonsense); text is fill-only; `image` is neither.
 - The classic autocomplete objection to verb-first naming (typing `rect` won't find `fillRect`) is obsolete for our audience: IntelliJ's camel-hump matching surfaces both.
+
+## Fill + stroke together (decided 2026-06-12)
+
+`fillRect` and `strokeRect` are **orthogonal** -- a filled rectangle with a border is **two calls** in v1. That keeps primitives single-purpose and composable (canvas precedent; the alternative is a third combined verb per shape -- method explosion with an awkward two-color signature). The honest cost: geometry arguments stated twice.
+
+**But a combined form is planned, and not just as sugar -- it is a *correctness* feature.** A stroke sits centered on the shape boundary (the canvas/SVG convention), so its inner half overlaps the fill. Opaque colors hide this; **translucent colors do not**: fill-then-stroke double-covers the inner band, producing two different blended colors within one stroke. Composing two calls can never fix that. The correct rendering is disjoint geometry in one operation (inset fill + stroke band).
+
+This is exactly the reserved `Style` trigger case. The eventual general form:
+```java
+g.fillRect(x, y, w, h, color);                          // simple cases stay short
+g.strokeRect(x, y, w, h, 2f, color);
+g.rect(x, y, w, h, Style.fill(BLUE).stroke(2f, WHITE)); // general form (post-v1)
+```
+The bare noun returns as the *general* form taking an immutable `Style` (fill and stroke both optional, rendered without overlap); the verb pairs stay as the 90% surface. Stroke alignment: **centered** (the convention), revisit only if demanded.
 
 #design #api #L2 #draft

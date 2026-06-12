@@ -55,15 +55,29 @@ The quad's vertex layout grew from `[x y | r g b]` (5 floats) to `[x y | r g b |
 - **`Commands.oneShot(device, pool, lambda)`** -- the allocate/record/submit/wait/free scaffolding was lifted out of `Buffer.copy` once `Texture` needed the identical pattern. Both callers now share it.
 - **`Device.findMemoryType`** -- the memory-type hunt moved to where the physical device (which advertises the types) lives; `Buffer` and `Texture` both call it.
 
+## Alpha blending (the transparency seam)
+
+Sampling alone draws every texel opaquely; **transparency** needs blending turned on in the pipeline (it was `REPLACE` through the first 5 beats). After the fragment shader, the hardware combines its output with the framebuffer per channel: `result = src*srcFactor <op> dst*dstFactor`. The classic *source-over-destination* picks `srcFactor = SRC_ALPHA`, `dstFactor = ONE_MINUS_SRC_ALPHA`, `op = ADD`:
+
+```
+color = src.rgb*src.a + dst.rgb*(1 - src.a)
+```
+
+so `alpha 0` leaves the background untouched and `alpha 1` replaces it -- a sprite's transparent background. Demonstrated by making half the checkerboard cells `alpha = 0`: magenta squares float over the clear color.
+
+Freebie from the sRGB choice: an sRGB attachment blends in **linear** space and re-encodes on store (gamma-correct for free); the alpha channel of an `_SRGB` format is itself linear, so `src.a` is raw.
+
+**Straight vs premultiplied:** we use straight alpha (`SRC_ALPHA`). Fine here because NEAREST + binary texture alpha means no partial-alpha edge texels to fringe. Filtered/mipmapped sprites get dark halos with straight alpha and want **premultiplied** (texture rgb pre-scaled by a, blend `srcFactor = ONE`). A knob for the eventual sprite layer -- noted, not built.
+
 ## Seams for the layers above (the point, per the capabilities note)
 
 Textures is where the [[Game-Engine Capabilities (planned)|mechanism/policy seams]] start mattering. Status after this milestone:
 - **NEAREST sampling** -- done (hardcoded; becomes a `Texture.create(..., filter)` param when generalized).
 - **UV sub-rectangle** (the seam that makes sprite-sheet animation possible from above) -- the UV *machinery* exists, but UVs are currently the whole texture [0,1]. Addressing part of an atlas is a thin change on top.
-- **Alpha blending** (transparency seam) -- NOT yet; the pipeline is still `REPLACE`. The checkerboard is opaque, so it wasn't needed to render. This is the natural next small step (beat 6) before sprites.
+- **Alpha blending** (transparency seam) -- **done** (beat 6, section above): src-over-dst alpha; half the checker cells made transparent to prove it. Straight alpha for now; premultiplied is the filtered-sprite knob.
 
 ## Next
 
-Alpha blending (the transparency seam), then **3D + depth** (the substrate is already 3D-capable -- a `z` + a perspective matrix; see [[Game-Engine Capabilities (planned)]]), then **MSAA** (needs the own-`VkImage` machinery this milestone just built, plus a multisampled depth buffer). The VMA milestone looms larger now -- every image is another single allocation the best-practices layer flags.
+**3D + depth** (the substrate is already 3D-capable -- a `z` + a perspective matrix + a depth buffer; see [[Game-Engine Capabilities (planned)]]), then **MSAA** (needs the own-`VkImage` machinery this milestone just built, plus a multisampled depth buffer). The VMA milestone looms larger now -- every image is another single allocation the best-practices layer flags.
 
 #vulkan #textures #images #samplers #descriptors

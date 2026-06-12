@@ -134,6 +134,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - ✅ [[Index Buffers]] — **the quad**: 4 unique vertices + 6 indices, `vkCmdDrawIndexed` (best-practices layer now files the VMA ticket at startup — known advisory)
 - ✅ [[Uniform Buffers and Descriptor Sets]] — **the quad orbits**: CPU-built mat4 through a per-frame UBO + descriptor set; push constant moved to the fragment stage (pulse) — both tiers side by side
 - ✅ 🖼️ [[Textures - Images, Views and Samplers]] — **a picture on the quad**: checkerboard sampled via VkImage + layout transitions + NEAREST sampler + COMBINED_IMAGE_SAMPLER descriptor (verified on the 4090; validation clean but the known VMA advisory)
-- ⏭️ Next: **alpha blending** (the transparency seam — pipeline is still REPLACE); then 3D + depth, then MSAA
+- ✅ 🪟 **Alpha blending** — REPLACE → src-over-dst alpha; half the checker cells transparent so sprites can have transparent backgrounds (verified on the 4090; see [[Textures - Images, Views and Samplers]])
+- ⏭️ Next: **3D + depth** (the substrate is already 3D-capable — z + perspective matrix + a depth buffer); then MSAA
 
 #jvre #moc

@@ -10,6 +10,7 @@ import org.lwjgl.vulkan.VkCommandBufferSubmitInfo;
 import org.lwjgl.vulkan.VkCommandPoolCreateInfo;
 import org.lwjgl.vulkan.VkDependencyInfo;
 import org.lwjgl.vulkan.VkDescriptorBufferInfo;
+import org.lwjgl.vulkan.VkDescriptorImageInfo;
 import org.lwjgl.vulkan.VkDescriptorPoolCreateInfo;
 import org.lwjgl.vulkan.VkDescriptorPoolSize;
 import org.lwjgl.vulkan.VkDescriptorSetAllocateInfo;
@@ -62,17 +63,18 @@ public class Renderer {
     private static final String TRIANGLE_VERT = "/shaders/triangle.vert.spv";
     private static final String TRIANGLE_FRAG = "/shaders/triangle.frag.spv";
 
-    // The demo QUAD's geometry -- interleaved, 5 floats per vertex, matching
-    // Pipeline's binding/attribute descriptions: [x y | r g b]. NDC coordinates
-    // (y DOWN). Only the 4 UNIQUE corners are stored; the index buffer below
-    // describes which corners form which triangle. Like the clear color and
-    // shaders: demo content, destined to become API.
+    // The demo QUAD's geometry -- interleaved, 7 floats per vertex, matching
+    // Pipeline's binding/attribute descriptions: [x y | r g b | u v]. NDC
+    // coordinates (y DOWN); UVs use Vulkan's top-left texture origin (0,0 =
+    // top-left texel, 1,1 = bottom-right), so they track the corners directly.
+    // Only the 4 UNIQUE corners are stored; the index buffer below says which
+    // corners form which triangle. Demo content, destined to become API.
     private static final float[] QUAD_VERTICES = {
-            //   x      y      r     g     b
-            -0.5f, -0.5f,  1.0f, 0.0f, 0.0f,   // 0: top left, red
-             0.5f, -0.5f,  0.0f, 1.0f, 0.0f,   // 1: top right, green
-             0.5f,  0.5f,  0.0f, 0.0f, 1.0f,   // 2: bottom right, blue
-            -0.5f,  0.5f,  1.0f, 1.0f, 1.0f,   // 3: bottom left, white
+            //   x      y      r     g     b     u     v
+            -0.5f, -0.5f,  1.0f, 0.0f, 0.0f,  0.0f, 0.0f,   // 0: top left
+             0.5f, -0.5f,  0.0f, 1.0f, 0.0f,  1.0f, 0.0f,   // 1: top right
+             0.5f,  0.5f,  0.0f, 0.0f, 1.0f,  1.0f, 1.0f,   // 2: bottom right
+            -0.5f,  0.5f,  1.0f, 1.0f, 1.0f,  0.0f, 1.0f,   // 3: bottom left
     };
 
     // Two triangles sharing the 0-2 diagonal: 6 indices, 4 vertices. At quad
@@ -89,6 +91,11 @@ public class Renderer {
     private Pipeline pipeline;
     private Buffer vertexBuffer;
     private Buffer indexBuffer;
+
+    // The demo texture: a generated checkerboard, uploaded to a device-local
+    // VkImage. Created + filled now (the upload path is validated even before it
+    // is displayed); sampled once the view/sampler/descriptor/shader beats land.
+    private Texture texture;
 
     // Uniform buffers, one PER FRAME IN FLIGHT (same reasoning as the sync
     // objects: frame N+1's CPU write must not stomp frame N's in-flight GPU
@@ -169,6 +176,14 @@ public class Renderer {
                 + vertexBuffer.size() + " + " + indexBuffer.size()
                 + " bytes, device-local via staging).");
 
+        // A 256x256 checkerboard (32px cells = an 8x8 grid). Generated on the
+        // CPU, staged, and copied into a device-local image with the layout
+        // transitions Texture handles. A checkerboard is the classic
+        // nearest-vs-linear demonstrator -- it earns its keep when we sample it.
+        this.texture = Texture.create(device, commandPool,
+                checkerboardPixels(256, 256, 32), 256, 256);
+        System.out.println("Checkerboard texture created (256x256, device-local via staging).");
+
         createUniformBuffers();
         createDescriptors();
         createCommandBuffers();
@@ -198,16 +213,20 @@ public class Renderer {
      */
     private void createDescriptors() {
         try (MemoryStack stack = stackPush()) {
-            // ---- Pool: capacity for MAX_FRAMES_IN_FLIGHT uniform-buffer
-            // descriptors across as many sets. Pools exist so set allocation
-            // is cheap and arena-like (destroying the pool frees every set).
-            VkDescriptorPoolSize.Buffer poolSize = VkDescriptorPoolSize.calloc(1, stack);
-            poolSize.type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
-            poolSize.descriptorCount(MAX_FRAMES_IN_FLIGHT);
+            // ---- Pool: capacity must cover EACH descriptor TYPE we allocate --
+            // one uniform-buffer descriptor AND one combined-image-sampler
+            // descriptor per frame in flight. maxSets is still one set per frame
+            // (each set holds both bindings). Pools exist so set allocation is
+            // cheap and arena-like (destroying the pool frees every set).
+            VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(2, stack);
+            poolSizes.get(0).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+            poolSizes.get(0).descriptorCount(MAX_FRAMES_IN_FLIGHT);
+            poolSizes.get(1).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+            poolSizes.get(1).descriptorCount(MAX_FRAMES_IN_FLIGHT);
 
             VkDescriptorPoolCreateInfo poolInfo = VkDescriptorPoolCreateInfo.calloc(stack);
             poolInfo.sType(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO);
-            poolInfo.pPoolSizes(poolSize);
+            poolInfo.pPoolSizes(poolSizes);
             poolInfo.maxSets(MAX_FRAMES_IN_FLIGHT);
 
             LongBuffer pPool = stack.longs(VK_NULL_HANDLE);
@@ -235,7 +254,10 @@ public class Renderer {
                 descriptorSets[i] = pSets.get(i);
             }
 
-            // ---- Wire each set's binding 0 to its frame's UBO (once).
+            // ---- Wire each set's two bindings (once): binding 0 -> this frame's
+            // UBO, binding 1 -> the shared texture (view + sampler). The UBO is
+            // per-frame (its CONTENTS change each frame); the texture is the SAME
+            // image for every set (one picture), so all sets point at it.
             for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
                 VkDescriptorBufferInfo.Buffer bufferInfo =
                         VkDescriptorBufferInfo.calloc(1, stack);
@@ -243,15 +265,31 @@ public class Renderer {
                 bufferInfo.offset(0);
                 bufferInfo.range(VK_WHOLE_SIZE);
 
-                VkWriteDescriptorSet.Buffer write = VkWriteDescriptorSet.calloc(1, stack);
-                write.sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
-                write.dstSet(descriptorSets[i]);
-                write.dstBinding(0);                                  // = shader binding 0
-                write.descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
-                write.descriptorCount(1);
-                write.pBufferInfo(bufferInfo);
+                // The image must be in SHADER_READ_ONLY_OPTIMAL here -- exactly
+                // the layout Texture's upload left it in.
+                VkDescriptorImageInfo.Buffer imageInfo =
+                        VkDescriptorImageInfo.calloc(1, stack);
+                imageInfo.imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                imageInfo.imageView(texture.view());
+                imageInfo.sampler(texture.sampler());
 
-                vkUpdateDescriptorSets(device.handle(), write, null);
+                // One write per binding, applied together.
+                VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(2, stack);
+                writes.get(0).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+                writes.get(0).dstSet(descriptorSets[i]);
+                writes.get(0).dstBinding(0);                          // = shader binding 0
+                writes.get(0).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+                writes.get(0).descriptorCount(1);
+                writes.get(0).pBufferInfo(bufferInfo);
+
+                writes.get(1).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+                writes.get(1).dstSet(descriptorSets[i]);
+                writes.get(1).dstBinding(1);                          // = shader binding 1
+                writes.get(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+                writes.get(1).descriptorCount(1);
+                writes.get(1).pImageInfo(imageInfo);
+
+                vkUpdateDescriptorSets(device.handle(), writes, null);
             }
         }
         System.out.println("Descriptor pool + " + MAX_FRAMES_IN_FLIGHT + " sets created.");
@@ -278,6 +316,28 @@ public class Renderer {
                 0f,          0f,  1f, 0f,   // column 2
                 ox / aspect, oy,  0f, 1f,   // column 3 (translation)
         };
+    }
+
+    /**
+     * Generate a {@code width} x {@code height} RGBA checkerboard, {@code cell}
+     * texels per square, as tightly-packed R8G8B8A8 bytes (row-major,
+     * top-to-bottom). Demo content like QUAD_VERTICES -- destined to become
+     * "load a PNG" once there is an image decoder. Two opaque colors (magenta /
+     * charcoal) so the squares read clearly when we finally sample it.
+     */
+    private static byte[] checkerboardPixels(int width, int height, int cell) {
+        byte[] px = new byte[width * height * 4];
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                boolean on = (((x / cell) + (y / cell)) & 1) == 0;
+                int i = (y * width + x) * 4;
+                px[i]     = (byte) (on ? 0xFF : 0x20);  // R
+                px[i + 1] = (byte) (on ? 0x00 : 0x20);  // G
+                px[i + 2] = (byte) (on ? 0xFF : 0x20);  // B
+                px[i + 3] = (byte) 0xFF;                // A (opaque)
+            }
+        }
+        return px;
     }
 
     // ------------------------------------------------------------------
@@ -769,6 +829,9 @@ public class Renderer {
             for (Buffer ubo : uniformBuffers) {
                 ubo.close();
             }
+        }
+        if (texture != null) {
+            texture.close();
         }
         if (indexBuffer != null) {
             indexBuffer.close();

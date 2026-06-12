@@ -4,6 +4,7 @@
 // according to the pipeline's binding/attribute descriptions (see Pipeline).
 layout(location = 0) in vec2 inPosition;
 layout(location = 1) in vec3 inColor;
+layout(location = 2) in vec2 inUV;     // texture coordinate (matches Pipeline attribute 2)
 
 // UNIFORM BUFFER -- the data tier above push constants: a real buffer, BOUND
 // through a descriptor set rather than pushed into the command stream.
@@ -15,12 +16,14 @@ layout(binding = 0) uniform TransformUbo {
     mat4 transform;   // built CPU-side each frame: aspect * orbit * spin
 } ubo;
 
-// Output to the fragment shader (interpolated).
+// Outputs to the fragment shader (interpolated across the triangle).
 layout(location = 0) out vec3 fragColor;
+layout(location = 1) out vec2 fragUV;
 
 void main() {
     // All motion now lives in the CPU-built matrix -- the shader just applies
     // it. This is the shape real renderers have: transforms are DATA.
     gl_Position = ubo.transform * vec4(inPosition, 0.0, 1.0);
     fragColor = inColor;
+    fragUV = inUV;   // hardware interpolates this per fragment
 }

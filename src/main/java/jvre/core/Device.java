@@ -9,6 +9,7 @@ import org.lwjgl.vulkan.VkExtensionProperties;
 import org.lwjgl.vulkan.VkPhysicalDevice;
 import org.lwjgl.vulkan.VkPhysicalDeviceFeatures;
 import org.lwjgl.vulkan.VkPhysicalDeviceFeatures2;
+import org.lwjgl.vulkan.VkPhysicalDeviceMemoryProperties;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
 import org.lwjgl.vulkan.VkPhysicalDeviceVulkan13Features;
 import org.lwjgl.vulkan.VkQueue;
@@ -129,6 +130,39 @@ public class Device {
     public VkQueue presentQueue()            { return presentQueue; }
     public int graphicsFamily()              { return graphicsFamily; }
     public int presentFamily()               { return presentFamily; }
+
+    /**
+     * The memory-type hunt -- owned HERE because the PHYSICAL DEVICE is what
+     * advertises the GPU's table of memory TYPES (each pointing into a HEAP --
+     * e.g. 24 GB of VRAM, or system RAM). Both {@link Buffer} and {@link Texture}
+     * need it: given the resource's allowed-types bitmask (from
+     * vkGet{Buffer,Image}MemoryRequirements) and the PROPERTIES we require,
+     * return the index of a memory type that satisfies BOTH:
+     *   - the resource allows it: bit {@code i} set in {@code typeFilter}, AND
+     *   - it has every property asked for: HOST_VISIBLE (CPU can map it),
+     *     HOST_COHERENT (no manual flushes), DEVICE_LOCAL (in VRAM), ...
+     * On discrete GPUs HOST_VISIBLE and DEVICE_LOCAL are usually DIFFERENT types
+     * -- that split is exactly why staging uploads exist.
+     */
+    public int findMemoryType(int typeFilter, int required) {
+        try (MemoryStack stack = stackPush()) {
+            VkPhysicalDeviceMemoryProperties memProps =
+                    VkPhysicalDeviceMemoryProperties.malloc(stack);
+            vkGetPhysicalDeviceMemoryProperties(physicalDevice, memProps);
+
+            for (int i = 0; i < memProps.memoryTypeCount(); i++) {
+                boolean allowed = (typeFilter & (1 << i)) != 0;
+                boolean hasProps =
+                        (memProps.memoryTypes(i).propertyFlags() & required) == required;
+                if (allowed && hasProps) {
+                    return i;
+                }
+            }
+            throw new RuntimeException("No memory type with properties 0x"
+                    + Integer.toHexString(required) + " (filter 0x"
+                    + Integer.toHexString(typeFilter) + ")");
+        }
+    }
 
     public void close() {
         vkDestroyDevice(handle, null);

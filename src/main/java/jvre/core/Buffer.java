@@ -4,22 +4,16 @@ import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkBufferCopy;
 import org.lwjgl.vulkan.VkBufferCreateInfo;
-import org.lwjgl.vulkan.VkCommandBuffer;
-import org.lwjgl.vulkan.VkCommandBufferAllocateInfo;
-import org.lwjgl.vulkan.VkCommandBufferBeginInfo;
-import org.lwjgl.vulkan.VkCommandBufferSubmitInfo;
 import org.lwjgl.vulkan.VkMemoryAllocateInfo;
 import org.lwjgl.vulkan.VkMemoryRequirements;
-import org.lwjgl.vulkan.VkPhysicalDeviceMemoryProperties;
-import org.lwjgl.vulkan.VkSubmitInfo2;
 
 import java.nio.LongBuffer;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
+import static org.lwjgl.system.MemoryUtil.memByteBuffer;
 import static org.lwjgl.system.MemoryUtil.memFloatBuffer;
 import static org.lwjgl.system.MemoryUtil.memShortBuffer;
 import static org.lwjgl.vulkan.VK10.*;
-import static org.lwjgl.vulkan.VK13.*;
 
 /**
  * A VkBuffer plus the VkDeviceMemory backing it -- jvre's first GPU memory.
@@ -129,7 +123,7 @@ public class Buffer {
             allocInfo.sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
             allocInfo.allocationSize(memReq.size());
             allocInfo.memoryTypeIndex(
-                    findMemoryType(stack, memReq.memoryTypeBits(), memoryProperties));
+                    device.findMemoryType(memReq.memoryTypeBits(), memoryProperties));
 
             LongBuffer pMemory = stack.longs(VK_NULL_HANDLE);
             Vk.check(vkAllocateMemory(device.handle(), allocInfo, null, pMemory),
@@ -182,6 +176,26 @@ public class Buffer {
         }
     }
 
+    /**
+     * Same as {@link #uploadFloats}, for raw bytes -- used to stage texture
+     * PIXELS (e.g. R8G8B8A8 = 4 bytes/texel) into a HOST_VISIBLE buffer before
+     * the GPU copies them into an image ({@link Texture}).
+     */
+    public void uploadBytes(byte[] data) {
+        long bytes = data.length;
+        if (bytes > size) {
+            throw new IllegalArgumentException(
+                    "Upload of " + bytes + " bytes into a " + size + "-byte buffer");
+        }
+        try (MemoryStack stack = stackPush()) {
+            PointerBuffer pData = stack.mallocPointer(1);
+            Vk.check(vkMapMemory(device.handle(), memory, 0, bytes, 0, pData),
+                    "Failed to map buffer memory");
+            memByteBuffer(pData.get(0), data.length).put(data);
+            vkUnmapMemory(device.handle(), memory);
+        }
+    }
+
     /** The VkBuffer handle -- for vkCmdBindVertexBuffers / vkCmdCopyBuffer. */
     public long handle() {
         return handle;
@@ -203,83 +217,12 @@ public class Buffer {
 
     /** Record + submit a one-shot GPU copy from src to dst, and wait for it. */
     private static void copy(Device device, long commandPool, Buffer src, Buffer dst, long bytes) {
-        try (MemoryStack stack = stackPush()) {
-            // A throwaway command buffer from the renderer's pool.
-            VkCommandBufferAllocateInfo allocInfo = VkCommandBufferAllocateInfo.calloc(stack);
-            allocInfo.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
-            allocInfo.commandPool(commandPool);
-            allocInfo.level(VK_COMMAND_BUFFER_LEVEL_PRIMARY);
-            allocInfo.commandBufferCount(1);
-
-            PointerBuffer pCmd = stack.mallocPointer(1);
-            Vk.check(vkAllocateCommandBuffers(device.handle(), allocInfo, pCmd),
-                    "Failed to allocate the transfer command buffer");
-            VkCommandBuffer cmd = new VkCommandBuffer(pCmd.get(0), device.handle());
-
-            // ONE_TIME_SUBMIT: recorded, submitted once, thrown away -- the
-            // driver may skip optimizing it for replay.
-            VkCommandBufferBeginInfo beginInfo = VkCommandBufferBeginInfo.calloc(stack);
-            beginInfo.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
-            beginInfo.flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
-            Vk.check(vkBeginCommandBuffer(cmd, beginInfo),
-                    "Failed to begin the transfer command buffer");
-
-            VkBufferCopy.Buffer region = VkBufferCopy.calloc(1, stack);
-            region.size(bytes);  // src/dst offsets stay 0
-            vkCmdCopyBuffer(cmd, src.handle(), dst.handle(), region);
-
-            Vk.check(vkEndCommandBuffer(cmd),
-                    "Failed to record the transfer command buffer");
-
-            // Submit with no semaphores/fence and just block the queue until it
-            // lands (vkQueueWaitIdle is also a full memory barrier, so the
-            // vertex-input reads that follow later are safe). Crude but right
-            // for startup uploads; streaming assets mid-frame would use a fence
-            // and overlap instead.
-            VkCommandBufferSubmitInfo.Buffer cmdInfo = VkCommandBufferSubmitInfo.calloc(1, stack);
-            cmdInfo.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO);
-            cmdInfo.commandBuffer(cmd);
-
-            VkSubmitInfo2.Buffer submitInfo = VkSubmitInfo2.calloc(1, stack);
-            submitInfo.sType(VK_STRUCTURE_TYPE_SUBMIT_INFO_2);
-            submitInfo.pCommandBufferInfos(cmdInfo);
-
-            Vk.check(vkQueueSubmit2(device.graphicsQueue(), submitInfo, VK_NULL_HANDLE),
-                    "Failed to submit the buffer copy");
-            Vk.check(vkQueueWaitIdle(device.graphicsQueue()),
-                    "Failed waiting for the buffer copy");
-
-            vkFreeCommandBuffers(device.handle(), commandPool, pCmd);
-        }
-    }
-
-    /**
-     * The memory-type hunt. The GPU advertises a small table of memory TYPES
-     * (each pointing into a HEAP -- e.g. 24 GB of VRAM, or system RAM). A type
-     * is right for us when BOTH:
-     *   - the buffer allows it: bit {@code i} set in {@code typeFilter}
-     *     (from vkGetBufferMemoryRequirements), AND
-     *   - it has every property we asked for: HOST_VISIBLE (CPU can map it),
-     *     HOST_COHERENT (no manual flushes), DEVICE_LOCAL (in VRAM, fastest
-     *     for the GPU), ...
-     * On discrete GPUs HOST_VISIBLE and DEVICE_LOCAL are usually DIFFERENT
-     * types -- that split is exactly why staging uploads exist.
-     */
-    private int findMemoryType(MemoryStack stack, int typeFilter, int required) {
-        VkPhysicalDeviceMemoryProperties memProps =
-                VkPhysicalDeviceMemoryProperties.malloc(stack);
-        vkGetPhysicalDeviceMemoryProperties(device.physicalDevice(), memProps);
-
-        for (int i = 0; i < memProps.memoryTypeCount(); i++) {
-            boolean allowed = (typeFilter & (1 << i)) != 0;
-            boolean hasProps =
-                    (memProps.memoryTypes(i).propertyFlags() & required) == required;
-            if (allowed && hasProps) {
-                return i;
+        Commands.oneShot(device, commandPool, cmd -> {
+            try (MemoryStack stack = stackPush()) {
+                VkBufferCopy.Buffer region = VkBufferCopy.calloc(1, stack);
+                region.size(bytes);  // src/dst offsets stay 0
+                vkCmdCopyBuffer(cmd, src.handle(), dst.handle(), region);
             }
-        }
-        throw new RuntimeException("No memory type with properties 0x"
-                + Integer.toHexString(required) + " (filter 0x"
-                + Integer.toHexString(typeFilter) + ")");
+        });
     }
 }

@@ -95,23 +95,26 @@ public class Pipeline {
             //   STRIDE bytes per vertex (per-instance data would use RATE_INSTANCE).
             //   ATTRIBUTES = what each shader `location` reads out of a binding.
             //   Formats double as "data shapes": R32G32_SFLOAT = vec2, etc.
-            // Interleaved layout, 5 floats per vertex: [x y | r g b]
+            // Interleaved layout, 7 floats per vertex: [x y | r g b | u v]
             //   location 0 (vec2 inPosition) <- offset 0
-            //   location 1 (vec3 inColor)    <- offset 8 (after the 2 floats)
+            //   location 1 (vec3 inColor)    <- offset 8  (after 2 floats)
+            //   location 2 (vec2 inUV)       <- offset 20 (after 5 floats)
             // (Hardcoded to jvre's one vertex layout for now; becomes a
             // parameter the moment a second layout exists.)
             VkVertexInputBindingDescription.Buffer binding =
                     VkVertexInputBindingDescription.calloc(1, stack);
             binding.binding(0);
-            binding.stride(5 * Float.BYTES);
+            binding.stride(7 * Float.BYTES);
             binding.inputRate(VK_VERTEX_INPUT_RATE_VERTEX);
 
             VkVertexInputAttributeDescription.Buffer attributes =
-                    VkVertexInputAttributeDescription.calloc(2, stack);
+                    VkVertexInputAttributeDescription.calloc(3, stack);
             attributes.get(0).location(0).binding(0)
                     .format(VK_FORMAT_R32G32_SFLOAT).offset(0);
             attributes.get(1).location(1).binding(0)
                     .format(VK_FORMAT_R32G32B32_SFLOAT).offset(2 * Float.BYTES);
+            attributes.get(2).location(2).binding(0)
+                    .format(VK_FORMAT_R32G32_SFLOAT).offset(5 * Float.BYTES);
 
             VkPipelineVertexInputStateCreateInfo vertexInput =
                     VkPipelineVertexInputStateCreateInfo.calloc(stack);
@@ -175,22 +178,33 @@ public class Pipeline {
                     VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR));
 
             // ---- Descriptor set layout: the SHAPE of what the shader binds ----
-            // Not actual resources -- a schema: "binding 0 is one uniform
-            // buffer, visible to the vertex stage." Descriptor SETS (allocated
-            // by the Renderer) are instances of this shape, pointing at real
-            // buffers. Identically-defined layouts are compatible, so sets
-            // survive a pipeline rebuild (the resize format-change path).
-            VkDescriptorSetLayoutBinding.Buffer uboBinding =
-                    VkDescriptorSetLayoutBinding.calloc(1, stack);
-            uboBinding.binding(0);                                    // = shader binding 0
-            uboBinding.descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
-            uboBinding.descriptorCount(1);                            // arrays of UBOs exist; we bind one
-            uboBinding.stageFlags(VK_SHADER_STAGE_VERTEX_BIT);
+            // Not actual resources -- a schema. TWO bindings now:
+            //   binding 0 = one UNIFORM BUFFER, vertex stage         (the transform)
+            //   binding 1 = one COMBINED_IMAGE_SAMPLER, fragment stage (the texture)
+            // COMBINED_IMAGE_SAMPLER bundles an image VIEW + a SAMPLER into a
+            // single descriptor -- GLSL's `sampler2D`. (Vulkan also offers
+            // SEPARATE sampled-image + sampler descriptors; combined is the
+            // common, simplest case.) Descriptor SETS (allocated by the Renderer)
+            // are instances of this shape, pointing at real buffers/images.
+            // Identically-defined layouts are compatible, so sets survive a
+            // pipeline rebuild (the resize format-change path).
+            VkDescriptorSetLayoutBinding.Buffer bindings =
+                    VkDescriptorSetLayoutBinding.calloc(2, stack);
+
+            bindings.get(0).binding(0);                                  // = shader binding 0
+            bindings.get(0).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+            bindings.get(0).descriptorCount(1);                         // arrays exist; we bind one
+            bindings.get(0).stageFlags(VK_SHADER_STAGE_VERTEX_BIT);
+
+            bindings.get(1).binding(1);                                  // = shader binding 1
+            bindings.get(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+            bindings.get(1).descriptorCount(1);
+            bindings.get(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
 
             VkDescriptorSetLayoutCreateInfo setLayoutInfo =
                     VkDescriptorSetLayoutCreateInfo.calloc(stack);
             setLayoutInfo.sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
-            setLayoutInfo.pBindings(uboBinding);
+            setLayoutInfo.pBindings(bindings);
 
             LongBuffer pSetLayout = stack.longs(VK_NULL_HANDLE);
             Vk.check(vkCreateDescriptorSetLayout(device.handle(), setLayoutInfo, null, pSetLayout),

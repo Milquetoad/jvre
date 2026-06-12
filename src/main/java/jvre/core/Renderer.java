@@ -1,5 +1,6 @@
 package jvre.core;
 
+import org.joml.Matrix4f;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkClearValue;
@@ -63,27 +64,59 @@ public class Renderer {
     private static final String TRIANGLE_VERT = "/shaders/triangle.vert.spv";
     private static final String TRIANGLE_FRAG = "/shaders/triangle.frag.spv";
 
-    // The demo QUAD's geometry -- interleaved, 7 floats per vertex, matching
-    // Pipeline's binding/attribute descriptions: [x y | r g b | u v]. NDC
-    // coordinates (y DOWN); UVs use Vulkan's top-left texture origin (0,0 =
-    // top-left texel, 1,1 = bottom-right), so they track the corners directly.
-    // Only the 4 UNIQUE corners are stored; the index buffer below says which
-    // corners form which triangle. Demo content, destined to become API.
-    private static final float[] QUAD_VERTICES = {
-            //   x      y      r     g     b     u     v
-            -0.5f, -0.5f,  1.0f, 0.0f, 0.0f,  0.0f, 0.0f,   // 0: top left
-             0.5f, -0.5f,  0.0f, 1.0f, 0.0f,  1.0f, 0.0f,   // 1: top right
-             0.5f,  0.5f,  0.0f, 0.0f, 1.0f,  1.0f, 1.0f,   // 2: bottom right
-            -0.5f,  0.5f,  1.0f, 1.0f, 1.0f,  0.0f, 1.0f,   // 3: bottom left
+    // The demo CUBE's geometry -- interleaved, 8 floats per vertex:
+    // [x y z | r g b | u v]. 24 vertices (4 per face x 6 faces, NOT 8 shared
+    // corners): a textured, per-face-colored cube can't share corners, because
+    // each face needs its own full UVs (0..1) and its own color. Each face gets a
+    // solid tint; the grayscale checker texture is multiplied by it in the shader,
+    // so every face reads as its own color in a checker pattern. Model space,
+    // side 1 (corners at +/-0.5). Demo content, destined to become API.
+    private static final float[] CUBE_VERTICES = {
+            //    x      y      z       r     g     b      u     v
+            // +Z face (red)
+            -0.5f, -0.5f,  0.5f,   1.0f, 0.3f, 0.3f,  0.0f, 0.0f,
+             0.5f, -0.5f,  0.5f,   1.0f, 0.3f, 0.3f,  1.0f, 0.0f,
+             0.5f,  0.5f,  0.5f,   1.0f, 0.3f, 0.3f,  1.0f, 1.0f,
+            -0.5f,  0.5f,  0.5f,   1.0f, 0.3f, 0.3f,  0.0f, 1.0f,
+            // -Z face (green)
+             0.5f, -0.5f, -0.5f,   0.3f, 1.0f, 0.3f,  0.0f, 0.0f,
+            -0.5f, -0.5f, -0.5f,   0.3f, 1.0f, 0.3f,  1.0f, 0.0f,
+            -0.5f,  0.5f, -0.5f,   0.3f, 1.0f, 0.3f,  1.0f, 1.0f,
+             0.5f,  0.5f, -0.5f,   0.3f, 1.0f, 0.3f,  0.0f, 1.0f,
+            // +X face (blue)
+             0.5f, -0.5f,  0.5f,   0.3f, 0.3f, 1.0f,  0.0f, 0.0f,
+             0.5f, -0.5f, -0.5f,   0.3f, 0.3f, 1.0f,  1.0f, 0.0f,
+             0.5f,  0.5f, -0.5f,   0.3f, 0.3f, 1.0f,  1.0f, 1.0f,
+             0.5f,  0.5f,  0.5f,   0.3f, 0.3f, 1.0f,  0.0f, 1.0f,
+            // -X face (yellow)
+            -0.5f, -0.5f, -0.5f,   1.0f, 1.0f, 0.3f,  0.0f, 0.0f,
+            -0.5f, -0.5f,  0.5f,   1.0f, 1.0f, 0.3f,  1.0f, 0.0f,
+            -0.5f,  0.5f,  0.5f,   1.0f, 1.0f, 0.3f,  1.0f, 1.0f,
+            -0.5f,  0.5f, -0.5f,   1.0f, 1.0f, 0.3f,  0.0f, 1.0f,
+            // +Y face (cyan)
+            -0.5f,  0.5f,  0.5f,   0.3f, 1.0f, 1.0f,  0.0f, 0.0f,
+             0.5f,  0.5f,  0.5f,   0.3f, 1.0f, 1.0f,  1.0f, 0.0f,
+             0.5f,  0.5f, -0.5f,   0.3f, 1.0f, 1.0f,  1.0f, 1.0f,
+            -0.5f,  0.5f, -0.5f,   0.3f, 1.0f, 1.0f,  0.0f, 1.0f,
+            // -Y face (magenta)
+            -0.5f, -0.5f, -0.5f,   1.0f, 0.3f, 1.0f,  0.0f, 0.0f,
+             0.5f, -0.5f, -0.5f,   1.0f, 0.3f, 1.0f,  1.0f, 0.0f,
+             0.5f, -0.5f,  0.5f,   1.0f, 0.3f, 1.0f,  1.0f, 1.0f,
+            -0.5f, -0.5f,  0.5f,   1.0f, 0.3f, 1.0f,  0.0f, 1.0f,
     };
 
-    // Two triangles sharing the 0-2 diagonal: 6 indices, 4 vertices. At quad
-    // scale this saves 2 vertices; in a real mesh nearly every vertex is shared
-    // by ~6 triangles, so indexing roughly halves vertex memory/bandwidth.
-    // shorts = VK_INDEX_TYPE_UINT16 (fine below 65k vertices; UINT32 above).
-    private static final short[] QUAD_INDICES = {
-            0, 1, 2,   // top-left, top-right, bottom-right
-            2, 3, 0,   // bottom-right, bottom-left, top-left
+    // 36 indices = 6 faces x 2 triangles x 3. Each face's 4 corners (base b) form
+    // two triangles b,b+1,b+2 and b+2,b+3,b -- the same diagonal split as the old
+    // quad. Winding is consistent per face, but we cull NONE for now, so it does
+    // not affect visibility; the DEPTH buffer alone makes the cube solid.
+    // shorts = VK_INDEX_TYPE_UINT16.
+    private static final short[] CUBE_INDICES = {
+             0,  1,  2,   2,  3,  0,   // +Z (red)
+             4,  5,  6,   6,  7,  4,   // -Z (green)
+             8,  9, 10,  10, 11,  8,   // +X (blue)
+            12, 13, 14,  14, 15, 12,   // -X (yellow)
+            16, 17, 18,  18, 19, 16,   // +Y (cyan)
+            20, 21, 22,  22, 23, 20,   // -Y (magenta)
     };
 
     private final Device device;
@@ -158,7 +191,8 @@ public class Renderer {
         // image format (dynamic rendering's one remaining coupling).
         this.device = new Device(instance, surface);
         this.swapchain = new Swapchain(device, surface, window);
-        this.pipeline = new Pipeline(device, swapchain.imageFormat(), TRIANGLE_VERT, TRIANGLE_FRAG);
+        this.pipeline = new Pipeline(device, swapchain.imageFormat(), swapchain.depthFormat(),
+                TRIANGLE_VERT, TRIANGLE_FRAG);
 
         // Pool first: the vertex-buffer upload below records a one-shot
         // transfer command buffer from it.
@@ -169,9 +203,9 @@ public class Renderer {
         // first version of this used plain HOST_VISIBLE memory: simpler, but
         // the GPU then re-reads it over the bus every frame.)
         this.vertexBuffer = Buffer.deviceLocal(device, commandPool,
-                QUAD_VERTICES, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+                CUBE_VERTICES, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
         this.indexBuffer = Buffer.deviceLocal(device, commandPool,
-                QUAD_INDICES, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+                CUBE_INDICES, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
         System.out.println("Vertex + index buffers created ("
                 + vertexBuffer.size() + " + " + indexBuffer.size()
                 + " bytes, device-local via staging).");
@@ -296,35 +330,45 @@ public class Renderer {
     }
 
     /**
-     * The per-frame transform, COLUMN-major as GLSL expects: aspect-correction
-     * * orbit-translation * spin-rotation, composed by hand (a 2D affine map
-     * needs no library; JOML arrives with 3D). Deriving the columns of
-     * A(1/a) * T(ox,oy) * R(t):
-     *   col0 = ( cos/a,  sin, 0, 0)        col2 = (0, 0, 1, 0)
-     *   col1 = (-sin/a,  cos, 0, 0)        col3 = (ox/a, oy, 0, 1)
-     * Aspect divides only x AFTER everything else, so both the quad's shape
-     * and its orbit path stay round on any window.
+     * The per-frame model-view-projection, COLUMN-major as GLSL/std140 expect.
+     * JOML now does the matrix work that "arrives with 3D" (the hand-rolled 2D
+     * affine is retired). Three stages, multiplied proj * view * model:
+     *   - MODEL: a tumble around two axes (X and Y at different rates) so all six
+     *     cube faces rotate into view, and depth testing visibly hides the far
+     *     faces behind the near ones.
+     *   - VIEW: push the world 2.5 units down -z (camera at the origin looking
+     *     down -z, the OpenGL/JOML convention).
+     *   - PROJECTION: a real perspective frustum, 45 deg vertical FOV.
+     *
+     * Two Vulkan-isms JOML must be told about (it defaults to OpenGL):
+     *   - zZeroToOne = true: Vulkan clip-space depth is [0,1], not GL's [-1,1]
+     *     (gets depth testing right once beat 2 lands).
+     *   - flip Y (negate proj.m11): Vulkan clip/NDC Y points DOWN vs GL's UP
+     *     (otherwise everything renders upside down).
      */
-    private float[] transformMatrix(float time, float aspect) {
-        float c = (float) Math.cos(time);          // spin: 1 rad/s
-        float s = (float) Math.sin(time);
-        float ox = 0.35f * (float) Math.cos(time * 0.5);  // orbit: slower, radius 0.35
-        float oy = 0.35f * (float) Math.sin(time * 0.5);
-        return new float[] {
-                c / aspect,  s,   0f, 0f,   // column 0
-               -s / aspect,  c,   0f, 0f,   // column 1
-                0f,          0f,  1f, 0f,   // column 2
-                ox / aspect, oy,  0f, 1f,   // column 3 (translation)
-        };
+    private float[] modelViewProjection(float time, float aspect) {
+        Matrix4f model = new Matrix4f()
+                .rotateX(time * 0.6f)   // tumble around two axes so all six
+                .rotateY(time);         // faces come into view
+        Matrix4f view = new Matrix4f().translate(0f, 0f, -2.5f);
+        Matrix4f proj = new Matrix4f().perspective(
+                (float) Math.toRadians(45.0), aspect, 0.1f, 10.0f, true);
+        proj.m11(proj.m11() * -1.0f);  // Vulkan Y-flip
+
+        float[] out = new float[16];
+        proj.mul(view).mul(model).get(out);  // proj*view*model -> column-major floats
+        return out;
     }
 
     /**
-     * Generate a {@code width} x {@code height} RGBA checkerboard, {@code cell}
-     * texels per square, as tightly-packed R8G8B8A8 bytes (row-major,
-     * top-to-bottom). Demo content like QUAD_VERTICES -- destined to become
-     * "load a PNG" once there is an image decoder. One opaque color (magenta)
-     * and one FULLY TRANSPARENT cell (alpha 0) so alpha blending is visible: the
-     * clear-color background shows through in a checker pattern.
+     * Generate a {@code width} x {@code height} GRAYSCALE checkerboard, {@code
+     * cell} texels per square, as tightly-packed OPAQUE R8G8B8A8 bytes (row-major,
+     * top-to-bottom). Demo content -- destined to become "load a PNG". Grayscale
+     * (white / dark gray) on purpose: triangle.frag multiplies it by the per-face
+     * vertex color, so each cube face shows as its own tint in a checker pattern.
+     * (Earlier, for the alpha-blend beat, half the cells were transparent magenta;
+     * the cube wants an opaque, tintable texture. The blend pipeline state stays
+     * on -- opaque alpha just makes it a no-op.)
      */
     private static byte[] checkerboardPixels(int width, int height, int cell) {
         byte[] px = new byte[width * height * 4];
@@ -332,10 +376,9 @@ public class Renderer {
             for (int x = 0; x < width; x++) {
                 boolean on = (((x / cell) + (y / cell)) & 1) == 0;
                 int i = (y * width + x) * 4;
-                px[i]     = (byte) (on ? 0xFF : 0x20);  // R
-                px[i + 1] = (byte) (on ? 0x00 : 0x20);  // G
-                px[i + 2] = (byte) (on ? 0xFF : 0x20);  // B
-                px[i + 3] = (byte) (on ? 0xFF : 0x00);  // A: magenta opaque, other cells transparent
+                int v = on ? 0xFF : 0x40;               // white vs dark gray
+                px[i] = px[i + 1] = px[i + 2] = (byte) v;
+                px[i + 3] = (byte) 0xFF;                // opaque
             }
         }
         return px;
@@ -411,6 +454,11 @@ public class Renderer {
             VkClearValue.Buffer clearValue = VkClearValue.calloc(1, stack);
             clearValue.get(0).color().float32(stack.floats(clearR, clearG, clearB, 1.0f));
 
+            // The depth clear: 1.0 = the FAR plane, so the first fragment at any
+            // pixel always wins the LESS test (nothing is "in front of" a fresh frame).
+            VkClearValue depthClear = VkClearValue.calloc(stack);
+            depthClear.depthStencil().depth(1.0f).stencil(0);
+
             // One reusable image-memory barrier struct, in the synchronization2
             // spelling: VkImageMemoryBarrier2 carries its OWN src/dst STAGE masks.
             // (Under 1.0 sync the stages were per-CALL arguments that covered every
@@ -447,12 +495,25 @@ public class Renderer {
             colorAttachment.storeOp(VK_ATTACHMENT_STORE_OP_STORE);
             colorAttachment.clearValue(clearValue.get(0));
 
+            // The depth attachment: CLEAR on load; DONT_CARE on store -- the depth
+            // buffer is never read after the frame or presented, so storing it is
+            // wasted bandwidth.
+            VkRenderingAttachmentInfo depthAttachment =
+                    VkRenderingAttachmentInfo.calloc(stack);
+            depthAttachment.sType(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO);
+            depthAttachment.imageView(swapchain.depthView());
+            depthAttachment.imageLayout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+            depthAttachment.loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR);
+            depthAttachment.storeOp(VK_ATTACHMENT_STORE_OP_DONT_CARE);
+            depthAttachment.clearValue(depthClear);
+
             VkRenderingInfo renderingInfo = VkRenderingInfo.calloc(stack);
             renderingInfo.sType(VK_STRUCTURE_TYPE_RENDERING_INFO);
             renderingInfo.renderArea().offset().x(0).y(0);           // whole image
             renderingInfo.renderArea().extent().width(swapchain.width()).height(swapchain.height());
             renderingInfo.layerCount(1);
             renderingInfo.pColorAttachments(colorAttachment);  // colorAttachmentCount inferred from the buffer
+            renderingInfo.pDepthAttachment(depthAttachment);
 
             Vk.check(vkBeginCommandBuffer(cmd, beginInfo),
                     "Failed to begin the command buffer");
@@ -469,6 +530,44 @@ public class Renderer {
             barrier.dstStageMask(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
             barrier.dstAccessMask(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
             vkCmdPipelineBarrier2(cmd, depInfo);
+
+            // ---- Barrier 1b: make the DEPTH image writable (UNDEFINED -> DEPTH) ----
+            // Its own barrier: different image, DEPTH aspect, and the depth-test
+            // stages (EARLY/LATE_FRAGMENT_TESTS) rather than color output. No
+            // "after" transition -- the depth buffer is never presented and we
+            // DONT_CARE about storing it, so one transition per frame suffices.
+            VkImageMemoryBarrier2.Buffer depthBarrier = VkImageMemoryBarrier2.calloc(1, stack);
+            depthBarrier.sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2);
+            depthBarrier.image(swapchain.depthImage());
+            depthBarrier.srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+            depthBarrier.dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+            depthBarrier.oldLayout(VK_IMAGE_LAYOUT_UNDEFINED);
+            depthBarrier.newLayout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+            // SRC must cover the PREVIOUS frame's depth writes. The depth buffer is
+            // a SINGLE image SHARED by all frames in flight (unlike the per-frame
+            // UBOs, or the swapchain's rotating color images ordered by acquire +
+            // semaphores). So this layout transition -- itself a write -- races the
+            // prior frame's depth-attachment writes unless we wait for them. With
+            // src = NONE the sync-validation layer (rightly) flagged a WAW hazard;
+            // gating on the depth-test stages + DEPTH write makes the transition
+            // wait. The first frame has no prior depth write -- harmless.
+            depthBarrier.srcStageMask(VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT
+                    | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT);
+            depthBarrier.srcAccessMask(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+            depthBarrier.dstStageMask(VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT
+                    | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT);
+            depthBarrier.dstAccessMask(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+                    | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
+            depthBarrier.subresourceRange().aspectMask(VK_IMAGE_ASPECT_DEPTH_BIT);
+            depthBarrier.subresourceRange().baseMipLevel(0);
+            depthBarrier.subresourceRange().levelCount(1);
+            depthBarrier.subresourceRange().baseArrayLayer(0);
+            depthBarrier.subresourceRange().layerCount(1);
+
+            VkDependencyInfo depthDep = VkDependencyInfo.calloc(stack);
+            depthDep.sType(VK_STRUCTURE_TYPE_DEPENDENCY_INFO);
+            depthDep.pImageMemoryBarriers(depthBarrier);
+            vkCmdPipelineBarrier2(cmd, depthDep);
 
             // ---- Render, via dynamic rendering (no render pass / framebuffer) ----
             // loadOp=CLEAR has already filled the image (the orange background)
@@ -522,7 +621,7 @@ public class Renderer {
             // not duplicated). Offsets: first index 0, vertex offset 0 (added
             // to every index -- handy for packing many meshes in one buffer),
             // first instance 0.
-            vkCmdDrawIndexed(cmd, QUAD_INDICES.length, 1, 0, 0, 0);
+            vkCmdDrawIndexed(cmd, CUBE_INDICES.length, 1, 0, 0, 0);
 
             vkCmdEndRendering(cmd);
 
@@ -655,7 +754,7 @@ public class Renderer {
             // Rewrite this slot's UBO with the fresh transform (safe: the fence
             // wait above guarantees the GPU finished reading this slot's UBO).
             float aspect = swapchain.width() / (float) swapchain.height();
-            uniformBuffers[currentFrame].uploadFloats(transformMatrix(time, aspect));
+            uniformBuffers[currentFrame].uploadFloats(modelViewProjection(time, aspect));
 
             // Re-record this slot's command buffer for the image we just got
             // (safe for the same fence reason).
@@ -778,7 +877,8 @@ public class Renderer {
         // window dragged to a monitor with different surface support): rebake.
         if (swapchain.imageFormat() != oldFormat) {
             pipeline.close();
-            pipeline = new Pipeline(device, swapchain.imageFormat(), TRIANGLE_VERT, TRIANGLE_FRAG);
+            pipeline = new Pipeline(device, swapchain.imageFormat(), swapchain.depthFormat(),
+                    TRIANGLE_VERT, TRIANGLE_FRAG);
         }
 
         // Drop any resize flag raised by the burst of events we just handled --

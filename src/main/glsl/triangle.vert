@@ -2,7 +2,7 @@
 
 // Vertex INPUTS -- fed per vertex from the bound vertex buffer, sliced up
 // according to the pipeline's binding/attribute descriptions (see Pipeline).
-layout(location = 0) in vec2 inPosition;
+layout(location = 0) in vec3 inPosition;   // 3D position now (cube)
 layout(location = 1) in vec3 inColor;
 layout(location = 2) in vec2 inUV;     // texture coordinate (matches Pipeline attribute 2)
 
@@ -23,7 +23,7 @@ layout(location = 1) out vec2 fragUV;
 void main() {
     // All motion now lives in the CPU-built matrix -- the shader just applies
     // it. This is the shape real renderers have: transforms are DATA.
-    gl_Position = ubo.transform * vec4(inPosition, 0.0, 1.0);
+    gl_Position = ubo.transform * vec4(inPosition, 1.0);   // inPosition is vec3 now
     fragColor = inColor;
     fragUV = inUV;   // hardware interpolates this per fragment
 }

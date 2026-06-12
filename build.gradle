@@ -22,6 +22,7 @@ repositories {
 
 ext {
     lwjglVersion = '3.3.4'
+    jomlVersion = '1.10.8'
     // We're on Windows x64. Other options exist (natives-linux, natives-macos, etc.)
     lwjglNatives = 'natives-windows'
 }
@@ -40,6 +41,11 @@ dependencies {
     implementation "org.lwjgl:lwjgl"
     implementation "org.lwjgl:lwjgl-glfw"
     implementation "org.lwjgl:lwjgl-vulkan"
+
+    // JOML (Java OpenGL Math Library): vectors + matrices, pure Java (no natives).
+    // Arrives now, WITH 3D -- the hand-rolled 2D affine matrix is retired. Builds
+    // the per-frame model-view-projection (perspective, translate/rotate, ...).
+    implementation "org.joml:joml:$jomlVersion"
 
     // Native libraries (.dll) for this platform, needed only at runtime.
     runtimeOnly "org.lwjgl:lwjgl::$lwjglNatives"

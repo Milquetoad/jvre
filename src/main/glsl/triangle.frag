@@ -32,8 +32,7 @@ void main() {
     // Keep the push-constant tier visibly alive: a gentle brightness pulse.
     float pulse = 0.85 + 0.15 * sin(pc.time * 3.0);
 
-    // The texture drives the color. The vertex color (fragColor) still flows in
-    // and could be multiplied here for a per-corner tint -- left out so the
-    // checkerboard reads clean for this first texture milestone.
-    outColor = vec4(texColor.rgb * pulse, texColor.a);
+    // The grayscale checker texture is tinted by the per-face vertex color, so
+    // each cube face reads as its own color. Times the brightness pulse.
+    outColor = vec4(texColor.rgb * fragColor * pulse, texColor.a);
 }

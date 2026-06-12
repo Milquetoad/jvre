@@ -2,7 +2,11 @@ package jvre.core;
 
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkExtent2D;
+import org.lwjgl.vulkan.VkFormatProperties;
+import org.lwjgl.vulkan.VkImageCreateInfo;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
+import org.lwjgl.vulkan.VkMemoryAllocateInfo;
+import org.lwjgl.vulkan.VkMemoryRequirements;
 import org.lwjgl.vulkan.VkSurfaceCapabilitiesKHR;
 import org.lwjgl.vulkan.VkSurfaceFormatKHR;
 import org.lwjgl.vulkan.VkSwapchainCreateInfoKHR;
@@ -39,6 +43,14 @@ public class Swapchain {
     private final int imageFormat;    // remembered: render pass / dynamic rendering need it
     private final int width;
     private final int height;
+
+    // Depth buffer -- sized to the swapchain extent, so it lives and dies WITH the
+    // swapchain (recreated together on resize). Non-final: set in a helper, not
+    // directly in the constructor body.
+    private int depthFormat;
+    private long depthImage;
+    private long depthMemory;
+    private long depthView;
 
     public Swapchain(Device device, Surface surface, Window window) {
         this.device = device;
@@ -128,6 +140,7 @@ public class Swapchain {
         }
 
         imageViews = createImageViews();
+        createDepthResources();
     }
 
     public long handle()         { return handle; }
@@ -137,9 +150,15 @@ public class Swapchain {
     public int imageCount()      { return images.length; }
     public long image(int i)     { return images[i]; }      // for pipeline barriers (layout transitions)
     public long imageView(int i) { return imageViews[i]; }  // for rendering (color attachment target)
+    public int depthFormat()     { return depthFormat; }    // baked into the Pipeline
+    public long depthView()      { return depthView; }      // depth attachment target (dynamic rendering)
+    public long depthImage()     { return depthImage; }     // for the layout-transition barrier
 
-    /** Destroy our image views, then the swapchain (which frees the images it owns). */
+    /** Destroy depth resources + our image views, then the swapchain (which frees its images). */
     public void close() {
+        vkDestroyImageView(device.handle(), depthView, null);
+        vkDestroyImage(device.handle(), depthImage, null);
+        vkFreeMemory(device.handle(), depthMemory, null);
         for (long view : imageViews) {
             vkDestroyImageView(device.handle(), view, null);
         }
@@ -191,6 +210,96 @@ public class Swapchain {
 
         System.out.println("Created " + views.length + " image views.");
         return views;
+    }
+
+    /**
+     * Create the depth buffer: one VkImage at the swapchain extent (DEVICE_LOCAL,
+     * DEPTH_STENCIL_ATTACHMENT usage) plus a DEPTH-aspect view. Same image+memory
+     * shape as a Texture, minus the upload and sampler -- it's a render target the
+     * GPU writes, never CPU data. Cleared and reused every frame; recreated with
+     * the swapchain (so it always matches the color images' size).
+     */
+    private void createDepthResources() {
+        depthFormat = findDepthFormat();
+
+        try (MemoryStack stack = stackPush()) {
+            VkImageCreateInfo imageInfo = VkImageCreateInfo.calloc(stack);
+            imageInfo.sType(VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO);
+            imageInfo.imageType(VK_IMAGE_TYPE_2D);
+            imageInfo.format(depthFormat);
+            imageInfo.extent().width(width).height(height).depth(1);
+            imageInfo.mipLevels(1);
+            imageInfo.arrayLayers(1);
+            imageInfo.tiling(VK_IMAGE_TILING_OPTIMAL);
+            imageInfo.initialLayout(VK_IMAGE_LAYOUT_UNDEFINED);
+            imageInfo.usage(VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
+            imageInfo.samples(VK_SAMPLE_COUNT_1_BIT);
+            imageInfo.sharingMode(VK_SHARING_MODE_EXCLUSIVE);
+
+            LongBuffer pImage = stack.longs(VK_NULL_HANDLE);
+            Vk.check(vkCreateImage(device.handle(), imageInfo, null, pImage),
+                    "Failed to create the depth image");
+            depthImage = pImage.get(0);
+
+            VkMemoryRequirements memReq = VkMemoryRequirements.malloc(stack);
+            vkGetImageMemoryRequirements(device.handle(), depthImage, memReq);
+
+            VkMemoryAllocateInfo allocInfo = VkMemoryAllocateInfo.calloc(stack);
+            allocInfo.sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
+            allocInfo.allocationSize(memReq.size());
+            allocInfo.memoryTypeIndex(device.findMemoryType(
+                    memReq.memoryTypeBits(), VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
+
+            LongBuffer pMem = stack.longs(VK_NULL_HANDLE);
+            Vk.check(vkAllocateMemory(device.handle(), allocInfo, null, pMem),
+                    "Failed to allocate depth image memory");
+            depthMemory = pMem.get(0);
+            Vk.check(vkBindImageMemory(device.handle(), depthImage, depthMemory, 0),
+                    "Failed to bind depth image memory");
+
+            VkImageViewCreateInfo viewInfo = VkImageViewCreateInfo.calloc(stack);
+            viewInfo.sType(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);
+            viewInfo.image(depthImage);
+            viewInfo.viewType(VK_IMAGE_VIEW_TYPE_2D);
+            viewInfo.format(depthFormat);
+            viewInfo.subresourceRange().aspectMask(VK_IMAGE_ASPECT_DEPTH_BIT);  // DEPTH, not COLOR
+            viewInfo.subresourceRange().baseMipLevel(0);
+            viewInfo.subresourceRange().levelCount(1);
+            viewInfo.subresourceRange().baseArrayLayer(0);
+            viewInfo.subresourceRange().layerCount(1);
+
+            LongBuffer pView = stack.longs(VK_NULL_HANDLE);
+            Vk.check(vkCreateImageView(device.handle(), viewInfo, null, pView),
+                    "Failed to create the depth image view");
+            depthView = pView.get(0);
+        }
+        System.out.println("Depth buffer created (" + width + "x" + height
+                + ", format " + depthFormat + ").");
+    }
+
+    /**
+     * Pick a depth format the GPU supports as a DEPTH_STENCIL_ATTACHMENT with
+     * OPTIMAL tiling. D32_SFLOAT (depth only, no stencil) is preferred and is
+     * effectively universal on desktop; the stencil-bearing formats are
+     * fallbacks. We query rather than assume -- format support is a device fact.
+     */
+    private int findDepthFormat() {
+        int[] candidates = {
+                VK_FORMAT_D32_SFLOAT,
+                VK_FORMAT_D32_SFLOAT_S8_UINT,
+                VK_FORMAT_D24_UNORM_S8_UINT,
+        };
+        try (MemoryStack stack = stackPush()) {
+            VkFormatProperties props = VkFormatProperties.malloc(stack);
+            for (int fmt : candidates) {
+                vkGetPhysicalDeviceFormatProperties(device.physicalDevice(), fmt, props);
+                if ((props.optimalTilingFeatures()
+                        & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0) {
+                    return fmt;
+                }
+            }
+        }
+        throw new RuntimeException("No supported depth-stencil attachment format found");
     }
 
     /** Prefer 8-bit BGRA in sRGB color space (correct-looking colors); else take the first. */

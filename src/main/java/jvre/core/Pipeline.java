@@ -6,6 +6,7 @@ import org.lwjgl.vulkan.VkDescriptorSetLayoutCreateInfo;
 import org.lwjgl.vulkan.VkGraphicsPipelineCreateInfo;
 import org.lwjgl.vulkan.VkPipelineColorBlendAttachmentState;
 import org.lwjgl.vulkan.VkPipelineColorBlendStateCreateInfo;
+import org.lwjgl.vulkan.VkPipelineDepthStencilStateCreateInfo;
 import org.lwjgl.vulkan.VkPipelineDynamicStateCreateInfo;
 import org.lwjgl.vulkan.VkPipelineInputAssemblyStateCreateInfo;
 import org.lwjgl.vulkan.VkPipelineLayoutCreateInfo;
@@ -63,7 +64,8 @@ public class Pipeline {
      * from GLSL by the Gradle compileShaders task), rendering into color
      * attachment(s) of the given format.
      */
-    public Pipeline(Device device, int colorFormat, String vertResource, String fragResource) {
+    public Pipeline(Device device, int colorFormat, int depthFormat,
+                    String vertResource, String fragResource) {
         this.device = device;
 
         try (MemoryStack stack = stackPush()) {
@@ -95,26 +97,27 @@ public class Pipeline {
             //   STRIDE bytes per vertex (per-instance data would use RATE_INSTANCE).
             //   ATTRIBUTES = what each shader `location` reads out of a binding.
             //   Formats double as "data shapes": R32G32_SFLOAT = vec2, etc.
-            // Interleaved layout, 7 floats per vertex: [x y | r g b | u v]
-            //   location 0 (vec2 inPosition) <- offset 0
-            //   location 1 (vec3 inColor)    <- offset 8  (after 2 floats)
-            //   location 2 (vec2 inUV)       <- offset 20 (after 5 floats)
-            // (Hardcoded to jvre's one vertex layout for now; becomes a
-            // parameter the moment a second layout exists.)
+            // Interleaved layout, 8 floats per vertex: [x y z | r g b | u v]
+            //   location 0 (vec3 inPosition) <- offset 0
+            //   location 1 (vec3 inColor)    <- offset 12 (after 3 floats)
+            //   location 2 (vec2 inUV)       <- offset 24 (after 6 floats)
+            // Position is vec3 now (3D); R32G32B32_SFLOAT = vec3. (Hardcoded to
+            // jvre's one vertex layout for now; becomes a parameter the moment a
+            // second layout exists.)
             VkVertexInputBindingDescription.Buffer binding =
                     VkVertexInputBindingDescription.calloc(1, stack);
             binding.binding(0);
-            binding.stride(7 * Float.BYTES);
+            binding.stride(8 * Float.BYTES);
             binding.inputRate(VK_VERTEX_INPUT_RATE_VERTEX);
 
             VkVertexInputAttributeDescription.Buffer attributes =
                     VkVertexInputAttributeDescription.calloc(3, stack);
             attributes.get(0).location(0).binding(0)
-                    .format(VK_FORMAT_R32G32_SFLOAT).offset(0);
+                    .format(VK_FORMAT_R32G32B32_SFLOAT).offset(0);
             attributes.get(1).location(1).binding(0)
-                    .format(VK_FORMAT_R32G32B32_SFLOAT).offset(2 * Float.BYTES);
+                    .format(VK_FORMAT_R32G32B32_SFLOAT).offset(3 * Float.BYTES);
             attributes.get(2).location(2).binding(0)
-                    .format(VK_FORMAT_R32G32_SFLOAT).offset(5 * Float.BYTES);
+                    .format(VK_FORMAT_R32G32_SFLOAT).offset(6 * Float.BYTES);
 
             VkPipelineVertexInputStateCreateInfo vertexInput =
                     VkPipelineVertexInputStateCreateInfo.calloc(stack);
@@ -153,6 +156,21 @@ public class Pipeline {
                     VkPipelineMultisampleStateCreateInfo.calloc(stack);
             multisampling.sType(VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO);
             multisampling.rasterizationSamples(VK_SAMPLE_COUNT_1_BIT);
+
+            // ---- Depth/stencil: test + write depth, LESS keeps the nearer ----
+            // The depth buffer is cleared to 1.0 (far) each frame; a fragment
+            // passes when its depth is LESS than what's stored, then writes its own
+            // depth. That is what makes a solid's near faces hide its far faces
+            // (visible once beat 3 draws a cube). No stencil. The depth attachment
+            // FORMAT is declared below in the dynamic-rendering create-info.
+            VkPipelineDepthStencilStateCreateInfo depthStencil =
+                    VkPipelineDepthStencilStateCreateInfo.calloc(stack);
+            depthStencil.sType(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO);
+            depthStencil.depthTestEnable(true);
+            depthStencil.depthWriteEnable(true);
+            depthStencil.depthCompareOp(VK_COMPARE_OP_LESS);
+            depthStencil.depthBoundsTestEnable(false);
+            depthStencil.stencilTestEnable(false);
 
             // ---- Color blending: straight ALPHA blending (src "over" dst) ----
             // One attachment state per color attachment. Per channel the hardware
@@ -260,6 +278,7 @@ public class Pipeline {
                     VkPipelineRenderingCreateInfo.calloc(stack);
             renderingInfo.sType(VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO);
             renderingInfo.pColorAttachmentFormats(stack.ints(colorFormat));
+            renderingInfo.depthAttachmentFormat(depthFormat);  // must match the depth attachment
 
             // ---- The bake ----
             VkGraphicsPipelineCreateInfo.Buffer pipelineInfo =
@@ -273,10 +292,10 @@ public class Pipeline {
             pipelineInfo.pRasterizationState(rasterizer);
             pipelineInfo.pMultisampleState(multisampling);
             pipelineInfo.pColorBlendState(colorBlend);
+            pipelineInfo.pDepthStencilState(depthStencil);
             pipelineInfo.pDynamicState(dynamicState);
             pipelineInfo.layout(layout);
             pipelineInfo.renderPass(VK_NULL_HANDLE);  // dynamic rendering: no render pass
-            // (No depth/stencil state either -- nothing 3D to occlude yet.)
 
             // Takes an ARRAY of create-infos + an optional VkPipelineCache --
             // built for creating many pipelines at once; we make one, uncached.

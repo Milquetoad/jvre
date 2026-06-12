@@ -1,6 +1,8 @@
 package jvre.core;
 
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.vulkan.VkDescriptorSetLayoutBinding;
+import org.lwjgl.vulkan.VkDescriptorSetLayoutCreateInfo;
 import org.lwjgl.vulkan.VkGraphicsPipelineCreateInfo;
 import org.lwjgl.vulkan.VkPipelineColorBlendAttachmentState;
 import org.lwjgl.vulkan.VkPipelineColorBlendStateCreateInfo;
@@ -52,8 +54,9 @@ import static org.lwjgl.vulkan.VK13.VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_
 public class Pipeline {
 
     private final Device device;
-    private final long layout;  // VkPipelineLayout -- empty for now (no uniforms yet)
-    private final long handle;  // VkPipeline
+    private final long descriptorSetLayout;  // the SHAPE of the shader's bound resources
+    private final long layout;               // VkPipelineLayout (set layout + push range)
+    private final long handle;               // VkPipeline
 
     /**
      * Build a graphics pipeline from two SPIR-V classpath resources (compiled
@@ -171,21 +174,44 @@ public class Pipeline {
             dynamicState.pDynamicStates(stack.ints(
                     VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR));
 
+            // ---- Descriptor set layout: the SHAPE of what the shader binds ----
+            // Not actual resources -- a schema: "binding 0 is one uniform
+            // buffer, visible to the vertex stage." Descriptor SETS (allocated
+            // by the Renderer) are instances of this shape, pointing at real
+            // buffers. Identically-defined layouts are compatible, so sets
+            // survive a pipeline rebuild (the resize format-change path).
+            VkDescriptorSetLayoutBinding.Buffer uboBinding =
+                    VkDescriptorSetLayoutBinding.calloc(1, stack);
+            uboBinding.binding(0);                                    // = shader binding 0
+            uboBinding.descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+            uboBinding.descriptorCount(1);                            // arrays of UBOs exist; we bind one
+            uboBinding.stageFlags(VK_SHADER_STAGE_VERTEX_BIT);
+
+            VkDescriptorSetLayoutCreateInfo setLayoutInfo =
+                    VkDescriptorSetLayoutCreateInfo.calloc(stack);
+            setLayoutInfo.sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
+            setLayoutInfo.pBindings(uboBinding);
+
+            LongBuffer pSetLayout = stack.longs(VK_NULL_HANDLE);
+            Vk.check(vkCreateDescriptorSetLayout(device.handle(), setLayoutInfo, null, pSetLayout),
+                    "Failed to create the descriptor set layout");
+            descriptorSetLayout = pSetLayout.get(0);
+
             // ---- Pipeline layout: the shader's external interface ----
-            // Descriptor sets (uniforms/textures) + push constants live here.
-            // First real content: a PUSH CONSTANT range -- 8 bytes ({ float
-            // time; float aspect; }) visible to the vertex stage, matching the
-            // shader's push_constant block. The spec guarantees at least 128
-            // bytes of push-constant space; tiny per-frame values like these
-            // are exactly what it's for. (Hardcoded to jvre's one block, like
-            // the vertex layout: parameterized the moment shaders vary.)
+            // Now holds BOTH data tiers: the descriptor set layout (binding 0,
+            // the transform UBO) and the push-constant range (4 bytes of time,
+            // FRAGMENT stage -- stageFlags must match where the shader's
+            // push_constant block is consumed). Spec floor for push space: 128
+            // bytes. (Hardcoded to jvre's one shader interface, like the
+            // vertex layout: parameterized the moment shaders vary.)
             VkPushConstantRange.Buffer pushRange = VkPushConstantRange.calloc(1, stack);
-            pushRange.stageFlags(VK_SHADER_STAGE_VERTEX_BIT);
+            pushRange.stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
             pushRange.offset(0);
-            pushRange.size(2 * Float.BYTES);
+            pushRange.size(Float.BYTES);
 
             VkPipelineLayoutCreateInfo layoutInfo = VkPipelineLayoutCreateInfo.calloc(stack);
             layoutInfo.sType(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
+            layoutInfo.pSetLayouts(stack.longs(descriptorSetLayout));
             layoutInfo.pPushConstantRanges(pushRange);
 
             LongBuffer pLayout = stack.longs(VK_NULL_HANDLE);
@@ -241,14 +267,20 @@ public class Pipeline {
         return handle;
     }
 
-    /** The VkPipelineLayout -- vkCmdPushConstants pushes against it. */
+    /** The VkPipelineLayout -- push constants and descriptor binds go against it. */
     public long layout() {
         return layout;
+    }
+
+    /** The descriptor set layout -- the Renderer allocates its sets from this shape. */
+    public long descriptorSetLayout() {
+        return descriptorSetLayout;
     }
 
     public void close() {
         vkDestroyPipeline(device.handle(), handle, null);
         vkDestroyPipelineLayout(device.handle(), layout, null);
+        vkDestroyDescriptorSetLayout(device.handle(), descriptorSetLayout, null);
     }
 
     // ------------------------------------------------------------------

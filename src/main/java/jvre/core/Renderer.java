@@ -9,6 +9,10 @@ import org.lwjgl.vulkan.VkCommandBufferBeginInfo;
 import org.lwjgl.vulkan.VkCommandBufferSubmitInfo;
 import org.lwjgl.vulkan.VkCommandPoolCreateInfo;
 import org.lwjgl.vulkan.VkDependencyInfo;
+import org.lwjgl.vulkan.VkDescriptorBufferInfo;
+import org.lwjgl.vulkan.VkDescriptorPoolCreateInfo;
+import org.lwjgl.vulkan.VkDescriptorPoolSize;
+import org.lwjgl.vulkan.VkDescriptorSetAllocateInfo;
 import org.lwjgl.vulkan.VkFenceCreateInfo;
 import org.lwjgl.vulkan.VkImageMemoryBarrier2;
 import org.lwjgl.vulkan.VkPresentInfoKHR;
@@ -19,6 +23,7 @@ import org.lwjgl.vulkan.VkSemaphoreCreateInfo;
 import org.lwjgl.vulkan.VkSemaphoreSubmitInfo;
 import org.lwjgl.vulkan.VkSubmitInfo2;
 import org.lwjgl.vulkan.VkViewport;
+import org.lwjgl.vulkan.VkWriteDescriptorSet;
 
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
@@ -84,6 +89,19 @@ public class Renderer {
     private Pipeline pipeline;
     private Buffer vertexBuffer;
     private Buffer indexBuffer;
+
+    // Uniform buffers, one PER FRAME IN FLIGHT (same reasoning as the sync
+    // objects: frame N+1's CPU write must not stomp frame N's in-flight GPU
+    // read; the slot's fence guards the handoff). Host-visible on purpose --
+    // rewritten every frame, so staging to VRAM would just add a copy.
+    private Buffer[] uniformBuffers;
+
+    // Descriptor machinery: the POOL allocates SETS; each set is a pointer
+    // table matching the Pipeline's descriptor set LAYOUT (the shape). Our
+    // sets are written ONCE -- each points permanently at its frame's UBO;
+    // only the buffer CONTENTS change per frame.
+    private long descriptorPool = VK_NULL_HANDLE;
+    private long[] descriptorSets;
 
     // The clear color (RGBA in [0,1]); becomes real API once there is more to
     // render than a clear. The swapchain is an sRGB format, so these linear
@@ -151,8 +169,115 @@ public class Renderer {
                 + vertexBuffer.size() + " + " + indexBuffer.size()
                 + " bytes, device-local via staging).");
 
+        createUniformBuffers();
+        createDescriptors();
         createCommandBuffers();
         createSyncObjects();
+    }
+
+    // ------------------------------------------------------------------
+    // Uniform buffers + descriptors
+    // ------------------------------------------------------------------
+
+    /** One 64-byte (mat4) host-visible UBO per frame in flight. */
+    private void createUniformBuffers() {
+        uniformBuffers = new Buffer[MAX_FRAMES_IN_FLIGHT];
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            uniformBuffers[i] = new Buffer(device, 16 * Float.BYTES,
+                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        }
+    }
+
+    /**
+     * The descriptor plumbing: a POOL sized for exactly our needs, one SET per
+     * frame in flight allocated from it (each an instance of the Pipeline's
+     * set layout), and a one-time vkUpdateDescriptorSets pointing set[i] at
+     * uniformBuffers[i]. After this, nothing here changes again -- per frame
+     * we rewrite buffer CONTENTS and bind the right set; the pointers stand.
+     */
+    private void createDescriptors() {
+        try (MemoryStack stack = stackPush()) {
+            // ---- Pool: capacity for MAX_FRAMES_IN_FLIGHT uniform-buffer
+            // descriptors across as many sets. Pools exist so set allocation
+            // is cheap and arena-like (destroying the pool frees every set).
+            VkDescriptorPoolSize.Buffer poolSize = VkDescriptorPoolSize.calloc(1, stack);
+            poolSize.type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+            poolSize.descriptorCount(MAX_FRAMES_IN_FLIGHT);
+
+            VkDescriptorPoolCreateInfo poolInfo = VkDescriptorPoolCreateInfo.calloc(stack);
+            poolInfo.sType(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO);
+            poolInfo.pPoolSizes(poolSize);
+            poolInfo.maxSets(MAX_FRAMES_IN_FLIGHT);
+
+            LongBuffer pPool = stack.longs(VK_NULL_HANDLE);
+            Vk.check(vkCreateDescriptorPool(device.handle(), poolInfo, null, pPool),
+                    "Failed to create the descriptor pool");
+            descriptorPool = pPool.get(0);
+
+            // ---- Allocate the sets: one layout handle per requested set.
+            LongBuffer layouts = stack.mallocLong(MAX_FRAMES_IN_FLIGHT);
+            for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+                layouts.put(pipeline.descriptorSetLayout());
+            }
+            layouts.flip();
+
+            VkDescriptorSetAllocateInfo allocInfo = VkDescriptorSetAllocateInfo.calloc(stack);
+            allocInfo.sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO);
+            allocInfo.descriptorPool(descriptorPool);
+            allocInfo.pSetLayouts(layouts);
+
+            LongBuffer pSets = stack.mallocLong(MAX_FRAMES_IN_FLIGHT);
+            Vk.check(vkAllocateDescriptorSets(device.handle(), allocInfo, pSets),
+                    "Failed to allocate descriptor sets");
+            descriptorSets = new long[MAX_FRAMES_IN_FLIGHT];
+            for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+                descriptorSets[i] = pSets.get(i);
+            }
+
+            // ---- Wire each set's binding 0 to its frame's UBO (once).
+            for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+                VkDescriptorBufferInfo.Buffer bufferInfo =
+                        VkDescriptorBufferInfo.calloc(1, stack);
+                bufferInfo.buffer(uniformBuffers[i].handle());
+                bufferInfo.offset(0);
+                bufferInfo.range(VK_WHOLE_SIZE);
+
+                VkWriteDescriptorSet.Buffer write = VkWriteDescriptorSet.calloc(1, stack);
+                write.sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+                write.dstSet(descriptorSets[i]);
+                write.dstBinding(0);                                  // = shader binding 0
+                write.descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+                write.descriptorCount(1);
+                write.pBufferInfo(bufferInfo);
+
+                vkUpdateDescriptorSets(device.handle(), write, null);
+            }
+        }
+        System.out.println("Descriptor pool + " + MAX_FRAMES_IN_FLIGHT + " sets created.");
+    }
+
+    /**
+     * The per-frame transform, COLUMN-major as GLSL expects: aspect-correction
+     * * orbit-translation * spin-rotation, composed by hand (a 2D affine map
+     * needs no library; JOML arrives with 3D). Deriving the columns of
+     * A(1/a) * T(ox,oy) * R(t):
+     *   col0 = ( cos/a,  sin, 0, 0)        col2 = (0, 0, 1, 0)
+     *   col1 = (-sin/a,  cos, 0, 0)        col3 = (ox/a, oy, 0, 1)
+     * Aspect divides only x AFTER everything else, so both the quad's shape
+     * and its orbit path stay round on any window.
+     */
+    private float[] transformMatrix(float time, float aspect) {
+        float c = (float) Math.cos(time);          // spin: 1 rad/s
+        float s = (float) Math.sin(time);
+        float ox = 0.35f * (float) Math.cos(time * 0.5);  // orbit: slower, radius 0.35
+        float oy = 0.35f * (float) Math.sin(time * 0.5);
+        return new float[] {
+                c / aspect,  s,   0f, 0f,   // column 0
+               -s / aspect,  c,   0f, 0f,   // column 1
+                0f,          0f,  1f, 0f,   // column 2
+                ox / aspect, oy,  0f, 1f,   // column 3 (translation)
+        };
     }
 
     // ------------------------------------------------------------------
@@ -216,7 +341,7 @@ public class Renderer {
      * to do invisibly. oldLayout=UNDEFINED means "discard prior contents" --
      * exactly right, since we re-clear the whole image every frame.
      */
-    private void recordCommandBuffer(VkCommandBuffer cmd, int imageIndex) {
+    private void recordCommandBuffer(VkCommandBuffer cmd, int imageIndex, float time) {
         try (MemoryStack stack = stackPush()) {
             VkCommandBufferBeginInfo beginInfo = VkCommandBufferBeginInfo.calloc(stack);
             beginInfo.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
@@ -317,15 +442,19 @@ public class Renderer {
             // ARRAY) and tell Vulkan how wide each index is.
             vkCmdBindIndexBuffer(cmd, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT16);
 
-            // Push this frame's constants: [ time, aspect ] -- must match the
-            // shader's push_constant block and the layout's range. THIS is the
-            // per-frame-recording payoff: fresh values every frame, written
-            // straight into the command buffer (the pre-recorded model could
-            // never animate).
-            float time = (System.nanoTime() - startNanos) * 1e-9f;
-            float aspect = swapchain.width() / (float) swapchain.height();
-            vkCmdPushConstants(cmd, pipeline.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0,
-                    stack.floats(time, aspect));
+            // Bind THIS FRAME SLOT's descriptor set: the vertex shader's
+            // binding 0 now reads this slot's UBO (the transform). firstSet 0,
+            // no dynamic offsets. Binding selects WHICH pointer table is live;
+            // the table itself was wired to its buffer once, at startup.
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    pipeline.layout(), 0, stack.longs(descriptorSets[currentFrame]), null);
+
+            // Push this frame's time for the FRAGMENT stage's brightness pulse.
+            // Both data tiers in one draw: push constant = tiny + hot, UBO =
+            // bigger + structured. (Per-frame recording is what lets both be
+            // fresh every frame.)
+            vkCmdPushConstants(cmd, pipeline.layout(), VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                    stack.floats(time));
 
             // THE draw, now INDEXED: walk 6 indices, fetch each index's vertex
             // from the bound vertex buffer (shared vertices fetched from cache,
@@ -459,11 +588,19 @@ public class Renderer {
             // it, and the next drawFrame waits on it forever.
             vkResetFences(device.handle(), stack.longs(inFlightFences[currentFrame]));
 
+            // This frame's animation clock, used by BOTH data tiers below.
+            float time = (System.nanoTime() - startNanos) * 1e-9f;
+
+            // Rewrite this slot's UBO with the fresh transform (safe: the fence
+            // wait above guarantees the GPU finished reading this slot's UBO).
+            float aspect = swapchain.width() / (float) swapchain.height();
+            uniformBuffers[currentFrame].uploadFloats(transformMatrix(time, aspect));
+
             // Re-record this slot's command buffer for the image we just got
-            // (safe: the fence wait above guarantees the GPU is done with it).
+            // (safe for the same fence reason).
             VkCommandBuffer cmd = commandBuffers[currentFrame];
             Vk.check(vkResetCommandBuffer(cmd, 0), "Failed to reset the command buffer");
-            recordCommandBuffer(cmd, imageIndex);
+            recordCommandBuffer(cmd, imageIndex, time);
 
             // 3. Submit that image's command buffer, via synchronization2's
             //    vkQueueSubmit2. Every participant gets its own little info struct,
@@ -623,6 +760,15 @@ public class Renderer {
         // Destroying the command pool also frees the command buffers from it.
         if (commandPool != VK_NULL_HANDLE) {
             vkDestroyCommandPool(device.handle(), commandPool, null);
+        }
+        // Destroying the pool frees every descriptor set allocated from it.
+        if (descriptorPool != VK_NULL_HANDLE) {
+            vkDestroyDescriptorPool(device.handle(), descriptorPool, null);
+        }
+        if (uniformBuffers != null) {
+            for (Buffer ubo : uniformBuffers) {
+                ubo.close();
+            }
         }
         if (indexBuffer != null) {
             indexBuffer.close();

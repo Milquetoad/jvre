@@ -2,6 +2,13 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-12 — Uniform buffers + descriptor sets: the quad ORBITS 🛰️ ✅
+- **The tier above push constants** ([[Uniform Buffers and Descriptor Sets]]): a 64-byte UBO carries a CPU-built column-major `mat4` (aspect * orbit * spin, hand-derived -- JOML waits for 3D) into the vertex shader via **binding 0**. The full machinery: descriptor set **layout** (the shape, in `Pipeline`, referenced by the pipeline layout), **pool** + per-frame **sets** (in `Renderer`), `vkUpdateDescriptorSets` **once** at startup -- per frame only buffer *contents* change and `vkCmdBindDescriptorSets` selects the slot's set. One UBO + set per frame in flight (the same fence-guarded slot reasoning as everything else). Commit `5abf166`.
+- **Both data tiers side by side**: the push constant shrank to 4 bytes of time and moved to the **fragment** stage (`stageFlags` moved with it) driving a brightness pulse -- push = tiny + hot, UBO = bigger + structured, one draw uses both.
+- **std140 noted as the classic footgun** (vec3 padding etc.); deliberately dodged with a single mat4 block.
+- **Verified on the 4090**: three snapshots show orbit + spin (UBO) and the pulse (push, snap 2 visibly brighter); sync validation silent over per-frame UBO rewrites. Two more known BP allocation advisories (64-byte UBOs) -- the VMA ticket grows.
+- **Next: textures** -- images + samplers + `COMBINED_IMAGE_SAMPLER` descriptors (same layout/pool/set machinery, new descriptor type + the VkImage work); then 3D + depth, then MSAA.
+
 ## 2026-06-12 — Design: L2 feature set formalized (draft) 📐
 - New note: [[L2 Feature Set - Renderer2D]] — principles + v1 primitive set for the "just draw" altitude, coined on Processing but deliberately smaller.
 - **Headline decision (owner's call, confirmed): NO declaration modes.** Processing's `rectMode(CENTER)`-style switches are rejected -- global mutable state, action at a distance, composes badly; the user-side translation is one self-documenting subtraction. Refinements: one *natural* convention per shape (rect = corner+size, circle = centre+radius -- no single global rule), and the real demand behind CENTER mode (rotation about the centre) is answered by the **transform stack** (`push/translate/rotate/pop`, the one sanctioned state because it's scoped), not by declaration modes. Stateless escape if ever needed: a distinct name (`rectCentered`), never a mode.

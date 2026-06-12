@@ -86,7 +86,8 @@ Current phase — refactor into reusable components + modernize:
 - [x] Vertex buffers — `Buffer` elementary (`VkBuffer` + `VkDeviceMemory`, memory-type selection); geometry as data, staged into device-local memory
 - [x] Push constants 🌀 — the triangle **spins**: per-frame time + aspect pushed straight into the command buffer
 - [x] Index buffers — the quad: unique vertices + UINT16 indices, `vkCmdDrawIndexed`
-- [ ] Uniform buffers + descriptor sets — the bigger/shared tier of shader data; then textures, 3D + depth
+- [x] Uniform buffers + descriptor sets 🛰️ — the quad **orbits**: per-frame mat4 UBO through the layout/pool/set machinery; push constants move to the fragment stage (both tiers side by side)
+- [ ] Textures — images + samplers + `COMBINED_IMAGE_SAMPLER` descriptors; then 3D + depth, then MSAA
 
 After that: 2D rendering, text, a self-built GUI, 3D, and eventually ray/path tracing.
 

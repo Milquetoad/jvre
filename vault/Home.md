@@ -138,6 +138,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - ✅ 🖼️ [[Textures - Images, Views and Samplers]] — **a picture on the quad**: checkerboard sampled via VkImage + layout transitions + NEAREST sampler + COMBINED_IMAGE_SAMPLER descriptor (verified on the 4090; validation clean but the known VMA advisory)
 - ✅ 🪟 **Alpha blending** — REPLACE → src-over-dst alpha; half the checker cells transparent so sprites can have transparent backgrounds (verified on the 4090; see [[Textures - Images, Views and Samplers]])
 - ✅ 🎲 [[3D and the Depth Buffer]] — **a solid spinning cube**: perspective MVP (JOML), a depth buffer in the Swapchain, depth test/write occluding far faces (verified on the 4090)
-- ⏭️ Next: **back-face culling** (small, needs a winding check), then the **VMA milestone**, then MSAA
+- ✅ 🔄 **Back-face culling** — BACK + CCW front faces; the two-mirror winding lesson (first attempt rendered inside-out; see [[3D and the Depth Buffer]])
+- ⏭️ Next: the **VMA milestone** (sub-allocation; retire the standing best-practices advisories), then MSAA
 
 #jvre #moc

@@ -30,7 +30,21 @@ A full-screen image holding, per pixel, the depth of the nearest thing drawn so 
 - **Geometry**: 24 vertices (`[x y z | r g b | u v]`, stride 32) + 36 indices. Four-per-face x6, **not** 8 shared corners: a textured, per-face-colored cube can't share corners, because each face needs its own full UVs (`0..1`) and its own color.
 - **Texture swapped to opaque grayscale checker**; the fragment shader multiplies it by the per-face vertex color, so the six faces read as six distinct colors. (The alpha-blend pipeline state stays on -- opaque alpha just makes it a no-op.)
 - **Depth makes it solid**: near faces cleanly occlude far ones. WITHOUT depth, faces rasterize in submission order and pop through each other -- depth is precisely what fixes that. This is the milestone made visible.
-- **Culling deferred (cull NONE)**: depth alone gives correctness (back faces lose the test), so culling is an *optimization*, not required. Skipped this beat because the beat-1 Y-flip reverses apparent winding, so `frontFace` needs care -- best added with a visual check. Standing follow-up.
+- **Culling deferred (cull NONE)**: depth alone gives correctness (back faces lose the test), so culling is an *optimization*, not required. Skipped this beat because winding interacts with the beat-1 Y-flip -- best added with a visual check. Done as a follow-up; see below.
+
+## Follow-up -- back-face culling (and the two-mirror winding lesson)
+
+For a closed opaque mesh you can never see a face whose outside points away; the rasterizer drops those triangles by their on-screen **winding** before any fragment work -- half the cube's faces skipped per frame. Depth made the image *correct*; culling makes it *cheap*.
+
+**The lesson came from getting it wrong first.** The armchair derivation said: "the Y-flip is a mirror, mirrors reverse winding, so the authored CCW-from-outside faces arrive CW -> `frontFace = CLOCKWISE`." Result: an **inside-out cube** -- the near faces culled, looking into a hollow shell. The unmissable symptom of culling the front faces.
+
+The correct account has **two mirrors, which cancel**:
+1. Vulkan's y-DOWN NDC/framebuffer is itself a mirror relative to the GL conventions the projection math comes from -- alone it would flip CCW-from-outside to CW on screen.
+2. The negated `m11` (our Y-flip) is a *second* mirror on top.
+
+Mirror x mirror = no net flip: the authored CCW winding survives to the screen, and `frontFace = COUNTER_CLOCKWISE` is right after all. (The famous "flipping `proj[1][1]` forces a frontFace change" gotcha is real but *relative to not flipping* -- it does not make CW Vulkan's natural front.)
+
+**Verification asymmetry worth remembering:** winding bugs produce no validation errors, no crashes -- only a wrong picture. Correct culling looks *identical* to no culling (the culled faces are exactly the ones depth already hid); wrong culling is instantly obvious (inside-out). Sequencing culling AFTER the cube visibly worked turned "the least debuggable bug in graphics" into a ten-second observation and a one-word fix.
 
 ## Where this sits
 
@@ -38,6 +52,6 @@ L1 is now genuinely **3D-capable in practice**, matching [[Game-Engine Capabilit
 
 ## Next
 
-Back-face culling (small, needs a visual winding check), the **VMA milestone** (every image/buffer is another best-practices-flagged single allocation -- the cube + depth buffer keep growing the count), then **MSAA**.
+The **VMA milestone** (every image/buffer is another best-practices-flagged single allocation -- the cube + depth buffer keep growing the count), then **MSAA**.
 
 #vulkan #3d #depth #perspective #joml

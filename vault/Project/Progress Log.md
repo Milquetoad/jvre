@@ -11,6 +11,12 @@ Reverse-chronological diary. Newest at top.
 - **Three constraints with deadlines** (shape code being written now — keep expressible, don't build): (1) **multithreaded command recording** — don't bake single-threaded pool ownership; (2) **offscreen render targets** — structure `drawFrame` as "render to a target (today = swapchain)," not one hardcoded swapchain pass; (3) **queue-set abstraction** — "queues by capability," not "the graphics queue" (cross-linked from [[Device Selection and Cross-Platform (planned)]]).
 - Pure design session — no code. Reinforces [[API Vision - Layered Altitudes]] / [[Design North Star]]: all Tier-2 is the public-L1 half of the thesis.
 
+## 2026-06-12 — Back-face culling: the two-mirror winding lesson 🔄 ✅
+- **Culling ON** (`BACK` + `frontFace = COUNTER_CLOCKWISE`): half the cube's faces dropped by winding before any fragment work. Depth made it correct; culling makes the hidden half free. ([[3D and the Depth Buffer]], follow-up section.)
+- **Got it wrong first, instructively**: reasoned "Y-flip = mirror = winding reverses -> CLOCKWISE"; the cube rendered **inside-out** (front faces culled -- hollow shell, instantly recognizable). The true account: **two mirrors cancel** -- Vulkan's y-down NDC is one mirror vs the GL conventions, the negated `m11` is the second; net zero, authored CCW survives to screen. One-word fix.
+- **Verification asymmetry logged**: winding bugs = no validation error, no crash, only a wrong picture; correct culling looks *identical* to no culling. Sequencing culling after the cube visibly worked is why this was a 10-second observation instead of the classic silently-empty-screen hunt.
+- **Next:** the VMA milestone, then MSAA.
+
 ## 2026-06-12 — 3D + depth: a solid spinning CUBE 🎲 ✅
 - **The renderer goes 3D** ([[3D and the Depth Buffer]]): a tumbling, depth-tested cube with six colored checker faces. Three beats, **verified on the 4090**, validation clean but the known VMA advisory.
 - **Beat 1 -- perspective:** JOML (`org.joml`) arrives (the "with 3D" library the vault always promised). Hand-rolled 2D affine retired for a real `proj * view * model`. Two Vulkan-isms vs OpenGL, both classic first-3D bugs: `zZeroToOne=true` (clip depth [0,1] not [-1,1]) and **flip Y** (negate `proj.m11`; Vulkan NDC Y is down). Shown on the spinning quad before any depth buffer existed.

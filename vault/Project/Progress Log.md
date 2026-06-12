@@ -2,6 +2,13 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-12 — Index buffers: the quad ⬛ ✅
+- **Vertex reuse** ([[Index Buffers]]): the triangle became a four-color quad -- 4 unique vertices (R/G/B/W corners) + 6 UINT16 indices `{0,1,2, 2,3,0}` sharing the diagonal, drawn with `vkCmdBindIndexBuffer` + `vkCmdDrawIndexed`. At mesh scale (~6 triangles per vertex) indexing roughly halves vertex memory/bandwidth. `Buffer` grew `uploadShorts` + a `short[]` `deviceLocal` overload (staging/promote plumbing factored into shared helpers). The push-constant spin carried over untouched. Commit `2216e73`.
+- **Observed**: the visible diagonal "seam" is a Mach-band illusion (shared-edge interpolation agrees exactly; only the gradient *direction* changes) -- logged in the note.
+- **The best-practices layer filed the VMA ticket**: with 4 small allocations at startup it now warns that tiny buffers should be sub-allocated from larger blocks (1 MiB threshold). Documented as a known advisory in `Buffer`'s javadoc -- the standing cue for the VMA milestone.
+- **Verified on the 4090**: spinning quad, ~69 deg between snaps 1.2 s apart; no validation errors.
+- **Next:** **uniform buffers + descriptor sets** (layouts, pools, sets, per-frame UBOs -- the tier above push constants); then textures (images + samplers), then 3D + depth.
+
 ## 2026-06-11 — 🌀 Push constants: the triangle SPINS ✅
 - **First per-frame shader data** ([[Push Constants]]): 8 bytes (`{ float time; float aspect; }`) pushed straight into the command buffer each frame by `vkCmdPushConstants` -- no buffer, no descriptors, no sync (spec floor: 128 bytes). The [[Graphics Pipeline|pipeline layout]] got its first real content (a `VkPushConstantRange`, vertex stage). Commit `847bc98`.
 - `triangle.vert` rotates by `time` (1 rad/s; GLSL `mat2` is column-major, and y-down NDC makes it clockwise on screen) and divides x by `aspect` so the spin stays shape-true at any window size (a projection matrix absorbs that later).

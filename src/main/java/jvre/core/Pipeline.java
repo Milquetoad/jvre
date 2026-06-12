@@ -140,15 +140,31 @@ public class Pipeline {
             viewportState.scissorCount(1);
 
             // ---- Rasterizer: triangles -> fragments ----
-            // Culling OFF for the first triangle: a winding-order mistake with
-            // culling on yields a silently empty screen -- the least debuggable
-            // bug in graphics. Turned on (BACK) once things visibly work.
+            // BACK-FACE CULLING is on: for a closed opaque mesh you can never see
+            // a face whose outside points away, and the rasterizer can drop those
+            // triangles by their on-screen WINDING before any fragment work --
+            // half the cube's triangles skipped per frame, for free. (It stayed
+            // OFF until the cube visibly worked: a winding mistake with culling on
+            // is a silently empty screen, the least debuggable bug in graphics.)
+            //
+            // Why COUNTER_CLOCKWISE front faces? TWO mirrors are in play, and they
+            // CANCEL: (1) Vulkan's y-DOWN NDC/framebuffer is itself a mirror
+            // relative to the GL conventions the projection math comes from --
+            // alone it would flip our model-space CCW-from-outside faces to CW on
+            // screen; (2) the projection's negated m11 (the Y-flip) is a second
+            // mirror on top. Mirror x mirror = no net flip, so the authored CCW
+            // winding survives to the screen. Settled EMPIRICALLY: the first
+            // attempt reasoned "one mirror -> CW", and the cube rendered
+            // inside-out -- the unmissable symptom of culling the front faces.
+            // (The famous "flipping proj[1][1] forces a frontFace change" gotcha
+            // is real, but it's relative to NOT flipping -- it doesn't make CW
+            // Vulkan's natural front.)
             VkPipelineRasterizationStateCreateInfo rasterizer =
                     VkPipelineRasterizationStateCreateInfo.calloc(stack);
             rasterizer.sType(VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO);
             rasterizer.polygonMode(VK_POLYGON_MODE_FILL);   // fill, not wireframe
-            rasterizer.cullMode(VK_CULL_MODE_NONE);
-            rasterizer.frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE);  // moot with cull off
+            rasterizer.cullMode(VK_CULL_MODE_BACK_BIT);
+            rasterizer.frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE);  // two mirrors cancel
             rasterizer.lineWidth(1.0f);  // required even when not drawing lines
 
             // ---- Multisampling: off (1 sample/pixel) -- MSAA is a later treat ----

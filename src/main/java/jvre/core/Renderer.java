@@ -107,8 +107,10 @@ public class Renderer {
 
     // 36 indices = 6 faces x 2 triangles x 3. Each face's 4 corners (base b) form
     // two triangles b,b+1,b+2 and b+2,b+3,b -- the same diagonal split as the old
-    // quad. Winding is consistent per face, but we cull NONE for now, so it does
-    // not affect visibility; the DEPTH buffer alone makes the cube solid.
+    // quad. Winding is CCW viewed from OUTSIDE each face, consistently -- this is
+    // load-bearing now: the Pipeline back-face-culls, judging winding after the
+    // projection's Y-flip (see the rasterizer comment there). The depth buffer
+    // makes the cube correct; culling makes the hidden half free.
     // shorts = VK_INDEX_TYPE_UINT16.
     private static final short[] CUBE_INDICES = {
              0,  1,  2,   2,  3,  0,   // +Z (red)

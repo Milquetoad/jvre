@@ -7,6 +7,7 @@ import org.lwjgl.vulkan.VkExtent2D;
 import org.lwjgl.vulkan.VkFormatProperties;
 import org.lwjgl.vulkan.VkImageCreateInfo;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
+import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
 import org.lwjgl.vulkan.VkSurfaceCapabilitiesKHR;
 import org.lwjgl.vulkan.VkSurfaceFormatKHR;
 import org.lwjgl.vulkan.VkSwapchainCreateInfoKHR;
@@ -52,6 +53,15 @@ public class Swapchain {
     private long depthImage;
     private long depthAllocation;  // VmaAllocation
     private long depthView;
+
+    // MSAA: the multisampled color target the scene actually renders into; the
+    // swapchain image demotes to RESOLVE destination. Same lifetime story as the
+    // depth buffer (extent-sized, recreated with the chain). The sample count is
+    // QUERIED, not assumed -- a device fact like the depth format.
+    private int msaaSamples;       // VK_SAMPLE_COUNT_n_BIT (the bit value == n)
+    private long msaaColorImage;
+    private long msaaColorAllocation;  // VmaAllocation
+    private long msaaColorView;
 
     public Swapchain(Device device, Surface surface, Window window) {
         this.device = device;
@@ -141,6 +151,8 @@ public class Swapchain {
         }
 
         imageViews = createImageViews();
+        msaaSamples = chooseSampleCount();
+        createColorResources();
         createDepthResources();
     }
 
@@ -154,11 +166,16 @@ public class Swapchain {
     public int depthFormat()     { return depthFormat; }    // baked into the Pipeline
     public long depthView()      { return depthView; }      // depth attachment target (dynamic rendering)
     public long depthImage()     { return depthImage; }     // for the layout-transition barrier
+    public int sampleCount()     { return msaaSamples; }    // baked into the Pipeline (rasterizationSamples)
+    public long msaaColorView()  { return msaaColorView; }  // the color attachment the scene renders into
+    public long msaaColorImage() { return msaaColorImage; } // for the layout-transition barrier
 
     /** Destroy depth resources + our image views, then the swapchain (which frees its images). */
     public void close() {
         vkDestroyImageView(device.handle(), depthView, null);
         vmaDestroyImage(device.allocator(), depthImage, depthAllocation);
+        vkDestroyImageView(device.handle(), msaaColorView, null);
+        vmaDestroyImage(device.allocator(), msaaColorImage, msaaColorAllocation);
         for (long view : imageViews) {
             vkDestroyImageView(device.handle(), view, null);
         }
@@ -213,6 +230,82 @@ public class Swapchain {
     }
 
     /**
+     * Pick the MSAA sample count: the highest power of two <= 4 that BOTH the
+     * color and depth framebuffer paths support (the device advertises each as a
+     * bitmask of VK_SAMPLE_COUNT bits, where the bit value IS the count -- AND
+     * them for the usable set). 4x is the sweet spot: visually most of the win
+     * of 8x at half the bandwidth, and universally supported on desktop -- but
+     * we still QUERY rather than assume, like the depth format.
+     */
+    private int chooseSampleCount() {
+        try (MemoryStack stack = stackPush()) {
+            VkPhysicalDeviceProperties props = VkPhysicalDeviceProperties.malloc(stack);
+            vkGetPhysicalDeviceProperties(device.physicalDevice(), props);
+            int counts = props.limits().framebufferColorSampleCounts()
+                    & props.limits().framebufferDepthSampleCounts();
+            if ((counts & VK_SAMPLE_COUNT_4_BIT) != 0) return VK_SAMPLE_COUNT_4_BIT;
+            if ((counts & VK_SAMPLE_COUNT_2_BIT) != 0) return VK_SAMPLE_COUNT_2_BIT;
+            return VK_SAMPLE_COUNT_1_BIT;  // MSAA effectively off
+        }
+    }
+
+    /**
+     * Create the multisampled color target: the image the scene RENDERS INTO
+     * (the swapchain image becomes the resolve destination). Swapchain format
+     * (the pipeline's color format must match what it renders into), the chosen
+     * sample count, COLOR_ATTACHMENT usage. Like the depth buffer: a full-screen
+     * attachment -> DEDICATED_MEMORY, recreated with the chain, and SHARED
+     * across frames in flight (the per-frame barrier in the Renderer syncs
+     * against the previous frame's use, same as depth).
+     */
+    private void createColorResources() {
+        try (MemoryStack stack = stackPush()) {
+            VkImageCreateInfo imageInfo = VkImageCreateInfo.calloc(stack);
+            imageInfo.sType(VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO);
+            imageInfo.imageType(VK_IMAGE_TYPE_2D);
+            imageInfo.format(imageFormat);
+            imageInfo.extent().width(width).height(height).depth(1);
+            imageInfo.mipLevels(1);            // multisampled images never have mips (spec rule)
+            imageInfo.arrayLayers(1);
+            imageInfo.tiling(VK_IMAGE_TILING_OPTIMAL);
+            imageInfo.initialLayout(VK_IMAGE_LAYOUT_UNDEFINED);
+            imageInfo.usage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+            imageInfo.samples(msaaSamples);    // the point of this image
+            imageInfo.sharingMode(VK_SHARING_MODE_EXCLUSIVE);
+
+            VmaAllocationCreateInfo allocInfo = VmaAllocationCreateInfo.calloc(stack);
+            allocInfo.usage(VMA_MEMORY_USAGE_AUTO);
+            allocInfo.flags(VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT);
+
+            LongBuffer pImage = stack.longs(VK_NULL_HANDLE);
+            PointerBuffer pAllocation = stack.mallocPointer(1);
+            Vk.check(vmaCreateImage(device.allocator(), imageInfo, allocInfo,
+                            pImage, pAllocation, null),
+                    "Failed to create the MSAA color image");
+            msaaColorImage = pImage.get(0);
+            msaaColorAllocation = pAllocation.get(0);
+
+            VkImageViewCreateInfo viewInfo = VkImageViewCreateInfo.calloc(stack);
+            viewInfo.sType(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);
+            viewInfo.image(msaaColorImage);
+            viewInfo.viewType(VK_IMAGE_VIEW_TYPE_2D);
+            viewInfo.format(imageFormat);
+            viewInfo.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT);
+            viewInfo.subresourceRange().baseMipLevel(0);
+            viewInfo.subresourceRange().levelCount(1);
+            viewInfo.subresourceRange().baseArrayLayer(0);
+            viewInfo.subresourceRange().layerCount(1);
+
+            LongBuffer pView = stack.longs(VK_NULL_HANDLE);
+            Vk.check(vkCreateImageView(device.handle(), viewInfo, null, pView),
+                    "Failed to create the MSAA color image view");
+            msaaColorView = pView.get(0);
+        }
+        System.out.println("MSAA color target created (" + width + "x" + height
+                + ", " + msaaSamples + "x samples).");
+    }
+
+    /**
      * Create the depth buffer: one VkImage at the swapchain extent (DEVICE_LOCAL,
      * DEPTH_STENCIL_ATTACHMENT usage) plus a DEPTH-aspect view. Same image+memory
      * shape as a Texture, minus the upload and sampler -- it's a render target the
@@ -233,7 +326,10 @@ public class Swapchain {
             imageInfo.tiling(VK_IMAGE_TILING_OPTIMAL);
             imageInfo.initialLayout(VK_IMAGE_LAYOUT_UNDEFINED);
             imageInfo.usage(VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
-            imageInfo.samples(VK_SAMPLE_COUNT_1_BIT);
+            // MUST match the color target's sample count -- depth testing happens
+            // per SAMPLE, so a 1x depth buffer against a 4x color target is
+            // meaningless (and illegal).
+            imageInfo.samples(msaaSamples);
             imageInfo.sharingMode(VK_SHARING_MODE_EXCLUSIVE);
 
             // VMA-backed, GPU-only (AUTO, no host access). One extra hint:

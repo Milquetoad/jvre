@@ -64,7 +64,7 @@ public class Pipeline {
      * from GLSL by the Gradle compileShaders task), rendering into color
      * attachment(s) of the given format.
      */
-    public Pipeline(Device device, int colorFormat, int depthFormat,
+    public Pipeline(Device device, int colorFormat, int depthFormat, int sampleCount,
                     String vertResource, String fragResource) {
         this.device = device;
 
@@ -167,11 +167,16 @@ public class Pipeline {
             rasterizer.frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE);  // two mirrors cancel
             rasterizer.lineWidth(1.0f);  // required even when not drawing lines
 
-            // ---- Multisampling: off (1 sample/pixel) -- MSAA is a later treat ----
+            // ---- Multisampling: MSAA, baked ----
+            // rasterizationSamples must match the attachments rendered into (the
+            // Swapchain's MSAA color target + the multisampled depth buffer).
+            // This being BAKED pipeline state is exactly why AA is a
+            // creation-time option at L2, never a runtime toggle (the L2 spec
+            // pinned that before this code existed).
             VkPipelineMultisampleStateCreateInfo multisampling =
                     VkPipelineMultisampleStateCreateInfo.calloc(stack);
             multisampling.sType(VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO);
-            multisampling.rasterizationSamples(VK_SAMPLE_COUNT_1_BIT);
+            multisampling.rasterizationSamples(sampleCount);
 
             // ---- Depth/stencil: test + write depth, LESS keeps the nearer ----
             // The depth buffer is cleared to 1.0 (far) each frame; a fragment

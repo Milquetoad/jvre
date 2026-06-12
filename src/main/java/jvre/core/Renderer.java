@@ -194,7 +194,7 @@ public class Renderer {
         this.device = new Device(instance, surface);
         this.swapchain = new Swapchain(device, surface, window);
         this.pipeline = new Pipeline(device, swapchain.imageFormat(), swapchain.depthFormat(),
-                TRIANGLE_VERT, TRIANGLE_FRAG);
+                swapchain.sampleCount(), TRIANGLE_VERT, TRIANGLE_FRAG);
 
         // Pool first: the vertex-buffer upload below records a one-shot
         // transfer command buffer from it.
@@ -486,15 +486,24 @@ public class Renderer {
             depInfo.sType(VK_STRUCTURE_TYPE_DEPENDENCY_INFO);
             depInfo.pImageMemoryBarriers(barrier);
 
-            // The dynamic-rendering color attachment: render INTO the acquired
-            // image's view, CLEAR it on load, STORE the result for presentation.
+            // The dynamic-rendering color attachment, now with MSAA: the scene
+            // renders into the MULTISAMPLED image; the acquired swapchain image
+            // is only the RESOLVE destination. Dynamic rendering builds the
+            // resolve into the attachment itself (resolveMode AVERAGE = average
+            // the N samples per pixel) -- no extra pass, it happens at
+            // vkCmdEndRendering. storeOp on the MSAA image is DONT_CARE: once
+            // resolved, the per-sample data is garbage; storing it is wasted
+            // bandwidth (same logic as depth).
             VkRenderingAttachmentInfo.Buffer colorAttachment =
                     VkRenderingAttachmentInfo.calloc(1, stack);
             colorAttachment.sType(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO);
-            colorAttachment.imageView(swapchain.imageView(imageIndex));
+            colorAttachment.imageView(swapchain.msaaColorView());
             colorAttachment.imageLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            colorAttachment.resolveMode(VK_RESOLVE_MODE_AVERAGE_BIT);
+            colorAttachment.resolveImageView(swapchain.imageView(imageIndex));
+            colorAttachment.resolveImageLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             colorAttachment.loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR);
-            colorAttachment.storeOp(VK_ATTACHMENT_STORE_OP_STORE);
+            colorAttachment.storeOp(VK_ATTACHMENT_STORE_OP_DONT_CARE);
             colorAttachment.clearValue(clearValue.get(0));
 
             // The depth attachment: CLEAR on load; DONT_CARE on store -- the depth
@@ -520,10 +529,11 @@ public class Renderer {
             Vk.check(vkBeginCommandBuffer(cmd, beginInfo),
                     "Failed to begin the command buffer");
 
-            // ---- Barrier 1: make the image renderable (UNDEFINED -> COLOR) ----
-            // Gate at COLOR_ATTACHMENT_OUTPUT (the same stage the submit waits on
-            // for image acquisition); nothing read before (ACCESS_2_NONE), color
-            // writes after.
+            // ---- Barrier 1: make the swapchain image resolvable (UNDEFINED -> COLOR) ----
+            // It now receives the RESOLVE write (still a color-attachment write at
+            // COLOR_ATTACHMENT_OUTPUT, so the masks are unchanged). Gate at
+            // COLOR_ATTACHMENT_OUTPUT (the same stage the submit waits on for
+            // image acquisition); nothing read before (ACCESS_2_NONE).
             barrier.image(swapchain.image(imageIndex));
             barrier.oldLayout(VK_IMAGE_LAYOUT_UNDEFINED);
             barrier.newLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
@@ -531,6 +541,15 @@ public class Renderer {
             barrier.srcAccessMask(VK_ACCESS_2_NONE);
             barrier.dstStageMask(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
             barrier.dstAccessMask(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+            vkCmdPipelineBarrier2(cmd, depInfo);
+
+            // ---- Barrier 1b: make the MSAA color target renderable ----
+            // Retarget the same struct. Like the depth buffer, this is ONE image
+            // SHARED by all frames in flight (not per-frame, not rotating), so
+            // srcStage/srcAccess must cover the PREVIOUS frame's color writes --
+            // the same cross-frame WAW lesson the depth barrier taught.
+            barrier.image(swapchain.msaaColorImage());
+            barrier.srcAccessMask(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);  // prev frame's writes
             vkCmdPipelineBarrier2(cmd, depInfo);
 
             // ---- Barrier 1b: make the DEPTH image writable (UNDEFINED -> DEPTH) ----
@@ -627,11 +646,14 @@ public class Renderer {
 
             vkCmdEndRendering(cmd);
 
-            // ---- Barrier 2: make it presentable (COLOR -> PRESENT_SRC) ----
+            // ---- Barrier 2: make the SWAPCHAIN image presentable (COLOR -> PRESENT_SRC) ----
+            // Re-target the image explicitly: barrier 1b left the MSAA image in
+            // this struct, and it's the resolved swapchain image that presents.
             // dstStage = NONE: nothing INSIDE this command buffer waits on the
             // transition -- presentation is ordered by the renderFinished
             // semaphore instead. (1.0 sync spelled this "BOTTOM_OF_PIPE"; sync2
             // deprecates TOP/BOTTOM_OF_PIPE in favor of the honest NONE.)
+            barrier.image(swapchain.image(imageIndex));
             barrier.oldLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             barrier.newLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
             barrier.srcStageMask(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
@@ -880,7 +902,7 @@ public class Renderer {
         if (swapchain.imageFormat() != oldFormat) {
             pipeline.close();
             pipeline = new Pipeline(device, swapchain.imageFormat(), swapchain.depthFormat(),
-                    TRIANGLE_VERT, TRIANGLE_FRAG);
+                    swapchain.sampleCount(), TRIANGLE_VERT, TRIANGLE_FRAG);
         }
 
         // Drop any resize flag raised by the burst of events we just handled --

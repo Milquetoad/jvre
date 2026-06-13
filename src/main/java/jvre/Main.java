@@ -113,9 +113,12 @@ public class Main {
      */
     private void drawShapes() {
         g.begin();
-        g.fillRect(100, 100, 220, 160, Color.rgb(40, 120, 220));       // solid blue
+        g.fillRect(100, 100, 220, 160, Color.rgb(40, 120, 220));       // solid blue, anchored top-left
         g.fillRect(250, 200, 220, 160, Color.rgba(220, 60, 60, 128));  // translucent red, overlapping
-        g.fillRect(560, 400, 130, 130, Color.WHITE);                   // solid white
+        // Anchored to the BOTTOM-RIGHT via the live framebuffer size -- relative
+        // layout as plain arithmetic (no coordinate mode). Resize the window and
+        // this square tracks the corner while the others stay pinned top-left.
+        g.fillRect(g.width() - 170, g.height() - 170, 130, 130, Color.WHITE);
         g.end();
     }
 

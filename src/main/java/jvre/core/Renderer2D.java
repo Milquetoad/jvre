@@ -30,7 +30,25 @@ public final class Renderer2D {
     private int count = 0;                          // floats written this frame
     private boolean inFrame = false;
 
-    Renderer2D() {}  // package-private: the Renderer vends it
+    // The owning Renderer, for live framebuffer-size queries. Null in the
+    // CPU-only unit tests (which never ask for the size). The size is what
+    // relative/responsive layout is composed FROM: the engine exposes it; the
+    // positioning policy (centered, proportional, anchored) is the user's, by
+    // design -- no coordinate modes (the mechanism/policy boundary).
+    private final Renderer owner;
+
+    Renderer2D() { this.owner = null; }              // CPU-only (tests)
+    Renderer2D(Renderer owner) { this.owner = owner; }  // the Renderer vends this one
+
+    /** Current framebuffer width in pixels -- the basis for relative layout. */
+    public int width() {
+        return owner.framebufferWidth();
+    }
+
+    /** Current framebuffer height in pixels. */
+    public int height() {
+        return owner.framebufferHeight();
+    }
 
     /**
      * Open a frame's worth of drawing. Every {@code begin()} must be matched by

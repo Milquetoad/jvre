@@ -290,7 +290,7 @@ public class Renderer {
      */
     public Renderer2D renderer2D() {
         if (renderer2D == null) {
-            renderer2D = new Renderer2D();
+            renderer2D = new Renderer2D(this);
             buildShapePipeline();
             shapeArenas = new Buffer[MAX_FRAMES_IN_FLIGHT];
             for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
@@ -313,6 +313,11 @@ public class Renderer {
     private boolean shapeBatchActive() {
         return renderer2D != null && renderer2D.floatCount() > 0;
     }
+
+    /** Current framebuffer size in pixels -- what the L2 surface exposes (g.width()/
+     *  g.height()) so the user can compose relative layout as plain arithmetic. */
+    int framebufferWidth()  { return swapchain.width(); }
+    int framebufferHeight() { return swapchain.height(); }
 
     /**
      * Grow this frame's arena if the batch outgrew it. Safe to destroy the old

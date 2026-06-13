@@ -66,7 +66,13 @@ public final class ShaderEffect {
 
     /** Compile a fragment shader from an in-memory GLSL string. */
     public static ShaderEffect fromFragmentSource(String glslSource, String name) {
-        return new ShaderEffect(name, ShaderCompiler.compileFragment(glslSource, name));
+        byte[] spirv = ShaderCompiler.compileFragment(glslSource, name);
+        // Enforce the v1 effect contract on the COMPILED module, before any
+        // Vulkan object exists: a shader that compiles but binds a resource or
+        // declares an oversized push block fails HERE, in jvre's terms, instead
+        // of detonating inside the effect pipeline (or silently, validation off).
+        ShaderReflection.checkEffectContract(spirv, name);
+        return new ShaderEffect(name, spirv);
     }
 
     /** The compiled SPIR-V -- consumed by the Renderer's effect pipeline. */

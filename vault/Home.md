@@ -150,6 +150,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - 🏁 **The long-standing roadmap list (textures → 3D + depth → MSAA) is COMPLETE.**
 - ✅ 🎨 [[ShaderEffect - The Shadertoy Altitude]] — **the first realized altitude**: a runtime-compiled (shaderc) user fragment shader on a fullscreen triangle; auto-filled `uResolution`/`uMouse`/`uTime`; the renderer's first content seam (verified on the 4090 — the ripple demo). jvre's FIRST unit tests arrive with it ([[Testing and CI-CD]]).
 - ✅ 🩺 [[Diagnostics and the Crash Log]] — **the Ring 2 guard**: an environment fingerprint (GPU/driver/loader/OS, the EXCLUSIVE-vs-CONCURRENT queue line, formats) tee'd to a per-OS app-data log a user can attach to a bug report; eager+flushed; frictionless manual send (verified on the 4090, fault path included).
-- ⏭️ Next: **SPIR-V reflection** (Ring 3 — enforce the [[ShaderEffect - The Shadertoy Altitude|effect]] contract at creation; also unlocks `set()`). Then the bigger fork: **L2 Renderer2D batching**.
+- ✅ 🛡️ **Ring 3 guard** — `ShaderReflection` enforces the [[ShaderEffect - The Shadertoy Altitude#The contract, now ENFORCED (Ring 3 guard) ✅|effect contract]] at creation via SPIRV-Cross (`lwjgl-spvc`): no bound resources, push block ≤ 20 bytes; fails fast in the user's terms. Also the foundation for `set()`. (The "what breaks jvre" plan — all three rings — is now fully executed.)
+- ⏭️ Next: the bigger fork — **L2 Renderer2D batching** (the per-frame vertex arena; [[L2 Feature Set - Renderer2D]]).
 
 #jvre #moc

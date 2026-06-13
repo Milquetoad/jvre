@@ -64,13 +64,16 @@ The pipeline lives in the **Renderer**, not in `ShaderEffect` -- pipelines bake 
 
 `ShaderCompiler` is a **pure function** -- GLSL in, SPIR-V out, no GPU, no window, no device -- unlike nearly everything else in a renderer. That made it jvre's **first unit-testable surface**, so JUnit 5 arrives here ([[Testing and CI-CD]]). The three tests: a valid frag compiles to a SPIR-V module (checks the `0x07230203` magic), a broken frag throws with the file label in the message (the no-injection promise, asserted), and the fullscreen vert compiles. The suite doubles as proof the shaderc **natives load** on this machine before anything is wired against them.
 
-## The known gap -> next beat
+## The contract, now ENFORCED (Ring 3 guard) ✅
 
-The v1 contract is **documented but UNENFORCED**. A user shader that *compiles* but breaks the contract sails past shaderc and detonates later (or silently, with validation off):
-- declares a different push block size/layout (jvre pushes 20 bytes regardless),
-- declares a descriptor resource (`sampler2D`) the effect pipeline has no set layout for,
-- never writes `outColor`.
+This was jvre's **first "outside input" surface** -- before ShaderEffect, every input was jvre-authored at build time -- and the v1 contract was at first only *documented*. A user shader that *compiles* but breaks it would sail past shaderc and detonate later (or silently, with validation off). That gap is now closed by **`ShaderReflection`** ([[Diagnostics and the Crash Log|alongside]] the Ring 2 work), via **SPIRV-Cross** (`lwjgl-spvc`):
 
-This is jvre's **first "outside input" surface** -- before ShaderEffect, every input was jvre-authored at build time. The fix is **SPIR-V reflection**: read the compiled module back, verify it declares *exactly* the built-in block and *no* descriptors, throw a jvre-level error at creation in the user's own terms -- the same fail-fast spot the compile error already uses. It doubles as the foundation for the deferred `set(name, value)`. (Beat 2; see [[Progress Log]] for the Ring-1/2/3 framing.)
+- It reflects the **same optimized SPIR-V jvre actually runs** (not a re-compile), so the check matches exactly what the pipeline will execute -- if the optimizer drops an unused resource, so does the check, consistently.
+- **Two rules, both robust against the optimizer + both catching real CRASH cases:** (1) **no descriptor-bound resources** (the effect pipeline has no set layout, so any UBO/sampler/image is a guaranteed mismatch; binding decorations are interface and survive optimization); (2) **push block <= 20 bytes** (jvre fills exactly its 20-byte range; a bigger block reads past it). No block at all is fine.
+- Thrown at **creation**, in the user's terms ("...declares a bound resource (sampler 'tex'), but v1 effects bind no resources..."), the same fail-fast spot the compile error already uses -- not a Vulkan validation spew three layers down, and never silent UB.
+
+**Why SPIRV-Cross over hand-parsing SPIR-V** (decided): the guard's whole job is to be *trustworthy*; hand-rolling a SPIR-V parser to defend against malformed shaders has the wrong risk profile, and binary reflection is not the mechanism worth learning here. Tested ([[Testing and CI-CD]]): a clean effect + a no-push effect pass; a sampler-binding shader + an oversized-push shader are rejected with named errors.
+
+**Still open:** "never writes `outColor`" (a blank screen, not a crash) is left for later. The same reflection is the **foundation for the post-v1 `set(name, value)`** uniforms -- the twofer that justified building it now.
 
 #design #shadereffect #shaders #api

@@ -60,12 +60,41 @@ public class Pipeline {
     private final long handle;               // VkPipeline
 
     /**
-     * Build a graphics pipeline from two SPIR-V classpath resources (compiled
-     * from GLSL by the Gradle compileShaders task), rendering into color
-     * attachment(s) of the given format.
+     * Build the SCENE pipeline from two SPIR-V classpath resources (compiled
+     * from GLSL by the Gradle compileShaders task at build time), rendering
+     * into color attachment(s) of the given format.
      */
     public Pipeline(Device device, int colorFormat, int depthFormat, int sampleCount,
                     String vertResource, String fragResource) {
+        this(device, colorFormat, depthFormat, sampleCount,
+                readResource(vertResource), readResource(fragResource),
+                false, vertResource + " + " + fragResource);
+    }
+
+    /**
+     * Build a FULLSCREEN-EFFECT pipeline (the ShaderEffect path) from raw
+     * SPIR-V bytes -- the fragment half typically compiled at RUNTIME by
+     * {@link ShaderCompiler}. Every difference from the scene pipeline flows
+     * from "one screen-covering triangle, no geometry":
+     *   - NO vertex input (the triangle is generated from gl_VertexIndex in
+     *     the vertex shader -- there are no buffers to describe);
+     *   - cull NONE (a single known triangle -- no winding question at all);
+     *   - depth test/write OFF (nothing 3D; the depth attachment FORMAT is
+     *     still declared because the render pass instance carries one);
+     *   - no descriptor set layout (v1 effects bind no resources);
+     *   - a 20-byte fragment push range (uResolution, uMouse, uTime) instead
+     *     of the scene's 4 bytes of time;
+     *   - no blending (the effect writes every pixel, opaquely).
+     */
+    public static Pipeline fullscreenEffect(Device device, int colorFormat, int depthFormat,
+                                            int sampleCount, byte[] vertSpirv, byte[] fragSpirv,
+                                            String label) {
+        return new Pipeline(device, colorFormat, depthFormat, sampleCount,
+                vertSpirv, fragSpirv, true, label);
+    }
+
+    private Pipeline(Device device, int colorFormat, int depthFormat, int sampleCount,
+                     byte[] vertSpirv, byte[] fragSpirv, boolean fullscreen, String label) {
         this.device = device;
 
         try (MemoryStack stack = stackPush()) {
@@ -74,8 +103,8 @@ public class Pipeline {
             // compile-for-this-GPU happens inside vkCreateGraphicsPipelines.
             // Once the pipeline exists the modules are dead weight, so they are
             // destroyed again at the end of this constructor.
-            long vertModule = createShaderModule(vertResource);
-            long fragModule = createShaderModule(fragResource);
+            long vertModule = createShaderModule(vertSpirv, label);
+            long fragModule = createShaderModule(fragSpirv, label);
 
             // ---- Stages: which module runs at which programmable stage ----
             // pName is the entry point -- "main" by convention; one module could
@@ -104,26 +133,31 @@ public class Pipeline {
             // Position is vec3 now (3D); R32G32B32_SFLOAT = vec3. (Hardcoded to
             // jvre's one vertex layout for now; becomes a parameter the moment a
             // second layout exists.)
-            VkVertexInputBindingDescription.Buffer binding =
-                    VkVertexInputBindingDescription.calloc(1, stack);
-            binding.binding(0);
-            binding.stride(8 * Float.BYTES);
-            binding.inputRate(VK_VERTEX_INPUT_RATE_VERTEX);
-
-            VkVertexInputAttributeDescription.Buffer attributes =
-                    VkVertexInputAttributeDescription.calloc(3, stack);
-            attributes.get(0).location(0).binding(0)
-                    .format(VK_FORMAT_R32G32B32_SFLOAT).offset(0);
-            attributes.get(1).location(1).binding(0)
-                    .format(VK_FORMAT_R32G32B32_SFLOAT).offset(3 * Float.BYTES);
-            attributes.get(2).location(2).binding(0)
-                    .format(VK_FORMAT_R32G32_SFLOAT).offset(6 * Float.BYTES);
-
             VkPipelineVertexInputStateCreateInfo vertexInput =
                     VkPipelineVertexInputStateCreateInfo.calloc(stack);
             vertexInput.sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO);
-            vertexInput.pVertexBindingDescriptions(binding);
-            vertexInput.pVertexAttributeDescriptions(attributes);
+            if (!fullscreen) {
+                VkVertexInputBindingDescription.Buffer binding =
+                        VkVertexInputBindingDescription.calloc(1, stack);
+                binding.binding(0);
+                binding.stride(8 * Float.BYTES);
+                binding.inputRate(VK_VERTEX_INPUT_RATE_VERTEX);
+
+                VkVertexInputAttributeDescription.Buffer attributes =
+                        VkVertexInputAttributeDescription.calloc(3, stack);
+                attributes.get(0).location(0).binding(0)
+                        .format(VK_FORMAT_R32G32B32_SFLOAT).offset(0);
+                attributes.get(1).location(1).binding(0)
+                        .format(VK_FORMAT_R32G32B32_SFLOAT).offset(3 * Float.BYTES);
+                attributes.get(2).location(2).binding(0)
+                        .format(VK_FORMAT_R32G32_SFLOAT).offset(6 * Float.BYTES);
+
+                vertexInput.pVertexBindingDescriptions(binding);
+                vertexInput.pVertexAttributeDescriptions(attributes);
+            }
+            // (fullscreen: left EMPTY -- zero bindings, zero attributes. The
+            // vertex shader reads only gl_VertexIndex; "no vertex buffer" is a
+            // pipeline-level fact, not just an unbound buffer.)
 
             // ---- Input assembly: how vertices group into primitives ----
             // TRIANGLE_LIST: every 3 consecutive vertices = one independent triangle.
@@ -163,7 +197,9 @@ public class Pipeline {
                     VkPipelineRasterizationStateCreateInfo.calloc(stack);
             rasterizer.sType(VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO);
             rasterizer.polygonMode(VK_POLYGON_MODE_FILL);   // fill, not wireframe
-            rasterizer.cullMode(VK_CULL_MODE_BACK_BIT);
+            // (fullscreen: cull NONE -- one screen-covering triangle whose
+            // winding we control; culling buys nothing and risks everything.)
+            rasterizer.cullMode(fullscreen ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT);
             rasterizer.frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE);  // two mirrors cancel
             rasterizer.lineWidth(1.0f);  // required even when not drawing lines
 
@@ -187,8 +223,10 @@ public class Pipeline {
             VkPipelineDepthStencilStateCreateInfo depthStencil =
                     VkPipelineDepthStencilStateCreateInfo.calloc(stack);
             depthStencil.sType(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO);
-            depthStencil.depthTestEnable(true);
-            depthStencil.depthWriteEnable(true);
+            // (fullscreen: both OFF -- a 2D pass with nothing to occlude. The
+            // attachment format below is still declared either way.)
+            depthStencil.depthTestEnable(!fullscreen);
+            depthStencil.depthWriteEnable(!fullscreen);
             depthStencil.depthCompareOp(VK_COMPARE_OP_LESS);
             depthStencil.depthBoundsTestEnable(false);
             depthStencil.stencilTestEnable(false);
@@ -209,7 +247,9 @@ public class Pipeline {
             // or mipmapped sprites would prefer premultiplied to avoid dark halos.)
             VkPipelineColorBlendAttachmentState.Buffer blendAttachment =
                     VkPipelineColorBlendAttachmentState.calloc(1, stack);
-            blendAttachment.blendEnable(true);
+            // (fullscreen: blending OFF/REPLACE -- the effect writes every pixel
+            // opaquely; the factors below are ignored when disabled.)
+            blendAttachment.blendEnable(!fullscreen);
             blendAttachment.srcColorBlendFactor(VK_BLEND_FACTOR_SRC_ALPHA);
             blendAttachment.dstColorBlendFactor(VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA);
             blendAttachment.colorBlendOp(VK_BLEND_OP_ADD);
@@ -245,28 +285,34 @@ public class Pipeline {
             // are instances of this shape, pointing at real buffers/images.
             // Identically-defined layouts are compatible, so sets survive a
             // pipeline rebuild (the resize format-change path).
-            VkDescriptorSetLayoutBinding.Buffer bindings =
-                    VkDescriptorSetLayoutBinding.calloc(2, stack);
+            if (fullscreen) {
+                // v1 effects bind no resources at all -- their entire interface
+                // is the push-constant block. No layout to create.
+                descriptorSetLayout = VK_NULL_HANDLE;
+            } else {
+                VkDescriptorSetLayoutBinding.Buffer bindings =
+                        VkDescriptorSetLayoutBinding.calloc(2, stack);
 
-            bindings.get(0).binding(0);                                  // = shader binding 0
-            bindings.get(0).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
-            bindings.get(0).descriptorCount(1);                         // arrays exist; we bind one
-            bindings.get(0).stageFlags(VK_SHADER_STAGE_VERTEX_BIT);
+                bindings.get(0).binding(0);                                  // = shader binding 0
+                bindings.get(0).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+                bindings.get(0).descriptorCount(1);                         // arrays exist; we bind one
+                bindings.get(0).stageFlags(VK_SHADER_STAGE_VERTEX_BIT);
 
-            bindings.get(1).binding(1);                                  // = shader binding 1
-            bindings.get(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
-            bindings.get(1).descriptorCount(1);
-            bindings.get(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
+                bindings.get(1).binding(1);                                  // = shader binding 1
+                bindings.get(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+                bindings.get(1).descriptorCount(1);
+                bindings.get(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
 
-            VkDescriptorSetLayoutCreateInfo setLayoutInfo =
-                    VkDescriptorSetLayoutCreateInfo.calloc(stack);
-            setLayoutInfo.sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
-            setLayoutInfo.pBindings(bindings);
+                VkDescriptorSetLayoutCreateInfo setLayoutInfo =
+                        VkDescriptorSetLayoutCreateInfo.calloc(stack);
+                setLayoutInfo.sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
+                setLayoutInfo.pBindings(bindings);
 
-            LongBuffer pSetLayout = stack.longs(VK_NULL_HANDLE);
-            Vk.check(vkCreateDescriptorSetLayout(device.handle(), setLayoutInfo, null, pSetLayout),
-                    "Failed to create the descriptor set layout");
-            descriptorSetLayout = pSetLayout.get(0);
+                LongBuffer pSetLayout = stack.longs(VK_NULL_HANDLE);
+                Vk.check(vkCreateDescriptorSetLayout(device.handle(), setLayoutInfo, null, pSetLayout),
+                        "Failed to create the descriptor set layout");
+                descriptorSetLayout = pSetLayout.get(0);
+            }
 
             // ---- Pipeline layout: the shader's external interface ----
             // Now holds BOTH data tiers: the descriptor set layout (binding 0,
@@ -278,11 +324,16 @@ public class Pipeline {
             VkPushConstantRange.Buffer pushRange = VkPushConstantRange.calloc(1, stack);
             pushRange.stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
             pushRange.offset(0);
-            pushRange.size(Float.BYTES);
+            // Scene: 4 bytes of time (the pulse). Fullscreen effect: the 20-byte
+            // builtin block -- vec2 uResolution @0, vec2 uMouse @8, float uTime
+            // @16 (std430 packing; well under the 128-byte spec floor).
+            pushRange.size(fullscreen ? 5 * Float.BYTES : Float.BYTES);
 
             VkPipelineLayoutCreateInfo layoutInfo = VkPipelineLayoutCreateInfo.calloc(stack);
             layoutInfo.sType(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
-            layoutInfo.pSetLayouts(stack.longs(descriptorSetLayout));
+            if (descriptorSetLayout != VK_NULL_HANDLE) {
+                layoutInfo.pSetLayouts(stack.longs(descriptorSetLayout));
+            }
             layoutInfo.pPushConstantRanges(pushRange);
 
             LongBuffer pLayout = stack.longs(VK_NULL_HANDLE);
@@ -331,7 +382,7 @@ public class Pipeline {
             vkDestroyShaderModule(device.handle(), vertModule, null);
             vkDestroyShaderModule(device.handle(), fragModule, null);
         }
-        System.out.println("Graphics pipeline created (" + vertResource + " + " + fragResource + ").");
+        System.out.println("Graphics pipeline created (" + label + ").");
     }
 
     /** The VkPipeline handle -- for vkCmdBindPipeline. */
@@ -352,7 +403,9 @@ public class Pipeline {
     public void close() {
         vkDestroyPipeline(device.handle(), handle, null);
         vkDestroyPipelineLayout(device.handle(), layout, null);
-        vkDestroyDescriptorSetLayout(device.handle(), descriptorSetLayout, null);
+        if (descriptorSetLayout != VK_NULL_HANDLE) {  // fullscreen pipelines have none
+            vkDestroyDescriptorSetLayout(device.handle(), descriptorSetLayout, null);
+        }
     }
 
     // ------------------------------------------------------------------
@@ -360,23 +413,32 @@ public class Pipeline {
     // ------------------------------------------------------------------
 
     /**
-     * Load a compiled SPIR-V binary from the classpath and wrap it in a
-     * VkShaderModule. Vulkan wants the bytes OFF-HEAP (it reads them through a
-     * raw pointer), so they're copied into a memAlloc'd buffer and freed right
-     * after the call -- the driver copies what it needs.
+     * Read a compiled SPIR-V binary from the classpath (jvre's own build-time
+     * shaders -- the scene pair, the fullscreen-triangle vertex shader).
+     * Package-visible: the Renderer uses it to fetch the fullscreen vert for
+     * effect pipelines.
      */
-    private long createShaderModule(String resourcePath) {
-        byte[] bytes;
+    static byte[] readResource(String resourcePath) {
         try (InputStream in = Pipeline.class.getResourceAsStream(resourcePath)) {
             if (in == null) {
                 throw new RuntimeException("Shader resource not found on the classpath: "
                         + resourcePath + " (did compileShaders run?)");
             }
-            bytes = in.readAllBytes();
+            return in.readAllBytes();
         } catch (IOException e) {
             throw new RuntimeException("Failed to read shader resource " + resourcePath, e);
         }
+    }
 
+    /**
+     * Wrap SPIR-V bytes in a VkShaderModule -- the same call whether the bytes
+     * came from a build-time .spv resource or runtime shaderc ({@link
+     * ShaderCompiler}); the driver cannot tell the difference. Vulkan wants the
+     * bytes OFF-HEAP (it reads them through a raw pointer), so they're copied
+     * into a memAlloc'd buffer and freed right after -- the driver copies what
+     * it needs.
+     */
+    private long createShaderModule(byte[] bytes, String label) {
         ByteBuffer code = memAlloc(bytes.length);
         code.put(bytes).flip();
         try (MemoryStack stack = stackPush()) {
@@ -386,7 +448,7 @@ public class Pipeline {
 
             LongBuffer pModule = stack.longs(VK_NULL_HANDLE);
             Vk.check(vkCreateShaderModule(device.handle(), createInfo, null, pModule),
-                    "Failed to create shader module for " + resourcePath);
+                    "Failed to create shader module for " + label);
             return pModule.get(0);
         } finally {
             memFree(code);

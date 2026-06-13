@@ -27,6 +27,7 @@ import org.lwjgl.vulkan.VkSubmitInfo2;
 import org.lwjgl.vulkan.VkViewport;
 import org.lwjgl.vulkan.VkWriteDescriptorSet;
 
+import java.nio.DoubleBuffer;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
 
@@ -132,6 +133,18 @@ public class Renderer {
     // is displayed); sampled once the view/sampler/descriptor/shader beats land.
     private Texture texture;
 
+    // The optional fullscreen ShaderEffect: when installed, recordCommandBuffer
+    // draws IT instead of the cube demo -- the first content seam in the
+    // renderer (the cube machinery stays warm underneath). The effect's
+    // pipeline lives HERE, not in ShaderEffect: pipelines bake swapchain
+    // formats + the sample count, which only the renderer knows.
+    private ShaderEffect effect;
+    private Pipeline effectPipeline;
+
+    // jvre's own fullscreen-triangle vertex shader (build-time compiled, like
+    // all internal shaders) -- shared by every effect.
+    private static final String FULLSCREEN_VERT = "/shaders/fullscreen.vert.spv";
+
     // Uniform buffers, one PER FRAME IN FLIGHT (same reasoning as the sync
     // objects: frame N+1's CPU write must not stomp frame N's in-flight GPU
     // read; the slot's fence guards the handoff). Host-visible on purpose --
@@ -224,6 +237,32 @@ public class Renderer {
         createDescriptors();
         createCommandBuffers();
         createSyncObjects();
+    }
+
+    // ------------------------------------------------------------------
+    // ShaderEffect (the Shadertoy altitude)
+    // ------------------------------------------------------------------
+
+    /**
+     * Show a fullscreen {@link ShaderEffect} instead of the cube demo. The
+     * user's fragment shader was already compiled (at ShaderEffect creation,
+     * via runtime shaderc); here it gets a pipeline against the current
+     * swapchain. Its built-in uniforms (uResolution/uMouse/uTime) are filled
+     * automatically every frame -- no further calls needed.
+     */
+    public void setEffect(ShaderEffect effect) {
+        this.effect = effect;
+        buildEffectPipeline();
+    }
+
+    private void buildEffectPipeline() {
+        if (effectPipeline != null) {
+            effectPipeline.close();
+        }
+        effectPipeline = Pipeline.fullscreenEffect(device,
+                swapchain.imageFormat(), swapchain.depthFormat(), swapchain.sampleCount(),
+                Pipeline.readResource(FULLSCREEN_VERT), effect.fragmentSpirv(),
+                "fullscreen + " + effect.name());
     }
 
     // ------------------------------------------------------------------
@@ -595,12 +634,9 @@ public class Renderer {
             // by the time the triangle is drawn over it.
             vkCmdBeginRendering(cmd, renderingInfo);
 
-            // Bind the pipeline: ONE call swaps in the shaders + all the baked
-            // fixed-function state.
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
-
             // Viewport + scissor are DYNAMIC pipeline state (so resize never
-            // rebuilds the pipeline) -- set them every frame, here.
+            // rebuilds the pipeline) -- set them every frame, here. They apply
+            // to whichever pipeline is bound below.
             // Viewport = NDC -> pixels mapping; scissor = hard pixel clip.
             VkViewport.Buffer viewport = VkViewport.calloc(1, stack);
             viewport.x(0.0f).y(0.0f);
@@ -613,36 +649,65 @@ public class Renderer {
             scissor.extent().width(swapchain.width()).height(swapchain.height());
             vkCmdSetScissor(cmd, 0, scissor);
 
-            // Bind the vertex buffer into BINDING 0 (matching the pipeline's
-            // binding description), starting at byte offset 0. Arrays because
-            // several bindings can be bound in one call.
-            vkCmdBindVertexBuffers(cmd, 0,
-                    stack.longs(vertexBuffer.handle()), stack.longs(0));
+            // The content seam: a fullscreen ShaderEffect when installed,
+            // otherwise the cube demo.
+            if (effectPipeline != null) {
+                // ---- ShaderEffect: 3 vertices, ZERO buffers ----
+                // No vertex buffer, no index buffer, no descriptor sets -- the
+                // vertex shader fabricates the fullscreen triangle from
+                // gl_VertexIndex, and the effect's whole interface is the
+                // 20-byte builtin push block, filled here without being asked.
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, effectPipeline.handle());
 
-            // Bind the index buffer (one per draw, unlike the vertex-buffer
-            // ARRAY) and tell Vulkan how wide each index is.
-            vkCmdBindIndexBuffer(cmd, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT16);
+                DoubleBuffer mx = stack.mallocDouble(1);
+                DoubleBuffer my = stack.mallocDouble(1);
+                window.cursorPos(mx, my);
 
-            // Bind THIS FRAME SLOT's descriptor set: the vertex shader's
-            // binding 0 now reads this slot's UBO (the transform). firstSet 0,
-            // no dynamic offsets. Binding selects WHICH pointer table is live;
-            // the table itself was wired to its buffer once, at startup.
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    pipeline.layout(), 0, stack.longs(descriptorSets[currentFrame]), null);
+                // vec2 uResolution @0, vec2 uMouse @8, float uTime @16.
+                vkCmdPushConstants(cmd, effectPipeline.layout(), VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                        stack.floats(swapchain.width(), swapchain.height(),
+                                (float) mx.get(0), (float) my.get(0), time));
 
-            // Push this frame's time for the FRAGMENT stage's brightness pulse.
-            // Both data tiers in one draw: push constant = tiny + hot, UBO =
-            // bigger + structured. (Per-frame recording is what lets both be
-            // fresh every frame.)
-            vkCmdPushConstants(cmd, pipeline.layout(), VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                    stack.floats(time));
+                // Not indexed, no instances: literally "run the vertex shader
+                // three times".
+                vkCmdDraw(cmd, 3, 1, 0, 0);
+            } else {
+                // ---- The cube demo ----
+                // Bind the pipeline: ONE call swaps in the shaders + all the
+                // baked fixed-function state.
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
 
-            // THE draw, now INDEXED: walk 6 indices, fetch each index's vertex
-            // from the bound vertex buffer (shared vertices fetched from cache,
-            // not duplicated). Offsets: first index 0, vertex offset 0 (added
-            // to every index -- handy for packing many meshes in one buffer),
-            // first instance 0.
-            vkCmdDrawIndexed(cmd, CUBE_INDICES.length, 1, 0, 0, 0);
+                // Bind the vertex buffer into BINDING 0 (matching the pipeline's
+                // binding description), starting at byte offset 0. Arrays because
+                // several bindings can be bound in one call.
+                vkCmdBindVertexBuffers(cmd, 0,
+                        stack.longs(vertexBuffer.handle()), stack.longs(0));
+
+                // Bind the index buffer (one per draw, unlike the vertex-buffer
+                // ARRAY) and tell Vulkan how wide each index is.
+                vkCmdBindIndexBuffer(cmd, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT16);
+
+                // Bind THIS FRAME SLOT's descriptor set: the vertex shader's
+                // binding 0 now reads this slot's UBO (the transform). firstSet 0,
+                // no dynamic offsets. Binding selects WHICH pointer table is live;
+                // the table itself was wired to its buffer once, at startup.
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        pipeline.layout(), 0, stack.longs(descriptorSets[currentFrame]), null);
+
+                // Push this frame's time for the FRAGMENT stage's brightness pulse.
+                // Both data tiers in one draw: push constant = tiny + hot, UBO =
+                // bigger + structured. (Per-frame recording is what lets both be
+                // fresh every frame.)
+                vkCmdPushConstants(cmd, pipeline.layout(), VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                        stack.floats(time));
+
+                // THE draw, now INDEXED: walk 6 indices, fetch each index's vertex
+                // from the bound vertex buffer (shared vertices fetched from cache,
+                // not duplicated). Offsets: first index 0, vertex offset 0 (added
+                // to every index -- handy for packing many meshes in one buffer),
+                // first instance 0.
+                vkCmdDrawIndexed(cmd, CUBE_INDICES.length, 1, 0, 0, 0);
+            }
 
             vkCmdEndRendering(cmd);
 
@@ -777,8 +842,11 @@ public class Renderer {
 
             // Rewrite this slot's UBO with the fresh transform (safe: the fence
             // wait above guarantees the GPU finished reading this slot's UBO).
-            float aspect = swapchain.width() / (float) swapchain.height();
-            uniformBuffers[currentFrame].uploadFloats(modelViewProjection(time, aspect));
+            // A ShaderEffect uses no UBO at all -- skip the work entirely.
+            if (effectPipeline == null) {
+                float aspect = swapchain.width() / (float) swapchain.height();
+                uniformBuffers[currentFrame].uploadFloats(modelViewProjection(time, aspect));
+            }
 
             // Re-record this slot's command buffer for the image we just got
             // (safe for the same fence reason).
@@ -903,6 +971,11 @@ public class Renderer {
             pipeline.close();
             pipeline = new Pipeline(device, swapchain.imageFormat(), swapchain.depthFormat(),
                     swapchain.sampleCount(), TRIANGLE_VERT, TRIANGLE_FRAG);
+            // The effect pipeline baked the same formats -- rebuild it too (the
+            // user's SPIR-V is still in the ShaderEffect; no recompile needed).
+            if (effect != null) {
+                buildEffectPipeline();
+            }
         }
 
         // Drop any resize flag raised by the burst of events we just handled --
@@ -954,6 +1027,9 @@ public class Renderer {
             for (Buffer ubo : uniformBuffers) {
                 ubo.close();
             }
+        }
+        if (effectPipeline != null) {
+            effectPipeline.close();
         }
         if (texture != null) {
             texture.close();

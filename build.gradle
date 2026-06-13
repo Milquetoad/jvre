@@ -49,6 +49,12 @@ dependencies {
     // Unlike lwjgl-vulkan this IS a native library (C++), so it has natives.
     implementation "org.lwjgl:lwjgl-vma"
 
+    // shaderc (Google): the GLSL -> SPIR-V compiler AS A LIBRARY -- the same
+    // compiler the glslc command wraps. Lets ShaderEffect compile USER shaders
+    // at runtime, so jvre-as-a-library consumers need no Vulkan SDK installed
+    // (jvre's own built-in shaders still compile at build time via glslc).
+    implementation "org.lwjgl:lwjgl-shaderc"
+
     // JOML (Java OpenGL Math Library): vectors + matrices, pure Java (no natives).
     // Arrives now, WITH 3D -- the hand-rolled 2D affine matrix is retired. Builds
     // the per-frame model-view-projection (perspective, translate/rotate, ...).
@@ -58,7 +64,21 @@ dependencies {
     runtimeOnly "org.lwjgl:lwjgl::$lwjglNatives"
     runtimeOnly "org.lwjgl:lwjgl-glfw::$lwjglNatives"
     runtimeOnly "org.lwjgl:lwjgl-vma::$lwjglNatives"
+    runtimeOnly "org.lwjgl:lwjgl-shaderc::$lwjglNatives"
     // (no lwjgl-vulkan natives on Windows — the loader is system-provided)
+
+    // JUnit 5 -- jvre's first unit tests arrive with ShaderCompiler: a pure
+    // GLSL-in/SPIR-V-out function needing NO GPU, unlike nearly everything else
+    // in a renderer. (testRuntimeOnly extends runtimeOnly, so the LWJGL natives
+    // above are on the test classpath too.)
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+    testLogging { events 'passed', 'failed', 'skipped' }
 }
 
 application {

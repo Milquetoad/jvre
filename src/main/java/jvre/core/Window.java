@@ -3,6 +3,7 @@ package jvre.core;
 import org.lwjgl.glfw.GLFWErrorCallback;
 import org.lwjgl.glfw.GLFWFramebufferSizeCallback;
 
+import java.nio.DoubleBuffer;
 import java.nio.IntBuffer;
 
 import static org.lwjgl.glfw.GLFW.*;
@@ -71,6 +72,17 @@ public class Window {
     /** Current framebuffer size in PIXELS (not screen coords), written into w/h. */
     public void framebufferSize(IntBuffer w, IntBuffer h) {
         glfwGetFramebufferSize(handle, w, h);
+    }
+
+    /**
+     * Current cursor position relative to the window's top-left corner, written
+     * into x/y. NOTE: GLFW reports SCREEN coordinates, not framebuffer pixels --
+     * they differ on high-DPI displays (the same scale split as framebufferSize).
+     * Identical on this machine; the proper content-scale conversion belongs to
+     * the input milestone.
+     */
+    public void cursorPos(DoubleBuffer x, DoubleBuffer y) {
+        glfwGetCursorPos(handle, x, y);
     }
 
     /** Did the framebuffer change size since the last call? (Reading clears the flag.) */

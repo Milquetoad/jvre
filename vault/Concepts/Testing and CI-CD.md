@@ -2,6 +2,8 @@
 
 Builds on [[Gradle]], [[Gradle Wrapper]], [[Consuming and Publishing Libraries]].
 
+> ✅ **Realized (2026-06-13):** jvre's **first unit tests** arrived with [[ShaderEffect - The Shadertoy Altitude|ShaderCompiler]] — `src/test/java/jvre/core/ShaderCompilerTest.java`, JUnit 5 wired exactly as below. They exist because `ShaderCompiler` is a **pure function** (GLSL in, SPIR-V out): no GPU, no window, no device — the rare renderer surface that's the "Logic/unit" row of the table. Three tests: valid frag → a SPIR-V module (asserts the `0x07230203` magic), broken frag → exception carrying the file label (the no-preamble-injection promise, asserted), fullscreen vert compiles. **Wrinkle worth noting:** even these "unit" tests load the **lwjgl-shaderc natives** (`testRuntimeOnly` extends `runtimeOnly`, so the LWJGL natives are on the test classpath) — so they're GPU-free but *not* pure-JVM; a CI runner still needs the right natives, just no GPU. They double as the proof those natives load on a machine.
+
 ## Automated testing
 - Test code lives in `src/test/java` (separate from `src/main/java`).
 - Add a framework — modern default **JUnit 5**:

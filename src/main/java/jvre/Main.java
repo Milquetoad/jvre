@@ -2,6 +2,7 @@ package jvre;
 
 import jvre.core.Instance;
 import jvre.core.Renderer;
+import jvre.core.ShaderEffect;
 import jvre.core.Surface;
 import jvre.core.Window;
 
@@ -20,7 +21,11 @@ public class Main {
 
     private static final int WIDTH = 800;
     private static final int HEIGHT = 600;
-    private static final CharSequence TITLE = "jvre - orbiting quad";
+    private static final CharSequence TITLE = "jvre - shader effect";
+
+    // The Shadertoy altitude: a runtime-compiled user fragment shader on a
+    // fullscreen triangle. Set to null to see the cube demo instead.
+    private static final String EFFECT = "/demo/ripple.frag";
 
     // Bright orange (RGB in [0,1]) -- the renderer clears to this every frame.
     private static final float CLEAR_R = 1.0f;
@@ -54,10 +59,18 @@ public class Main {
         instance = new Instance("jvre demo", ENABLE_VALIDATION);
         surface = new Surface(instance, window);
         renderer = new Renderer(instance, surface, window, CLEAR_R, CLEAR_G, CLEAR_B);
+
+        if (EFFECT != null) {
+            // This is the API Vision sketch, nearly verbatim: the user's whole
+            // contribution is one fragment shader. It compiles RIGHT HERE, at
+            // runtime (shaderc) -- bad GLSL fails on this line with the
+            // shader's own line numbers, before any drawing starts.
+            renderer.setEffect(ShaderEffect.fromFragment(EFFECT));
+        }
     }
 
     private void mainLoop() {
-        System.out.println("Entering render loop -- orbiting, spinning, pulsing quad. Close the window to exit.");
+        System.out.println("Entering render loop. Close the window to exit.");
         while (!window.shouldClose()) {
             window.pollEvents();
             renderer.drawFrame();

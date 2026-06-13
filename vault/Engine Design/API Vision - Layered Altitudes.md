@@ -28,6 +28,8 @@ while (window.isOpen()) {
 ```
 Custom shaders also plug into 3D as materials: `mesh.setMaterial(Material.fromShaders("custom.vert","custom.frag"))`.
 
+> ✅ **Realized (2026-06-13):** [[ShaderEffect - The Shadertoy Altitude]] is live — the first altitude to exist as code. v1 came in *smaller* than this sketch: the built-in uniforms (`uResolution`/`uMouse`/`uTime`) are **auto-filled every frame**, so there's no `set()` yet (that's post-v1, gated on SPIR-V reflection — Shadertoy itself has no arbitrary uniforms either), and you install once with `renderer.setEffect(...)` rather than calling `drawFullscreen` per frame. The "sequencing surprise" below held: it landed right after MSAA, before any 2D layer.
+
 ## Why it's one engine: the layers
 ```
 L2  Convenience API   Renderer2D (shapes/text), Scene/Mesh/Camera, ShaderEffect

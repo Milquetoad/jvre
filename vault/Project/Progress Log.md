@@ -2,6 +2,13 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-14 — L2 strokes: the polygon outlines + MITER joins -- stroke set COMPLETE 📐✅
+- **`strokeTriangle` + `strokeQuad`** via a shared **`strokePolygon`** -- the first place the **JOIN** question bites. Butt-capped edges would gap or overlap at corners; the fix is the **miter join**: offset each vertex along its angle BISECTOR (= normalized sum of the two adjacent edge normals) by `halfThickness / cos(phi)`, where `phi` is the angle between bisector and edge normal. The `1/cos` is the whole trick -- it makes the offset EDGES land exactly `halfThickness` from the originals (a plain offset along the bisector would pull corners in). Done for +/-bisector -> outer/inner corner points; the band between consecutive corners is two triangles. **Winding-agnostic** (symmetric +/-), so vertex order doesn't matter.
+- **Miter limit**: a true miter spikes to infinity as a corner gets sharp (`cos -> 0`); `cos` is clamped to 0.1 -- a cheap cap. Real engines (SVG/Skia) fall back to a bevel past a limit; catalogued as a later refinement (SDF strokes reopen it).
+- **Verified on the 4090**: thick triangle + quad outlines, corners **sharp, gap-free, uniform width through the join** (the user noticed -- the abstraction is one local per-vertex computation that serves any polygon). The square-`strokeQuad` test pins the math: a 100x100 square outline miters to outer bounds exactly `[-5, 105]`.
+- **The v1 STROKE SET is complete**: `line`, `strokeRect`, `strokeCircle`/`strokeEllipse`, `strokeTriangle`/`strokeQuad` -- all CPU-triangulated, no `wideLines`, all feeding the one shape batch.
+- **Next**: **SDF edge-AA** (the catalogued AA track for L2 curves/strokes -- smoothstep alpha over ~1px of signed distance), then the gated `image`/`text`.
+
 ## 2026-06-14 — L2 strokes: strokeCircle / strokeEllipse (the ring) ⭕✅
 - **`strokeEllipse(cx,cy,rx,ry,thickness,color)`** + **`strokeCircle`** (the `rx==ry` delegate): a tessellated **RING** between an outer rim (r + thickness/2) and an inner rim (r - thickness/2), stroke centered on the radii. Each tessellation slice is a quad spanning outer→inner; consecutive quads share an edge, so a smooth curve has **no join question** (unlike the polygon strokes coming next). Verified on the 4090 (white ring + thin dark elliptical outline -- uniform width, smooth, hollow).
 - Inner rim **clamped at 0**, so a thickness wider than the diameter degenerates cleanly to a filled disc instead of inverting. Negative radius/thickness rejected.

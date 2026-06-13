@@ -287,6 +287,49 @@ class Renderer2DTest {
     }
 
     @Test
+    void strokeTriangleIsOneBandPerEdge() {
+        Renderer2D g = new Renderer2D();
+        g.begin();
+        g.strokeTriangle(0, 0, 100, 0, 50, 80, 6, Color.WHITE);
+        g.end();
+        assertEquals(3 * 6, g.vertexCount());   // 3 edges x a 2-triangle band
+    }
+
+    @Test
+    void strokeQuadOfASquareMitersToAnInflatedFrame() {
+        Renderer2D g = new Renderer2D();
+        g.begin();
+        // A 100x100 square outline, thickness 10. Miter joins push the corners
+        // out by half-thickness on each axis -> outer bounds inflate by 5.
+        g.strokeQuad(0, 0, 100, 0, 100, 100, 0, 100, 10, Color.WHITE);
+        g.end();
+        assertEquals(4 * 6, g.vertexCount());
+
+        float[] v = g.vertexData();
+        int stride = Renderer2D.FLOATS_PER_VERTEX;
+        float minX = Float.MAX_VALUE, maxX = -Float.MAX_VALUE;
+        float minY = Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
+        for (int i = 0; i < g.vertexCount(); i++) {
+            minX = Math.min(minX, v[i * stride]);
+            maxX = Math.max(maxX, v[i * stride]);
+            minY = Math.min(minY, v[i * stride + 1]);
+            maxY = Math.max(maxY, v[i * stride + 1]);
+        }
+        assertEquals(-5f, minX, 1e-3f);
+        assertEquals(105f, maxX, 1e-3f);
+        assertEquals(-5f, minY, 1e-3f);
+        assertEquals(105f, maxY, 1e-3f);
+    }
+
+    @Test
+    void strokeTriangleRejectsNegativeThickness() {
+        Renderer2D g = new Renderer2D();
+        g.begin();
+        assertThrows(IllegalArgumentException.class,
+                () -> g.strokeTriangle(0, 0, 10, 0, 5, 8, -1, Color.WHITE));
+    }
+
+    @Test
     void quadSplitsOnTheZeroTwoDiagonal() {
         Renderer2D g = new Renderer2D();
         g.begin();

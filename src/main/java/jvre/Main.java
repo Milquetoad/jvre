@@ -131,6 +131,10 @@ public class Main {
         // Stroked curves: a ring (circle outline) and a wide elliptical outline.
         g.strokeCircle(670, 180, 70, 9, Color.rgb(255, 255, 255));      // white ring
         g.strokeEllipse(360, 300, 150, 40, 6, Color.rgb(20, 20, 20));   // dark outline round the green circle
+        // Polygon outlines -- the corners are MITER joins. Thick, to make the
+        // mitered corners obvious (sharp, gap-free, no double-blend).
+        g.strokeTriangle(360, 70, 470, 70, 415, 165, 10, Color.rgb(20, 20, 20));   // dark triangle outline
+        g.strokeQuad(120, 380, 250, 360, 280, 470, 90, 450, 8, Color.rgb(255, 255, 255));  // white quad outline
         // Anchored to the BOTTOM-RIGHT via the live framebuffer size -- relative
         // layout as plain arithmetic (no coordinate mode). Resize the window and
         // this square tracks the corner while the others stay pinned top-left.

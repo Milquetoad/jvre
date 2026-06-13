@@ -312,6 +312,100 @@ public final class Renderer2D {
     }
 
     /**
+     * Stroke the outline of a triangle from three explicit vertices.
+     * @see #strokePolygon
+     */
+    public void strokeTriangle(float x1, float y1, float x2, float y2, float x3, float y3,
+                               float thickness, Color color) {
+        requireInFrame("strokeTriangle");
+        strokePolygon(new float[] { x1, x2, x3 }, new float[] { y1, y2, y3 },
+                thickness, color, "strokeTriangle");
+    }
+
+    /**
+     * Stroke the outline of a convex quad from four explicit vertices (in order
+     * around the perimeter).
+     * @see #strokePolygon
+     */
+    public void strokeQuad(float x1, float y1, float x2, float y2,
+                           float x3, float y3, float x4, float y4,
+                           float thickness, Color color) {
+        requireInFrame("strokeQuad");
+        strokePolygon(new float[] { x1, x2, x3, x4 }, new float[] { y1, y2, y3, y4 },
+                thickness, color, "strokeQuad");
+    }
+
+    /**
+     * Stroke a closed polygon -- the shared engine behind the polygon outlines,
+     * and the first place the JOIN question matters: where two thick edges meet,
+     * the corner must be filled cleanly, not gapped (butt caps) or double-covered.
+     *
+     * The construction is the MITER join. Offset each vertex along its angle
+     * BISECTOR -- the average of the two adjacent edge normals -- by {@code
+     * halfThickness / cos(half-angle)}. That extra {@code 1/cos} is what makes
+     * the offset EDGES land exactly halfThickness from the originals (a plain
+     * halfThickness offset along the bisector would pull the corners in). Doing
+     * it for +bisector and -bisector gives an outer and inner corner point; the
+     * ring between consecutive corners is two triangles. Winding-agnostic: we go
+     * symmetrically either way, so the band is centred on the boundary regardless
+     * of vertex order.
+     *
+     * The {@code cos} is clamped (a cheap miter LIMIT): at a very sharp corner a
+     * true miter spikes to infinity, so we cap the extension. Fine for the convex
+     * triangles/quads this serves; a real bevel/round-join fallback is a later
+     * refinement (and SDF strokes will reopen the whole topic).
+     */
+    private void strokePolygon(float[] xs, float[] ys, float thickness, Color color, String call) {
+        if (thickness < 0f) {
+            throw new IllegalArgumentException(call + ": negative thickness (" + thickness + ")");
+        }
+        int n = xs.length;
+        float ht = thickness * 0.5f;
+        float[] mvx = new float[n];   // miter direction x
+        float[] mvy = new float[n];   // miter direction y
+        float[] mlen = new float[n];  // miter length
+
+        for (int i = 0; i < n; i++) {
+            int prev = (i - 1 + n) % n;
+            int next = (i + 1) % n;
+            // Unit directions of the incoming (prev->i) and outgoing (i->next) edges.
+            float e1x = xs[i] - xs[prev], e1y = ys[i] - ys[prev];
+            float l1 = Math.max(1e-6f, (float) Math.hypot(e1x, e1y));
+            e1x /= l1; e1y /= l1;
+            float e2x = xs[next] - xs[i], e2y = ys[next] - ys[i];
+            float l2 = Math.max(1e-6f, (float) Math.hypot(e2x, e2y));
+            e2x /= l2; e2y /= l2;
+            // Left normals of each edge, and the bisector = their normalized sum.
+            float n1x = -e1y, n1y = e1x;
+            float n2x = -e2y, n2y = e2x;
+            float bx = n1x + n2x, by = n1y + n2y;
+            float bl = (float) Math.hypot(bx, by);
+            if (bl < 1e-6f) {   // ~180-degree turn: fall back to one edge normal
+                bx = n1x; by = n1y; bl = 1f;
+            }
+            bx /= bl; by /= bl;
+            float cos = Math.max(0.1f, bx * n1x + by * n1y);   // clamp = cheap miter limit
+            mvx[i] = bx; mvy[i] = by; mlen[i] = ht / cos;
+        }
+
+        float[] c = color.linearRGBA();
+        for (int i = 0; i < n; i++) {
+            int next = (i + 1) % n;
+            float oiX = xs[i] + mvx[i] * mlen[i],    oiY = ys[i] + mvy[i] * mlen[i];     // corner i, +bisector
+            float iiX = xs[i] - mvx[i] * mlen[i],    iiY = ys[i] - mvy[i] * mlen[i];     // corner i, -bisector
+            float onX = xs[next] + mvx[next] * mlen[next], onY = ys[next] + mvy[next] * mlen[next];
+            float inX = xs[next] - mvx[next] * mlen[next], inY = ys[next] - mvy[next] * mlen[next];
+            // The band for edge i->next: quad (i+, next+, next-, i-) as two triangles.
+            vertex(oiX, oiY, c);
+            vertex(onX, onY, c);
+            vertex(inX, inY, c);
+            vertex(oiX, oiY, c);
+            vertex(inX, inY, c);
+            vertex(iiX, iiY, c);
+        }
+    }
+
+    /**
      * How many segments to tessellate a circle of radius {@code r} into. Derived
      * from a target chord error (~0.3px): the angle whose chord deviates from the
      * arc by that much is {@code 2*acos(1 - e/r)}, and a full turn divided by it

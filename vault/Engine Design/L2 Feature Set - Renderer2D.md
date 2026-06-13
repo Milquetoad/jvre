@@ -2,6 +2,8 @@
 
 Status (2026-06-12): **v1 surface settled** (principles, primitives, style, outlines, naming). This formalizes the "just draw" altitude from [[API Vision - Layered Altitudes]]. Modeled on Processing, deliberately smaller ([[Design North Star]]): every omission below is a choice, not an oversight.
 
+> 🚧 **Implementation underway (2026-06-13).** Beat 1 landed: `Color` (sRGB→linear, the swapchain being sRGB makes this a correctness step), the `shape2d` vertex/fragment shaders (pixels→NDC in the vertex shader; no Y-flip — Vulkan NDC y-down already matches top-left pixels), and `Renderer2D`'s **CPU half** — `begin()`/`fillRect()`/`end()` accumulating an interleaved `[x y | r g b a]` arena, with L2-speaking errors, all unit-tested (no GPU). **Beat 2** is the GPU half: a per-frame dynamic vertex buffer + a shape pipeline + the content seam in the Renderer → the first rectangle on screen. See [[Progress Log]].
+
 ## Principles (decided)
 
 1. **Stateless call sites — no modes.** Every drawing call carries its complete meaning at the call site; nothing a call does may depend on a mode set elsewhere.

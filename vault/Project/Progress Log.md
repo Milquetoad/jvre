@@ -2,6 +2,13 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-13 — L2 beat 3: the v1 FILLS are complete 🔷✅
+- **`fillEllipse` + `fillTriangle` + `fillQuad`** land; with `fillRect` and `fillCircle` that's the **entire v1 fill set**. Verified on the 4090 (wide yellow ellipse, purple triangle, cyan convex quad, all correct alongside the rects + circle).
+- **`fillCircle` now delegates to `fillEllipse`** (the `rx == ry` case) -- the fan generalized to two radii, segment count off the larger radius. One implementation, two entry points.
+- **`fillTriangle`/`fillQuad` = explicit vertices** (their natural convention, no corner-vs-centre question). The quad splits on the **0-2 diagonal** ((v0,v1,v2)+(v0,v2,v3)) -- the same convex split the [[Index Buffers|index buffer]] used for quad/cube faces; convex is the documented contract.
+- **Tests**: 6 more (ellipse honors both radii, circle == equal-radii ellipse, triangle vertices, quad 0-2 diagonal, negative-radius rejects). One caught a real lesson -- an over-tight tolerance on the ellipse's y-extent: the fan samples don't land exactly on the axes, so the polygon undershoots `ry` by ~0.02px (tessellation, not a bug) -- loosened to sub-pixel. All GPU-free; suite green.
+- **Next in beat 3: STROKES** -- the genuinely interesting CPU work (`line`, `strokeRect`, `strokeCircle`, ...). No `wideLines` (non-portable): a thick line = a quad, a stroked rect = an 8-triangle frame; join/corner geometry is the honest part. All feeds the same arena + shape pipeline. Then SDF edge-AA, then `image`/`text`.
+
 ## 2026-06-13 — L2 beat 3 begins: fillCircle (first tessellated shape) ⭕✅
 - **`fillCircle(cx, cy, r, color)`** — centre+radius (the circle's natural convention). The first **tessellated** primitive: a triangle FAN (centre, rim_i, rim_i+1) emitted as a flat triangle list (the arena is non-indexed). Verified on the 4090 (translucent green circle, smooth/round edge, blends over the rects; relative-anchored white square also confirmed tracking the corner on resize).
 - **Segment count scales with radius** from a ~0.3px chord-error target: `segments = ceil(2pi / (2*acos(1 - e/r)))`, clamped to [8, 512]. Big circles stay smooth, tiny ones stay cheap — and the tests pin it (a 500px circle gets more segments than a 10px one).

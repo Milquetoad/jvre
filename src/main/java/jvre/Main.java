@@ -118,6 +118,9 @@ public class Main {
         // A filled circle (centre + radius), tessellated. Translucent so its
         // round edge shows against the rectangles it overlaps.
         g.fillCircle(360, 300, 110, Color.rgba(80, 220, 130, 160));     // translucent green circle
+        g.fillEllipse(180, 470, 130, 55, Color.rgb(245, 200, 40));      // a wide yellow ellipse
+        g.fillTriangle(520, 60, 760, 60, 640, 230, Color.rgb(200, 80, 220));  // purple triangle
+        g.fillQuad(560, 250, 700, 270, 720, 360, 540, 340, Color.rgb(40, 200, 220));  // cyan quad
         // Anchored to the BOTTOM-RIGHT via the live framebuffer size -- relative
         // layout as plain arithmetic (no coordinate mode). Resize the window and
         // this square tracks the corner while the others stay pinned top-left.

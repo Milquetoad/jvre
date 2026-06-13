@@ -96,38 +96,83 @@ public final class Renderer2D {
     /**
      * Fill a circle: centre {@code (cx, cy)} + radius {@code r}, in pixels.
      * Centre-and-radius is the circle's natural convention (geometry; even
-     * Processing defaults ellipseMode to CENTER).
-     *
-     * Tessellated into a triangle FAN -- one slice {@code (centre, p_i, p_i+1)}
-     * per segment -- emitted as a flat triangle list (the arena has no index
-     * buffer). The segment count scales with the radius so a big circle stays
-     * smooth and a tiny one stays cheap. This hard-tessellated edge is what the
-     * planned SDF edge-AA will later soften (smoothstepping alpha over ~1px of
-     * signed distance), which is why curves get their own shader path eventually.
+     * Processing defaults ellipseMode to CENTER). A circle is just the
+     * {@code rx == ry} ellipse, so this delegates to {@link #fillEllipse}.
      */
     public void fillCircle(float cx, float cy, float r, Color color) {
         requireInFrame("fillCircle");
         if (r < 0f) {
             throw new IllegalArgumentException("fillCircle: negative radius (" + r + ")");
         }
+        fillEllipse(cx, cy, r, r, color);
+    }
+
+    /**
+     * Fill an ellipse: centre {@code (cx, cy)} + radii {@code rx, ry}, in pixels.
+     *
+     * Tessellated into a triangle FAN -- one slice {@code (centre, rim_i,
+     * rim_i+1)} per segment -- emitted as a flat triangle list (the arena has no
+     * index buffer). The segment count scales with the LARGER radius so a big
+     * ellipse stays smooth and a tiny one stays cheap. This hard-tessellated edge
+     * is what the planned SDF edge-AA will later soften (smoothstepping alpha
+     * over ~1px of signed distance), which is why curves get their own shader
+     * path eventually.
+     */
+    public void fillEllipse(float cx, float cy, float rx, float ry, Color color) {
+        requireInFrame("fillEllipse");
+        if (rx < 0f || ry < 0f) {
+            throw new IllegalArgumentException("fillEllipse: negative radius (" + rx + ", " + ry + ")");
+        }
         float[] c = color.linearRGBA();
-        int segments = circleSegments(r);
+        int segments = circleSegments(Math.max(rx, ry));
         float step = (float) (2.0 * Math.PI / segments);
 
         // Walk the rim once; each step makes a triangle from the centre to the
         // current and next rim points. Start at angle 0 (the +x point).
-        float prevX = cx + r;
+        float prevX = cx + rx;
         float prevY = cy;
         for (int i = 1; i <= segments; i++) {
             float a = i * step;
-            float nextX = cx + r * (float) Math.cos(a);
-            float nextY = cy + r * (float) Math.sin(a);
+            float nextX = cx + rx * (float) Math.cos(a);
+            float nextY = cy + ry * (float) Math.sin(a);
             vertex(cx, cy, c);
             vertex(prevX, prevY, c);
             vertex(nextX, nextY, c);
             prevX = nextX;
             prevY = nextY;
         }
+    }
+
+    /**
+     * Fill a triangle from three explicit vertices, in pixels. Explicit vertices
+     * are the triangle's natural convention (no corner-vs-centre question).
+     */
+    public void fillTriangle(float x1, float y1, float x2, float y2, float x3, float y3,
+                             Color color) {
+        requireInFrame("fillTriangle");
+        float[] c = color.linearRGBA();
+        vertex(x1, y1, c);
+        vertex(x2, y2, c);
+        vertex(x3, y3, c);
+    }
+
+    /**
+     * Fill a convex quad from four explicit vertices (in order around the
+     * perimeter), in pixels. Triangulated on the 0-2 diagonal: (v0,v1,v2) +
+     * (v0,v2,v3) -- the standard convex split, the same diagonal the index
+     * buffer used for the quad/cube faces. (Non-convex quads will fold; convex
+     * is the documented contract, matching the spec.)
+     */
+    public void fillQuad(float x1, float y1, float x2, float y2,
+                         float x3, float y3, float x4, float y4, Color color) {
+        requireInFrame("fillQuad");
+        float[] c = color.linearRGBA();
+        vertex(x1, y1, c);
+        vertex(x2, y2, c);
+        vertex(x3, y3, c);
+        vertex(x1, y1, c);
+        vertex(x3, y3, c);
+        vertex(x4, y4, c);
     }
 
     /**

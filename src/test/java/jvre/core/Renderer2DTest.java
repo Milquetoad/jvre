@@ -124,5 +124,68 @@ class Renderer2DTest {
         g.begin();
         assertThrows(IllegalArgumentException.class,
                 () -> g.fillCircle(0, 0, -1, Color.WHITE));
+        assertThrows(IllegalArgumentException.class,
+                () -> g.fillEllipse(0, 0, 10, -1, Color.WHITE));
+    }
+
+    @Test
+    void ellipseRespectsBothRadii() {
+        Renderer2D g = new Renderer2D();
+        g.begin();
+        g.fillEllipse(0, 0, 100, 20, Color.WHITE);
+        g.end();
+        float[] v = g.vertexData();
+        int stride = Renderer2D.FLOATS_PER_VERTEX;
+        float maxX = 0, maxY = 0;
+        for (int i = 0; i < g.vertexCount(); i++) {
+            maxX = Math.max(maxX, Math.abs(v[i * stride]));
+            maxY = Math.max(maxY, Math.abs(v[i * stride + 1]));
+        }
+        // Tolerance covers the tessellation undershoot (sampled angles don't
+        // land exactly on the axes) while still proving rx and ry are distinct.
+        assertEquals(100f, maxX, 0.5f, "x extent = rx");
+        assertEquals(20f, maxY, 0.5f, "y extent = ry");
+    }
+
+    @Test
+    void circleIsTheEqualRadiiEllipse() {
+        // fillCircle delegates to fillEllipse -- same vertex count for r == rx == ry.
+        Renderer2D a = new Renderer2D();
+        a.begin();
+        a.fillCircle(0, 0, 60, Color.WHITE);
+        a.end();
+        Renderer2D b = new Renderer2D();
+        b.begin();
+        b.fillEllipse(0, 0, 60, 60, Color.WHITE);
+        b.end();
+        assertEquals(b.vertexCount(), a.vertexCount());
+    }
+
+    @Test
+    void triangleIsThreeVertices() {
+        Renderer2D g = new Renderer2D();
+        g.begin();
+        g.fillTriangle(0, 0, 10, 0, 5, 8, Color.RED);
+        g.end();
+        assertEquals(3, g.vertexCount());
+        float[] v = g.vertexData();
+        assertEquals(5f, v[2 * Renderer2D.FLOATS_PER_VERTEX]);     // third vertex x
+        assertEquals(8f, v[2 * Renderer2D.FLOATS_PER_VERTEX + 1]); // third vertex y
+    }
+
+    @Test
+    void quadSplitsOnTheZeroTwoDiagonal() {
+        Renderer2D g = new Renderer2D();
+        g.begin();
+        g.fillQuad(0, 0, 10, 0, 10, 10, 0, 10, Color.BLUE);
+        g.end();
+        assertEquals(6, g.vertexCount());   // two triangles
+        float[] v = g.vertexData();
+        int s = Renderer2D.FLOATS_PER_VERTEX;
+        // Triangle 2 starts at v0 (0,0) and continues from v2 (10,10) -- the 0-2 diagonal.
+        assertEquals(0f, v[3 * s]);
+        assertEquals(0f, v[3 * s + 1]);
+        assertEquals(10f, v[4 * s]);
+        assertEquals(10f, v[4 * s + 1]);
     }
 }

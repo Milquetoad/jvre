@@ -218,6 +218,43 @@ public final class Renderer2D {
     }
 
     /**
+     * Stroke (outline) a rectangle: same corner+size as {@link #fillRect}, plus
+     * a {@code thickness}. The stroke is CENTERED on the boundary (the
+     * canvas/SVG convention) -- half the thickness spills outward, half inward.
+     *
+     * Built as an 8-triangle FRAME, not four {@link #line} calls: four edge
+     * bands that tile the border WITHOUT overlapping. The top and bottom bands
+     * take the full outer width (corners included); the left and right take only
+     * the span between them. The non-overlap matters: a TRANSLUCENT stroke that
+     * double-covered its corners would blend to a different color there. (That
+     * same reasoning is why a filled+stroked shape will eventually need one
+     * combined call rather than two -- the reserved Style form.)
+     */
+    public void strokeRect(float x, float y, float w, float h, float thickness, Color color) {
+        requireInFrame("strokeRect");
+        if (w < 0f || h < 0f) {
+            throw new IllegalArgumentException("strokeRect: negative size (" + w + " x " + h + ")");
+        }
+        if (thickness < 0f) {
+            throw new IllegalArgumentException("strokeRect: negative thickness (" + thickness + ")");
+        }
+        // Outer rect = the boundary inflated by half the thickness (centered stroke).
+        float ht = thickness * 0.5f;
+        float ox = x - ht;
+        float oy = y - ht;
+        float ow = w + thickness;
+        float oh = h + thickness;
+
+        fillRect(ox, oy, ow, thickness, color);                    // top band (full width)
+        fillRect(ox, oy + oh - thickness, ow, thickness, color);   // bottom band (full width)
+        float midH = oh - 2f * thickness;                          // span between top + bottom
+        if (midH > 0f) {
+            fillRect(ox, oy + thickness, thickness, midH, color);                  // left band
+            fillRect(ox + ow - thickness, oy + thickness, thickness, midH, color); // right band
+        }
+    }
+
+    /**
      * How many segments to tessellate a circle of radius {@code r} into. Derived
      * from a target chord error (~0.3px): the angle whose chord deviates from the
      * arc by that much is {@code 2*acos(1 - e/r)}, and a full turn divided by it

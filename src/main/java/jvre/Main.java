@@ -125,6 +125,9 @@ public class Main {
         // the top, and a thick diagonal -- different thicknesses, any angle.
         g.line(40, 40, 760, 40, 3, Color.rgb(20, 20, 20));             // thin near-black rule
         g.line(80, 540, 320, 410, 14, Color.rgb(255, 140, 0));         // thick orange diagonal
+        // A TRANSLUCENT stroked frame -- if the corners were double-covered they'd
+        // blend brighter; the non-overlapping 8-triangle frame keeps them uniform.
+        g.strokeRect(430, 420, 150, 110, 12, Color.rgba(255, 255, 255, 140));
         // Anchored to the BOTTOM-RIGHT via the live framebuffer size -- relative
         // layout as plain arithmetic (no coordinate mode). Resize the window and
         // this square tracks the corner while the others stay pinned top-left.

@@ -174,6 +174,42 @@ class Renderer2DTest {
     }
 
     @Test
+    void strokeRectIsAnEightTriangleFrame() {
+        Renderer2D g = new Renderer2D();
+        g.begin();
+        g.strokeRect(100, 100, 200, 100, 10, Color.WHITE);
+        g.end();
+        // Four edge bands x 2 triangles = 24 vertices.
+        assertEquals(24, g.vertexCount());
+
+        // The frame's outer bounds = the rect inflated by half the thickness.
+        float[] v = g.vertexData();
+        int stride = Renderer2D.FLOATS_PER_VERTEX;
+        float minX = Float.MAX_VALUE, maxX = -Float.MAX_VALUE;
+        float minY = Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
+        for (int i = 0; i < g.vertexCount(); i++) {
+            minX = Math.min(minX, v[i * stride]);
+            maxX = Math.max(maxX, v[i * stride]);
+            minY = Math.min(minY, v[i * stride + 1]);
+            maxY = Math.max(maxY, v[i * stride + 1]);
+        }
+        assertEquals(95f, minX, 1e-4f);    // 100 - 10/2
+        assertEquals(305f, maxX, 1e-4f);   // 100 + 200 + 10/2
+        assertEquals(95f, minY, 1e-4f);
+        assertEquals(205f, maxY, 1e-4f);
+    }
+
+    @Test
+    void thickStrokeRectDropsTheDegenerateMiddleBands() {
+        Renderer2D g = new Renderer2D();
+        g.begin();
+        // thickness > height: the left/right bands would have <=0 height, skipped.
+        g.strokeRect(0, 0, 100, 8, 20, Color.WHITE);
+        g.end();
+        assertEquals(12, g.vertexCount());   // only top + bottom bands
+    }
+
+    @Test
     void lineIsAQuadAlongTheNormal() {
         Renderer2D g = new Renderer2D();
         g.begin();

@@ -2,6 +2,12 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-13 — L2 strokes: strokeRect (the non-overlapping frame) ▭✅
+- **`strokeRect(x,y,w,h,thickness,color)`** — stroke CENTERED on the boundary (canvas/SVG convention). Built as an **8-triangle frame**: four edge bands (via `fillRect`) tiling the border so they **don't overlap** — top/bottom take the full outer width incl. corners; left/right take only the span between. **Verified on the 4090 with a TRANSLUCENT frame: corners read uniform with the edges** (no double-blend) — the exact reason the non-overlap matters, and a preview of why filled+stroked will eventually need one combined `Style` call, not two.
+- Degenerate guard: thickness > height drops the (negative-height) left/right bands, leaving just top+bottom. Negative size/thickness rejected.
+- **Tests**: 2 more (24-vertex frame + outer bounds = rect inflated by half-thickness; the degenerate 12-vertex case). Suite green.
+- **Next**: `strokeCircle`/`strokeEllipse` (a tessellated RING — no joins, like the fill pairing), then the polygon strokes (`strokeTriangle`/`strokeQuad`) where the **join/corner** question lands in earnest, then SDF edge-AA.
+
 ## 2026-06-13 — L2 strokes begin: line (no GPU line width) 📏✅
 - **`line(x1,y1,x2,y2,thickness,color)`** — the first stroke, and the proof of the **no-`wideLines`** approach: Vulkan's `lineWidth > 1` is non-portable, so a thick line is **CPU-triangulated** into the same shape batch. The geometry literally IS a quad -- offset both endpoints by +/-thickness/2 along the line's NORMAL -- so `line` computes four corners and delegates to `fillQuad`. "A thick line is a quad," made literal. Verified on the 4090 (thin black rule + thick orange diagonal, crisp uniform edges, any angle).
 - **Butt caps** (square ends flush with the endpoints); **joins are deferred** to the closed-shape strokes (a lone line has no corners). Zero-length line draws nothing (no normal to take); negative thickness rejected.

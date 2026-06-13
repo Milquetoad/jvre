@@ -255,6 +255,63 @@ public final class Renderer2D {
     }
 
     /**
+     * Stroke a circle: a ring of width {@code thickness} centered on the radius
+     * {@code r}. The {@code rx == ry} case of {@link #strokeEllipse}.
+     */
+    public void strokeCircle(float cx, float cy, float r, float thickness, Color color) {
+        requireInFrame("strokeCircle");
+        if (r < 0f) {
+            throw new IllegalArgumentException("strokeCircle: negative radius (" + r + ")");
+        }
+        strokeEllipse(cx, cy, r, r, thickness, color);
+    }
+
+    /**
+     * Stroke an ellipse: a RING between an outer and an inner rim, the stroke
+     * centered on the radii (outer = r + thickness/2, inner = r - thickness/2).
+     * Unlike the polygon strokes there is no join question -- the curve is
+     * smooth, so each tessellation segment is just a quad spanning outer-to-inner
+     * across that slice, and consecutive quads share an edge with no corner gap.
+     * (The inner rim is clamped at 0, so a thickness wider than the diameter
+     * degenerates cleanly to a filled disc rather than inverting.)
+     */
+    public void strokeEllipse(float cx, float cy, float rx, float ry, float thickness, Color color) {
+        requireInFrame("strokeEllipse");
+        if (rx < 0f || ry < 0f) {
+            throw new IllegalArgumentException("strokeEllipse: negative radius (" + rx + ", " + ry + ")");
+        }
+        if (thickness < 0f) {
+            throw new IllegalArgumentException("strokeEllipse: negative thickness (" + thickness + ")");
+        }
+        float ht = thickness * 0.5f;
+        float orx = rx + ht, ory = ry + ht;                   // outer radii
+        float irx = Math.max(0f, rx - ht), iry = Math.max(0f, ry - ht);  // inner radii (clamped)
+        float[] c = color.linearRGBA();
+        int segments = circleSegments(Math.max(orx, ory));
+        float step = (float) (2.0 * Math.PI / segments);
+
+        float poX = cx + orx, poY = cy;   // previous OUTER rim point (angle 0)
+        float piX = cx + irx, piY = cy;   // previous INNER rim point
+        for (int i = 1; i <= segments; i++) {
+            float a = i * step;
+            float ca = (float) Math.cos(a);
+            float sa = (float) Math.sin(a);
+            float noX = cx + orx * ca, noY = cy + ory * sa;   // next outer
+            float niX = cx + irx * ca, niY = cy + iry * sa;   // next inner
+            // The slice's quad (prevOuter, nextOuter, nextInner, prevInner) as
+            // two triangles.
+            vertex(poX, poY, c);
+            vertex(noX, noY, c);
+            vertex(niX, niY, c);
+            vertex(poX, poY, c);
+            vertex(niX, niY, c);
+            vertex(piX, piY, c);
+            poX = noX; poY = noY;
+            piX = niX; piY = niY;
+        }
+    }
+
+    /**
      * How many segments to tessellate a circle of radius {@code r} into. Derived
      * from a target chord error (~0.3px): the angle whose chord deviates from the
      * arc by that much is {@code 2*acos(1 - e/r)}, and a full turn divided by it

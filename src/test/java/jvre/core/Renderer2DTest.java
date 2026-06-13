@@ -210,6 +210,41 @@ class Renderer2DTest {
     }
 
     @Test
+    void strokeCircleIsARingBetweenTwoRadii() {
+        Renderer2D g = new Renderer2D();
+        g.begin();
+        g.strokeCircle(0, 0, 50, 10, Color.WHITE);   // ring from radius 45 to 55
+        g.end();
+
+        int verts = g.vertexCount();
+        assertTrue(verts % 6 == 0, "each ring slice is a quad = 6 verts: " + verts);
+
+        float[] v = g.vertexData();
+        int stride = Renderer2D.FLOATS_PER_VERTEX;
+        float minD = Float.MAX_VALUE, maxD = -Float.MAX_VALUE;
+        for (int i = 0; i < verts; i++) {
+            double d = Math.hypot(v[i * stride], v[i * stride + 1]);
+            minD = (float) Math.min(minD, d);
+            maxD = (float) Math.max(maxD, d);
+        }
+        assertEquals(45f, minD, 1e-3f, "inner rim = r - thickness/2");
+        assertEquals(55f, maxD, 1e-3f, "outer rim = r + thickness/2");
+    }
+
+    @Test
+    void strokeCircleEqualsEqualRadiiStrokeEllipse() {
+        Renderer2D a = new Renderer2D();
+        a.begin();
+        a.strokeCircle(0, 0, 40, 6, Color.WHITE);
+        a.end();
+        Renderer2D b = new Renderer2D();
+        b.begin();
+        b.strokeEllipse(0, 0, 40, 40, 6, Color.WHITE);
+        b.end();
+        assertEquals(b.vertexCount(), a.vertexCount());
+    }
+
+    @Test
     void lineIsAQuadAlongTheNormal() {
         Renderer2D g = new Renderer2D();
         g.begin();

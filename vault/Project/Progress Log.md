@@ -2,6 +2,12 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-14 — L2 strokes: strokeCircle / strokeEllipse (the ring) ⭕✅
+- **`strokeEllipse(cx,cy,rx,ry,thickness,color)`** + **`strokeCircle`** (the `rx==ry` delegate): a tessellated **RING** between an outer rim (r + thickness/2) and an inner rim (r - thickness/2), stroke centered on the radii. Each tessellation slice is a quad spanning outer→inner; consecutive quads share an edge, so a smooth curve has **no join question** (unlike the polygon strokes coming next). Verified on the 4090 (white ring + thin dark elliptical outline -- uniform width, smooth, hollow).
+- Inner rim **clamped at 0**, so a thickness wider than the diameter degenerates cleanly to a filled disc instead of inverting. Negative radius/thickness rejected.
+- **Tests**: 2 more (ring vertices lie between inner/outer radius; circle == equal-radii ellipse). Suite green.
+- **Next**: the polygon strokes (`strokeTriangle`/`strokeQuad`) -- where the **join/corner** question finally lands (miter the offset edges at each vertex), then SDF edge-AA.
+
 ## 2026-06-13 — L2 strokes: strokeRect (the non-overlapping frame) ▭✅
 - **`strokeRect(x,y,w,h,thickness,color)`** — stroke CENTERED on the boundary (canvas/SVG convention). Built as an **8-triangle frame**: four edge bands (via `fillRect`) tiling the border so they **don't overlap** — top/bottom take the full outer width incl. corners; left/right take only the span between. **Verified on the 4090 with a TRANSLUCENT frame: corners read uniform with the edges** (no double-blend) — the exact reason the non-overlap matters, and a preview of why filled+stroked will eventually need one combined `Style` call, not two.
 - Degenerate guard: thickness > height drops the (negative-height) left/right bands, leaving just top+bottom. Negative size/thickness rejected.

@@ -174,6 +174,48 @@ class Renderer2DTest {
     }
 
     @Test
+    void lineIsAQuadAlongTheNormal() {
+        Renderer2D g = new Renderer2D();
+        g.begin();
+        // Horizontal line, thickness 4 -> a 10 x 4 quad spanning y in [-2, 2].
+        g.line(0, 0, 10, 0, 4, Color.BLACK);
+        g.end();
+        assertEquals(6, g.vertexCount());   // a quad = two triangles
+
+        float[] v = g.vertexData();
+        int stride = Renderer2D.FLOATS_PER_VERTEX;
+        float minX = Float.MAX_VALUE, maxX = -Float.MAX_VALUE;
+        float minY = Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
+        for (int i = 0; i < g.vertexCount(); i++) {
+            minX = Math.min(minX, v[i * stride]);
+            maxX = Math.max(maxX, v[i * stride]);
+            minY = Math.min(minY, v[i * stride + 1]);
+            maxY = Math.max(maxY, v[i * stride + 1]);
+        }
+        assertEquals(0f, minX, 1e-4f);
+        assertEquals(10f, maxX, 1e-4f);
+        assertEquals(-2f, minY, 1e-4f);   // +/- half the thickness about the line
+        assertEquals(2f, maxY, 1e-4f);
+    }
+
+    @Test
+    void zeroLengthLineDrawsNothing() {
+        Renderer2D g = new Renderer2D();
+        g.begin();
+        g.line(5, 5, 5, 5, 3, Color.BLACK);
+        g.end();
+        assertEquals(0, g.vertexCount());
+    }
+
+    @Test
+    void negativeThicknessIsRejected() {
+        Renderer2D g = new Renderer2D();
+        g.begin();
+        assertThrows(IllegalArgumentException.class,
+                () -> g.line(0, 0, 10, 10, -1, Color.BLACK));
+    }
+
+    @Test
     void quadSplitsOnTheZeroTwoDiagonal() {
         Renderer2D g = new Renderer2D();
         g.begin();

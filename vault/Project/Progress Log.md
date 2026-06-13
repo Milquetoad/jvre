@@ -2,6 +2,12 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-13 — L2 strokes begin: line (no GPU line width) 📏✅
+- **`line(x1,y1,x2,y2,thickness,color)`** — the first stroke, and the proof of the **no-`wideLines`** approach: Vulkan's `lineWidth > 1` is non-portable, so a thick line is **CPU-triangulated** into the same shape batch. The geometry literally IS a quad -- offset both endpoints by +/-thickness/2 along the line's NORMAL -- so `line` computes four corners and delegates to `fillQuad`. "A thick line is a quad," made literal. Verified on the 4090 (thin black rule + thick orange diagonal, crisp uniform edges, any angle).
+- **Butt caps** (square ends flush with the endpoints); **joins are deferred** to the closed-shape strokes (a lone line has no corners). Zero-length line draws nothing (no normal to take); negative thickness rejected.
+- **Tests**: 3 more (the quad spans +/-thickness about the line; zero-length = nothing; negative thickness throws). Suite green, all GPU-free.
+- **Next**: `strokeRect` (an 8-triangle frame -- or four `line` calls; the first place corner/overlap matters), then the other `stroke*` outlines and the join question in earnest, then SDF edge-AA.
+
 ## 2026-06-13 — L2 beat 3: the v1 FILLS are complete 🔷✅
 - **`fillEllipse` + `fillTriangle` + `fillQuad`** land; with `fillRect` and `fillCircle` that's the **entire v1 fill set**. Verified on the 4090 (wide yellow ellipse, purple triangle, cyan convex quad, all correct alongside the rects + circle).
 - **`fillCircle` now delegates to `fillEllipse`** (the `rx == ry` case) -- the fan generalized to two radii, segment count off the larger radius. One implementation, two entry points.

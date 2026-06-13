@@ -175,6 +175,48 @@ public final class Renderer2D {
         vertex(x4, y4, c);
     }
 
+    // ------------------------------------------------------------------
+    // Strokes (the first one; the rest build on it). No GPU line width:
+    // Vulkan's lineWidth > 1 is an optional, non-portable feature, so every
+    // stroke is TRIANGULATED on the CPU and feeds the same shape batch.
+    // ------------------------------------------------------------------
+
+    /**
+     * A straight line from {@code (x1, y1)} to {@code (x2, y2)}, {@code
+     * thickness} pixels wide. A line is inherently a stroke (no fill/stroke
+     * pair), so it carries its own thickness.
+     *
+     * The geometry IS a quad: offset both endpoints by +/-thickness/2 along the
+     * line's NORMAL (the perpendicular), and the four corners form a rectangle
+     * the long way down the line. So this just computes the corners and hands
+     * them to {@link #fillQuad} -- "a thick line is a quad" made literal. Ends
+     * are square (butt caps), flush with the endpoints. Joins between segments
+     * are the next strokes' problem; a lone line has none.
+     */
+    public void line(float x1, float y1, float x2, float y2, float thickness, Color color) {
+        requireInFrame("line");
+        if (thickness < 0f) {
+            throw new IllegalArgumentException("line: negative thickness (" + thickness + ")");
+        }
+        float dx = x2 - x1;
+        float dy = y2 - y1;
+        float len = (float) Math.hypot(dx, dy);
+        if (len < 1e-6f) {
+            return;  // zero-length line: nothing to draw (and no normal to take)
+        }
+        // Unit normal (perpendicular to the line direction), scaled to half the
+        // thickness: rotate the direction 90 degrees -> (-dy, dx), normalize, * h.
+        float h = thickness * 0.5f;
+        float nx = -dy / len * h;
+        float ny = dx / len * h;
+        fillQuad(
+                x1 + nx, y1 + ny,   // start, +normal
+                x2 + nx, y2 + ny,   // end,   +normal
+                x2 - nx, y2 - ny,   // end,   -normal
+                x1 - nx, y1 - ny,   // start, -normal
+                color);
+    }
+
     /**
      * How many segments to tessellate a circle of radius {@code r} into. Derived
      * from a target chord error (~0.3px): the angle whose chord deviates from the

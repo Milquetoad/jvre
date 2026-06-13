@@ -63,6 +63,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - [[API Vision - Layered Altitudes]] — the engine's north star (high-level + shader-art on one stack)
 - [[Design North Star]] — the sweet spot (smaller than Processing; powerful, flexible, approachable) + how we measure it
 - [[ShaderEffect - The Shadertoy Altitude]] — the first realized altitude: runtime-compiled user fragment shaders on a fullscreen triangle (the shader-art path made real)
+- [[Diagnostics and the Crash Log]] — the Ring 2 guard: an environment fingerprint tee'd to a per-OS log so a fault on foreign hardware is diagnosable from one file
 - [[L2 Feature Set - Renderer2D]] — the formal "just draw" surface: principles, primitives, the no-modes decision (draft)
 - [[Game-Engine Capabilities (planned)]] — what L1 must expose so a game engine can be built on jvre: the mechanism/policy rule, the Tier-2 target, text/camera/3D scope, the 3 Renderer-shape constraints
 - [[Device Selection and Cross-Platform (planned)]] — flexible GPU choice + OS-agnostic (post-MVP)
@@ -148,6 +149,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - ✅ ✨ [[MSAA]] — **smooth silhouettes**: 4x multisampled color + depth, resolve built into dynamic rendering, swapchain demoted to resolve target (verified on the 4090; checker-edge aliasing observed + expected — the sampler's domain, not MSAA's)
 - 🏁 **The long-standing roadmap list (textures → 3D + depth → MSAA) is COMPLETE.**
 - ✅ 🎨 [[ShaderEffect - The Shadertoy Altitude]] — **the first realized altitude**: a runtime-compiled (shaderc) user fragment shader on a fullscreen triangle; auto-filled `uResolution`/`uMouse`/`uTime`; the renderer's first content seam (verified on the 4090 — the ripple demo). jvre's FIRST unit tests arrive with it ([[Testing and CI-CD]]).
-- ⏭️ Next (guards from the "what breaks jvre" discussion): **Diagnostics logging** (Ring 2 — an environment fingerprint to a per-OS log) → **SPIR-V reflection** (Ring 3 — enforce the effect contract; also unlocks `set()`). Then the bigger fork: **L2 Renderer2D batching**.
+- ✅ 🩺 [[Diagnostics and the Crash Log]] — **the Ring 2 guard**: an environment fingerprint (GPU/driver/loader/OS, the EXCLUSIVE-vs-CONCURRENT queue line, formats) tee'd to a per-OS app-data log a user can attach to a bug report; eager+flushed; frictionless manual send (verified on the 4090, fault path included).
+- ⏭️ Next: **SPIR-V reflection** (Ring 3 — enforce the [[ShaderEffect - The Shadertoy Altitude|effect]] contract at creation; also unlocks `set()`). Then the bigger fork: **L2 Renderer2D batching**.
 
 #jvre #moc

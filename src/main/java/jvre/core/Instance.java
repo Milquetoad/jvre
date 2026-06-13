@@ -127,6 +127,13 @@ public class Instance {
             setupDebugMessenger();
         }
         System.out.println("Vulkan instance created successfully.");
+        // Fingerprint (captured to the [[Diagnostics]] log): the LOADER's core
+        // version (distinct from any device's apiVersion) and whether the
+        // validation net is on -- which decides whether a Ring 2 bug would even
+        // have been caught on this run.
+        System.out.printf("Vulkan loader: %d.%d.%d  validation layers: %s%n",
+                VK_VERSION_MAJOR(loaderVersion), VK_VERSION_MINOR(loaderVersion),
+                VK_VERSION_PATCH(loaderVersion), validation ? "ON" : "OFF");
     }
 
     /** The wrapped VkInstance -- for surface creation and physical-device enumeration. */

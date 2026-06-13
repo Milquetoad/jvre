@@ -109,12 +109,20 @@ public class Swapchain {
             // both queues. CONCURRENT lets them share without explicit ownership
             // transfers (simpler, slightly slower); EXCLUSIVE is faster but needs
             // manual handoff. Same family -> EXCLUSIVE with nothing to share.
+            // This branch is logged below as a FINGERPRINT line: the CONCURRENT
+            // path has never run on the author's hardware (the 4090 shares
+            // families -> EXCLUSIVE), so a split-family GPU reporting "CONCURRENT"
+            // tells us instantly it's standing in the never-tested branch.
+            String sharing;
             if (device.graphicsFamily() != device.presentFamily()) {
                 createInfo.imageSharingMode(VK_SHARING_MODE_CONCURRENT);
                 createInfo.pQueueFamilyIndices(
                         stack.ints(device.graphicsFamily(), device.presentFamily()));
+                sharing = "CONCURRENT (graphics=" + device.graphicsFamily()
+                        + ", present=" + device.presentFamily() + ")";
             } else {
                 createInfo.imageSharingMode(VK_SHARING_MODE_EXCLUSIVE);
+                sharing = "EXCLUSIVE (graphics=present=" + device.graphicsFamily() + ")";
             }
 
             createInfo.preTransform(caps.currentTransform());          // no rotate/flip
@@ -147,7 +155,8 @@ public class Swapchain {
             String pmName = (presentMode == VK_PRESENT_MODE_MAILBOX_KHR) ? "MAILBOX" : "FIFO";
             System.out.println("Swapchain created: " + images.length + " images, "
                     + width + "x" + height
-                    + ", format " + imageFormat + ", present mode " + pmName + ".");
+                    + ", format " + imageFormat + ", present mode " + pmName
+                    + ", sharing " + sharing + ".");
         }
 
         imageViews = createImageViews();

@@ -1,5 +1,6 @@
 package jvre;
 
+import jvre.core.Diagnostics;
 import jvre.core.Instance;
 import jvre.core.Renderer;
 import jvre.core.ShaderEffect;
@@ -45,7 +46,19 @@ public class Main {
         // extensions to overflow the default 64 KB per-thread stack.
         Configuration.STACK_SIZE.set(512);
 
-        new Main().run();
+        // Open the diagnostics log BEFORE anything Vulkan touches the GPU, so the
+        // environment fingerprint is on disk before anything can crash. From here
+        // on every console line is also captured to the file.
+        Diagnostics.init("jvre demo");
+
+        try {
+            new Main().run();
+        } catch (Throwable t) {
+            // A Ring 2 fault (or any fatal): the log already holds the fingerprint
+            // and the failure; tell the user where it is and how to send it.
+            Diagnostics.reportFault(t);
+            System.exit(1);
+        }
     }
 
     public void run() {

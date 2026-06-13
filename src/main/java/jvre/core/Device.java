@@ -217,8 +217,18 @@ public class Device {
 
             VkPhysicalDeviceProperties props = VkPhysicalDeviceProperties.malloc(stack);
             vkGetPhysicalDeviceProperties(best, props);
+            // Fingerprint lines (captured to the [[Diagnostics]] log): the exact
+            // GPU, its type, the core version it speaks, and the driver -- the
+            // first things any Ring 2 bug report needs. driverVersion is
+            // vendor-ENCODED (not the VK_VERSION layout), so it's logged raw;
+            // vendor/device IDs pin the exact silicon regardless of name string.
+            int api = props.apiVersion();
             System.out.println("Picked GPU: " + props.deviceNameString()
-                    + " (score " + bestScore + ")");
+                    + " [" + deviceTypeName(props.deviceType()) + "] (score " + bestScore + ")");
+            System.out.printf("  vendor=0x%04X device=0x%04X  apiVersion=%d.%d.%d  driverVersion=0x%08X (vendor-encoded)%n",
+                    props.vendorID(), props.deviceID(),
+                    VK_VERSION_MAJOR(api), VK_VERSION_MINOR(api), VK_VERSION_PATCH(api),
+                    props.driverVersion());
             return best;
         }
     }
@@ -238,6 +248,17 @@ public class Device {
         }
         score += props.limits().maxImageDimension2D();
         return score;
+    }
+
+    /** Human-readable VK_PHYSICAL_DEVICE_TYPE_* -- for the diagnostics fingerprint. */
+    private static String deviceTypeName(int type) {
+        switch (type) {
+            case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:   return "discrete";
+            case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: return "integrated";
+            case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:    return "virtual";
+            case VK_PHYSICAL_DEVICE_TYPE_CPU:            return "cpu";
+            default:                                     return "other";
+        }
     }
 
     /**

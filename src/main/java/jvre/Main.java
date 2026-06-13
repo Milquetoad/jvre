@@ -117,7 +117,8 @@ public class Main {
         g.fillRect(250, 200, 220, 160, Color.rgba(220, 60, 60, 128));  // translucent red, overlapping
         // A filled circle (centre + radius), tessellated. Translucent so its
         // round edge shows against the rectangles it overlaps.
-        g.fillCircle(360, 300, 110, Color.rgba(80, 220, 130, 160));     // translucent green circle
+        g.fillCircle(360, 300, 110, Color.rgba(80, 220, 130, 160));     // translucent green circle (SDF)
+        g.fillCircle(720, 90, 14, Color.rgb(255, 255, 255));            // a small SDF circle -- crisp at any size
         g.fillEllipse(180, 470, 130, 55, Color.rgb(245, 200, 40));      // a wide yellow ellipse
         g.fillTriangle(520, 60, 760, 60, 640, 230, Color.rgb(200, 80, 220));  // purple triangle
         g.fillQuad(560, 250, 700, 270, 720, 360, 540, 340, Color.rgb(40, 200, 220));  // cyan quad

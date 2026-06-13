@@ -80,42 +80,40 @@ class Renderer2DTest {
     }
 
     @Test
-    void fillCircleTessellatesIntoAFan() {
+    void fillCircleIsAnSdfQuad() {
         Renderer2D g = new Renderer2D();
         g.begin();
         g.fillCircle(200, 200, 50, Color.GREEN);
         g.end();
 
-        int verts = g.vertexCount();
-        assertTrue(verts % 3 == 0, "a triangle list must be a multiple of 3: " + verts);
-        assertTrue(verts >= 8 * 3, "even a small circle gets the minimum segment count");
+        // One bounding quad = 2 triangles = 6 vertices, regardless of radius.
+        assertEquals(6, g.vertexCount());
 
         float[] v = g.vertexData();
-        int stride = Renderer2D.FLOATS_PER_VERTEX;
-        for (int i = 0; i < verts; i += 3) {
-            // Every fan triangle starts at the centre...
-            assertEquals(200f, v[i * stride], 1e-4f);
-            assertEquals(200f, v[i * stride + 1], 1e-4f);
-            // ...and all three corners lie within the radius (+ a hair).
-            for (int t = 0; t < 3; t++) {
-                float x = v[(i + t) * stride];
-                float y = v[(i + t) * stride + 1];
-                double d = Math.hypot(x - 200, y - 200);
-                assertTrue(d <= 50 + 1e-3, "vertex outside the radius: " + d);
-            }
+        int s = Renderer2D.FLOATS_PER_VERTEX;
+        for (int i = 0; i < g.vertexCount(); i++) {
+            // The SDF radius field (offset 8) carries r -> the distance-field path
+            // is active for this shape.
+            assertEquals(50f, v[i * s + 8], 1e-4f);
+            // The local coord (offsets 6, 7) is the corner's pixel offset from the
+            // centre -- so position - centre == local.
+            assertEquals(v[i * s] - 200f, v[i * s + 6], 1e-4f);
+            assertEquals(v[i * s + 1] - 200f, v[i * s + 7], 1e-4f);
         }
     }
 
     @Test
-    void biggerCirclesGetMoreSegments() {
+    void biggerEllipsesGetMoreSegments() {
+        // Ellipses are still tessellated fans (no closed-form SDF), so they still
+        // scale their segment count with size.
         Renderer2D g = new Renderer2D();
         g.begin();
-        g.fillCircle(0, 0, 10, Color.WHITE);
+        g.fillEllipse(0, 0, 10, 10, Color.WHITE);
         int small = g.vertexCount();
-        g.fillCircle(0, 0, 500, Color.WHITE);
+        g.fillEllipse(0, 0, 500, 500, Color.WHITE);
         int both = g.vertexCount();
         g.end();
-        assertTrue((both - small) > small, "a 500px circle needs more segments than a 10px one");
+        assertTrue((both - small) > small, "a 500px ellipse needs more segments than a 10px one");
     }
 
     @Test
@@ -145,20 +143,6 @@ class Renderer2DTest {
         // land exactly on the axes) while still proving rx and ry are distinct.
         assertEquals(100f, maxX, 0.5f, "x extent = rx");
         assertEquals(20f, maxY, 0.5f, "y extent = ry");
-    }
-
-    @Test
-    void circleIsTheEqualRadiiEllipse() {
-        // fillCircle delegates to fillEllipse -- same vertex count for r == rx == ry.
-        Renderer2D a = new Renderer2D();
-        a.begin();
-        a.fillCircle(0, 0, 60, Color.WHITE);
-        a.end();
-        Renderer2D b = new Renderer2D();
-        b.begin();
-        b.fillEllipse(0, 0, 60, 60, Color.WHITE);
-        b.end();
-        assertEquals(b.vertexCount(), a.vertexCount());
     }
 
     @Test

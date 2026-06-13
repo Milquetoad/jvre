@@ -23,8 +23,12 @@ import java.util.Arrays;
  */
 public final class Renderer2D {
 
-    /** Interleaved layout: vec2 position (pixels) + vec4 color (linear). */
-    static final int FLOATS_PER_VERTEX = 6;
+    // Interleaved layout: vec2 position (pixels) + vec4 color (linear) + vec2
+    // local (SDF pixel offset within the shape) + float sdfRadius (px; < 0 means
+    // "flat shape -> full coverage"). Flat shapes pass 0,0,-1 for the SDF fields;
+    // SDF shapes (the circle) fill them. One layout, one batch -> draw order is
+    // preserved across flat and SDF shapes alike.
+    static final int FLOATS_PER_VERTEX = 9;
 
     private float[] verts = new float[6 * 6 * 64];  // room for ~64 rects before growing
     private int count = 0;                          // floats written this frame
@@ -95,16 +99,35 @@ public final class Renderer2D {
 
     /**
      * Fill a circle: centre {@code (cx, cy)} + radius {@code r}, in pixels.
-     * Centre-and-radius is the circle's natural convention (geometry; even
-     * Processing defaults ellipseMode to CENTER). A circle is just the
-     * {@code rx == ry} ellipse, so this delegates to {@link #fillEllipse}.
+     *
+     * This is jvre's first SDF (signed-distance-field) shape, and the seed of
+     * the path rounded-rects and text will reuse. Instead of a tessellated fan,
+     * it emits ONE bounding quad; each corner carries its pixel offset from the
+     * centre (the SDF "local" coord) and the radius. The fragment shader then
+     * computes the exact distance to the rim per pixel and fades alpha across
+     * ~1px -- an analytic, resolution-independent edge (no facets at any zoom,
+     * crisper than coverage sampling). It rides the SAME batch and pipeline as
+     * the flat shapes (they pass sdfRadius < 0), so draw order is preserved: to
+     * the L2 caller this is still just {@code fillCircle}, technique invisible.
+     *
+     * (An ELLIPSE has no closed-form signed distance, so {@link #fillEllipse}
+     * stays a fan for now; that's why the circle no longer delegates to it.)
      */
     public void fillCircle(float cx, float cy, float r, Color color) {
         requireInFrame("fillCircle");
         if (r < 0f) {
             throw new IllegalArgumentException("fillCircle: negative radius (" + r + ")");
         }
-        fillEllipse(cx, cy, r, r, color);
+        float[] c = color.linearRGBA();
+        // Pad the quad ~1px past the rim so the soft edge has room to ramp out.
+        float rr = r + 1.5f;
+        // Bounding quad as two triangles; local = corner offset from centre.
+        sdfVertex(cx - rr, cy - rr, c, -rr, -rr, r);
+        sdfVertex(cx + rr, cy - rr, c,  rr, -rr, r);
+        sdfVertex(cx + rr, cy + rr, c,  rr,  rr, r);
+        sdfVertex(cx - rr, cy - rr, c, -rr, -rr, r);
+        sdfVertex(cx + rr, cy + rr, c,  rr,  rr, r);
+        sdfVertex(cx - rr, cy + rr, c, -rr,  rr, r);
     }
 
     /**
@@ -445,7 +468,19 @@ public final class Renderer2D {
     // internals
     // ------------------------------------------------------------------
 
+    /** Append a FLAT-shape vertex: full coverage (sdfRadius = -1, local unused). */
     private void vertex(float px, float py, float[] c) {
+        sdfVertex(px, py, c, 0f, 0f, -1f);
+    }
+
+    /**
+     * Append a vertex with explicit SDF fields. {@code local} is the pixel offset
+     * within the shape and {@code sdfRadius} the shape radius in px (>= 0 to
+     * enable the distance-field edge; < 0 for a flat shape). The one low-level
+     * emit both paths funnel through.
+     */
+    private void sdfVertex(float px, float py, float[] c,
+                           float localX, float localY, float sdfRadius) {
         ensureCapacity(FLOATS_PER_VERTEX);
         verts[count++] = px;
         verts[count++] = py;
@@ -453,6 +488,9 @@ public final class Renderer2D {
         verts[count++] = c[1];
         verts[count++] = c[2];
         verts[count++] = c[3];
+        verts[count++] = localX;
+        verts[count++] = localY;
+        verts[count++] = sdfRadius;
     }
 
     private void ensureCapacity(int more) {

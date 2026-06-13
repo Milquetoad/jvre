@@ -2,6 +2,13 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-14 — L2: fillRoundedRect + the unified rounded-box SDF 🟪✅
+- **`fillRoundedRect(x,y,w,h,radius,color)`** -- jvre's second SDF shape, via the **rounded-box signed distance** (Inigo Quilez): `d = min(max(q.x,q.y),0) + length(max(q,0)) - r`, `q = abs(local) - half + r`. Straight edges AND rounded corners both analytically anti-aliased. Radius clamped to half the short side. Verified on the 4090 (clean button corners).
+- **The neat unification: a CIRCLE is the square rounded box with maximal corner radius** (`half = (r,r)`, `cornerRadius = r`). So `fillCircle` got *reimplemented* onto the same formula -- both funnel through one `sdfBox` helper, **one distance field, two entry points**. (The just-committed circle's `length(local)-r` was the degenerate case; folding it in cost nothing and removed a special case.)
+- **Second format widening** (9 -> 11 floats): the circle needed `local + radius`; the rounded box needs `local + half-extents + cornerRadius`. Flat shapes now pass `0,0,0,0,-1`. Honest incremental evolution -- each widening verified. (Position@0 and color@2 unchanged, so only the circle test's SDF-field offsets moved.)
+- **Tests**: circle test updated to the rounded-box fields (`half=(r,r)`, `cornerRadius=r`); 3 new rounded-rect tests (half-extents + radius, radius clamp to the short side, negatives rejected). Suite green.
+- **Next**: the gated content primitives -- `image` (a sampler binding on the shape pipeline; the Texture/descriptor machinery exists from the cube) and `text` (font atlas + SDF glyphs, riding this exact rounded-box-style SDF path).
+
 ## 2026-06-14 — L2: the SDF render path (fillCircle is now a distance field) 🔵✨✅
 - **jvre's first SDF (signed-distance-field) shape.** `fillCircle` stops being a tessellated fan and becomes ONE bounding quad whose fragment shader computes the exact distance to the rim per pixel and fades alpha over ~1px -- an analytic, resolution-independent edge. The seed of the path **rounded-rects + text** will reuse. Verified on the 4090 (clean round circles + a crisp small one; layering correct).
 - **The interface did NOT change** -- `g.fillCircle(...)` is identical; "SDF" is an implementation word, never an API word. This is the L1/L2 contract proving itself: the technique swapped (fan -> distance field) with zero change at the call site. The Q&A that surfaced it is logged -- the user's "does this imply a new way of drawing a circle / how does it reflect into L2?" -> no, the surface is invariant; SDF only unlocks NEW primitives (rounded-rect, text).

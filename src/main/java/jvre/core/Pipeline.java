@@ -190,19 +190,20 @@ public class Pipeline {
                 vertexInput.pVertexBindingDescriptions(binding);
                 vertexInput.pVertexAttributeDescriptions(attributes);
             } else if (kind == Kind.SHAPES_2D) {
-                // L2 shapes: [x y | r g b a | localX localY | sdfRadius], 9
-                // floats/vertex. pos (loc 0) + color (loc 1) every shape uses;
-                // local (loc 2) + sdfRadius (loc 3) drive the SDF coverage path
-                // (flat shapes pass 0,0,-1). One layout for flat AND SDF shapes,
-                // so they share a batch and keep their draw order.
+                // L2 shapes: [x y | r g b a | localX localY | halfX halfY |
+                // cornerRadius], 11 floats/vertex. pos (loc 0) + color (loc 1)
+                // every shape uses; local (loc 2) + half (loc 3) + cornerRadius
+                // (loc 4) drive the SDF rounded-box coverage path (flat shapes
+                // pass 0,0,0,0,-1). One layout for flat AND SDF shapes, so they
+                // share a batch and keep their draw order.
                 VkVertexInputBindingDescription.Buffer binding =
                         VkVertexInputBindingDescription.calloc(1, stack);
                 binding.binding(0);
-                binding.stride(9 * Float.BYTES);
+                binding.stride(11 * Float.BYTES);
                 binding.inputRate(VK_VERTEX_INPUT_RATE_VERTEX);
 
                 VkVertexInputAttributeDescription.Buffer attributes =
-                        VkVertexInputAttributeDescription.calloc(4, stack);
+                        VkVertexInputAttributeDescription.calloc(5, stack);
                 attributes.get(0).location(0).binding(0)
                         .format(VK_FORMAT_R32G32_SFLOAT).offset(0);
                 attributes.get(1).location(1).binding(0)
@@ -210,7 +211,9 @@ public class Pipeline {
                 attributes.get(2).location(2).binding(0)
                         .format(VK_FORMAT_R32G32_SFLOAT).offset(6 * Float.BYTES);
                 attributes.get(3).location(3).binding(0)
-                        .format(VK_FORMAT_R32_SFLOAT).offset(8 * Float.BYTES);
+                        .format(VK_FORMAT_R32G32_SFLOAT).offset(8 * Float.BYTES);
+                attributes.get(4).location(4).binding(0)
+                        .format(VK_FORMAT_R32_SFLOAT).offset(10 * Float.BYTES);
 
                 vertexInput.pVertexBindingDescriptions(binding);
                 vertexInput.pVertexAttributeDescriptions(attributes);

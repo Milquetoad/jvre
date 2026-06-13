@@ -92,14 +92,55 @@ class Renderer2DTest {
         float[] v = g.vertexData();
         int s = Renderer2D.FLOATS_PER_VERTEX;
         for (int i = 0; i < g.vertexCount(); i++) {
-            // The SDF radius field (offset 8) carries r -> the distance-field path
-            // is active for this shape.
+            // A circle is the square rounded box: half = (r, r) (offsets 8, 9) and
+            // cornerRadius = r (offset 10) -> the distance-field path is active.
             assertEquals(50f, v[i * s + 8], 1e-4f);
+            assertEquals(50f, v[i * s + 9], 1e-4f);
+            assertEquals(50f, v[i * s + 10], 1e-4f);
             // The local coord (offsets 6, 7) is the corner's pixel offset from the
             // centre -- so position - centre == local.
             assertEquals(v[i * s] - 200f, v[i * s + 6], 1e-4f);
             assertEquals(v[i * s + 1] - 200f, v[i * s + 7], 1e-4f);
         }
+    }
+
+    @Test
+    void fillRoundedRectIsAnSdfBox() {
+        Renderer2D g = new Renderer2D();
+        g.begin();
+        g.fillRoundedRect(100, 100, 200, 80, 15, Color.WHITE);
+        g.end();
+        assertEquals(6, g.vertexCount());   // a bounding quad
+
+        float[] v = g.vertexData();
+        int s = Renderer2D.FLOATS_PER_VERTEX;
+        for (int i = 0; i < g.vertexCount(); i++) {
+            assertEquals(100f, v[i * s + 8], 1e-4f);   // half-extent x = w/2
+            assertEquals(40f, v[i * s + 9], 1e-4f);    // half-extent y = h/2
+            assertEquals(15f, v[i * s + 10], 1e-4f);   // corner radius
+        }
+    }
+
+    @Test
+    void fillRoundedRectClampsRadiusToHalfTheShortSide() {
+        Renderer2D g = new Renderer2D();
+        g.begin();
+        // A huge radius on an 80px-tall rect clamps to 40 (= a stadium end).
+        g.fillRoundedRect(0, 0, 200, 80, 999, Color.WHITE);
+        g.end();
+        float[] v = g.vertexData();
+        int s = Renderer2D.FLOATS_PER_VERTEX;
+        assertEquals(40f, v[10], 1e-4f);   // clamped to min(hx, hy) = 40
+    }
+
+    @Test
+    void fillRoundedRectRejectsNegatives() {
+        Renderer2D g = new Renderer2D();
+        g.begin();
+        assertThrows(IllegalArgumentException.class,
+                () -> g.fillRoundedRect(0, 0, -5, 10, 2, Color.WHITE));
+        assertThrows(IllegalArgumentException.class,
+                () -> g.fillRoundedRect(0, 0, 10, 10, -2, Color.WHITE));
     }
 
     @Test

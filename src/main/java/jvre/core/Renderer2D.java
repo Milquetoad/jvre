@@ -24,11 +24,12 @@ import java.util.Arrays;
 public final class Renderer2D {
 
     // Interleaved layout: vec2 position (pixels) + vec4 color (linear) + vec2
-    // local (SDF pixel offset within the shape) + float sdfRadius (px; < 0 means
-    // "flat shape -> full coverage"). Flat shapes pass 0,0,-1 for the SDF fields;
-    // SDF shapes (the circle) fill them. One layout, one batch -> draw order is
-    // preserved across flat and SDF shapes alike.
-    static final int FLOATS_PER_VERTEX = 9;
+    // local (SDF pixel offset within the shape) + vec2 half (SDF box half-extents)
+    // + float cornerRadius (px; < 0 means "flat shape -> full coverage"). Flat
+    // shapes pass 0,0,0,0,-1 for the SDF fields; SDF shapes (circle, rounded-rect)
+    // fill them. One layout, one batch -> draw order is preserved across flat and
+    // SDF shapes alike.
+    static final int FLOATS_PER_VERTEX = 11;
 
     private float[] verts = new float[6 * 6 * 64];  // room for ~64 rects before growing
     private int count = 0;                          // floats written this frame
@@ -118,16 +119,33 @@ public final class Renderer2D {
         if (r < 0f) {
             throw new IllegalArgumentException("fillCircle: negative radius (" + r + ")");
         }
-        float[] c = color.linearRGBA();
-        // Pad the quad ~1px past the rim so the soft edge has room to ramp out.
-        float rr = r + 1.5f;
-        // Bounding quad as two triangles; local = corner offset from centre.
-        sdfVertex(cx - rr, cy - rr, c, -rr, -rr, r);
-        sdfVertex(cx + rr, cy - rr, c,  rr, -rr, r);
-        sdfVertex(cx + rr, cy + rr, c,  rr,  rr, r);
-        sdfVertex(cx - rr, cy - rr, c, -rr, -rr, r);
-        sdfVertex(cx + rr, cy + rr, c,  rr,  rr, r);
-        sdfVertex(cx - rr, cy + rr, c, -rr,  rr, r);
+        // A circle is the square rounded box with maximal corner radius.
+        sdfBox(cx, cy, r, r, r, color.linearRGBA());
+    }
+
+    /**
+     * Fill a rounded rectangle: corner {@code (x, y)} + size {@code w x h} (like
+     * {@link #fillRect}) plus a corner {@code radius}, in pixels. jvre's second
+     * SDF shape -- same rounded-box distance field as the circle, just with
+     * unequal half-extents and a smaller corner radius. The straight edges and
+     * the rounded corners are all analytically anti-aliased.
+     *
+     * The radius is clamped to half the shorter side (a larger value can't round
+     * any harder -- at exactly half the short side a rounded rect IS a stadium /
+     * circle). radius = 0 gives a sharp-cornered SDF rect.
+     */
+    public void fillRoundedRect(float x, float y, float w, float h, float radius, Color color) {
+        requireInFrame("fillRoundedRect");
+        if (w < 0f || h < 0f) {
+            throw new IllegalArgumentException("fillRoundedRect: negative size (" + w + " x " + h + ")");
+        }
+        if (radius < 0f) {
+            throw new IllegalArgumentException("fillRoundedRect: negative radius (" + radius + ")");
+        }
+        float hx = w * 0.5f;
+        float hy = h * 0.5f;
+        float cr = Math.min(radius, Math.min(hx, hy));   // can't exceed half the short side
+        sdfBox(x + hx, y + hy, hx, hy, cr, color.linearRGBA());
     }
 
     /**
@@ -468,19 +486,19 @@ public final class Renderer2D {
     // internals
     // ------------------------------------------------------------------
 
-    /** Append a FLAT-shape vertex: full coverage (sdfRadius = -1, local unused). */
+    /** Append a FLAT-shape vertex: full coverage (cornerRadius = -1, SDF unused). */
     private void vertex(float px, float py, float[] c) {
-        sdfVertex(px, py, c, 0f, 0f, -1f);
+        sdfVertex(px, py, c, 0f, 0f, 0f, 0f, -1f);
     }
 
     /**
      * Append a vertex with explicit SDF fields. {@code local} is the pixel offset
-     * within the shape and {@code sdfRadius} the shape radius in px (>= 0 to
-     * enable the distance-field edge; < 0 for a flat shape). The one low-level
-     * emit both paths funnel through.
+     * within the shape, {@code half} the box half-extents, {@code cornerRadius}
+     * the corner rounding in px (>= 0 enables the distance-field edge; < 0 = flat
+     * shape). The one low-level emit both paths funnel through.
      */
-    private void sdfVertex(float px, float py, float[] c,
-                           float localX, float localY, float sdfRadius) {
+    private void sdfVertex(float px, float py, float[] c, float localX, float localY,
+                           float halfX, float halfY, float cornerRadius) {
         ensureCapacity(FLOATS_PER_VERTEX);
         verts[count++] = px;
         verts[count++] = py;
@@ -490,7 +508,28 @@ public final class Renderer2D {
         verts[count++] = c[3];
         verts[count++] = localX;
         verts[count++] = localY;
-        verts[count++] = sdfRadius;
+        verts[count++] = halfX;
+        verts[count++] = halfY;
+        verts[count++] = cornerRadius;
+    }
+
+    /**
+     * Emit a rounded-box SDF shape's bounding quad. Both {@link #fillCircle} and
+     * {@link #fillRoundedRect} funnel through here -- a circle is the square box
+     * with maximal corner radius. The quad is padded ~1px past the shape so the
+     * soft edge has room to ramp; each corner carries its pixel offset from the
+     * centre (the SDF local coord), the half-extents, and the corner radius.
+     */
+    private void sdfBox(float cx, float cy, float halfX, float halfY,
+                        float cornerRadius, float[] c) {
+        float px = halfX + 1.5f;
+        float py = halfY + 1.5f;
+        sdfVertex(cx - px, cy - py, c, -px, -py, halfX, halfY, cornerRadius);
+        sdfVertex(cx + px, cy - py, c,  px, -py, halfX, halfY, cornerRadius);
+        sdfVertex(cx + px, cy + py, c,  px,  py, halfX, halfY, cornerRadius);
+        sdfVertex(cx - px, cy - py, c, -px, -py, halfX, halfY, cornerRadius);
+        sdfVertex(cx + px, cy + py, c,  px,  py, halfX, halfY, cornerRadius);
+        sdfVertex(cx - px, cy + py, c, -px,  py, halfX, halfY, cornerRadius);
     }
 
     private void ensureCapacity(int more) {

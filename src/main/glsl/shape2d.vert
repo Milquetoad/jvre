@@ -5,23 +5,27 @@
 // never sees NDC. This shader does the one coordinate conversion: pixels -> the
 // Vulkan clip cube.
 //
-// Each vertex is [x y | r g b a | localX localY | sdfRadius]:
+// Each vertex is [x y | r g b a | localX localY | halfX halfY | cornerRadius]:
 //   - position in pixels, color already LINEAR (the Color value type decoded it);
-//   - local + sdfRadius drive the SDF COVERAGE path. A tessellated (flat) shape
-//     passes sdfRadius < 0, meaning "not an SDF shape -> full coverage". An SDF
-//     shape (e.g. the circle) passes a local pixel offset within the shape and
-//     the shape's radius, and the fragment shader fades alpha across the edge.
-//     One batch, one pipeline, draw order preserved -- the SDF technique is
-//     invisible at the L2 call site.
+//   - local + half + cornerRadius drive the SDF COVERAGE path. A tessellated
+//     (flat) shape passes cornerRadius < 0, meaning "not an SDF shape -> full
+//     coverage". An SDF shape passes a local pixel offset within the shape, the
+//     box half-extents, and the corner radius; the fragment shader computes the
+//     rounded-box signed distance and fades alpha across the edge. A CIRCLE is
+//     the special case half = (r, r), cornerRadius = r -- one formula, two
+//     entry points. One batch, one pipeline, draw order preserved: the SDF
+//     technique is invisible at the L2 call site.
 
-layout(location = 0) in vec2 inPos;        // pixels, top-left origin
-layout(location = 1) in vec4 inColor;      // linear RGBA
-layout(location = 2) in vec2 inLocal;      // SDF: pixel offset within the shape
-layout(location = 3) in float inSdfRadius; // SDF: shape radius in px; < 0 = flat shape
+layout(location = 0) in vec2 inPos;          // pixels, top-left origin
+layout(location = 1) in vec4 inColor;        // linear RGBA
+layout(location = 2) in vec2 inLocal;        // SDF: pixel offset within the shape
+layout(location = 3) in vec2 inHalf;         // SDF: box half-extents in px
+layout(location = 4) in float inCornerRadius;// SDF: corner radius px; < 0 = flat shape
 
 layout(location = 0) out vec4 vColor;
 layout(location = 1) out vec2 vLocal;
-layout(location = 2) out float vSdfRadius;
+layout(location = 2) out vec2 vHalf;
+layout(location = 3) out float vCornerRadius;
 
 layout(push_constant) uniform Push {
     vec2 uResolution;   // framebuffer size in pixels
@@ -35,5 +39,6 @@ void main() {
     gl_Position = vec4(ndc, 0.0, 1.0);
     vColor = inColor;
     vLocal = inLocal;
-    vSdfRadius = inSdfRadius;
+    vHalf = inHalf;
+    vCornerRadius = inCornerRadius;
 }

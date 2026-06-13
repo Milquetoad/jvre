@@ -1,8 +1,10 @@
 package jvre;
 
+import jvre.core.Color;
 import jvre.core.Diagnostics;
 import jvre.core.Instance;
 import jvre.core.Renderer;
+import jvre.core.Renderer2D;
 import jvre.core.ShaderEffect;
 import jvre.core.Surface;
 import jvre.core.Window;
@@ -22,11 +24,13 @@ public class Main {
 
     private static final int WIDTH = 800;
     private static final int HEIGHT = 600;
-    private static final CharSequence TITLE = "jvre - shader effect";
+    private static final CharSequence TITLE = "jvre - 2D shapes";
 
-    // The Shadertoy altitude: a runtime-compiled user fragment shader on a
-    // fullscreen triangle. Set to null to see the cube demo instead.
-    private static final String EFFECT = "/demo/ripple.frag";
+    // Pick a demo. DEMO_2D = the L2 "just draw" surface (Renderer2D). Otherwise
+    // EFFECT chooses the Shadertoy fullscreen shader, or null falls back to the
+    // 3D cube.
+    private static final boolean DEMO_2D = true;
+    private static final String EFFECT = DEMO_2D ? null : "/demo/ripple.frag";
 
     // Bright orange (RGB in [0,1]) -- the renderer clears to this every frame.
     private static final float CLEAR_R = 1.0f;
@@ -40,6 +44,7 @@ public class Main {
     private Instance instance;
     private Surface surface;
     private Renderer renderer;
+    private Renderer2D g;   // the L2 surface, when DEMO_2D
 
     public static void main(String[] args) {
         // See the MemoryStack gotcha note: this machine's GPUs expose enough
@@ -80,16 +85,38 @@ public class Main {
             // shader's own line numbers, before any drawing starts.
             renderer.setEffect(ShaderEffect.fromFragment(EFFECT));
         }
+        if (DEMO_2D) {
+            // The L2 altitude: ask the renderer for its 2D surface. From here the
+            // loop is begin() / draw shapes / end() -- no Vulkan in sight.
+            g = renderer.renderer2D();
+        }
     }
 
     private void mainLoop() {
         System.out.println("Entering render loop. Close the window to exit.");
         while (!window.shouldClose()) {
             window.pollEvents();
+            if (g != null) {
+                drawShapes();
+            }
             renderer.drawFrame();
         }
         // Let the GPU finish in-flight work before cleanup frees anything.
         renderer.waitIdle();
+    }
+
+    /**
+     * The L2 demo: a few rectangles in pixel coordinates (top-left origin),
+     * including a translucent red one that overlaps the blue rectangle AND the
+     * orange clear -- so one glance confirms solid fills, alpha blending, and the
+     * pixel coordinate system all work.
+     */
+    private void drawShapes() {
+        g.begin();
+        g.fillRect(100, 100, 220, 160, Color.rgb(40, 120, 220));       // solid blue
+        g.fillRect(250, 200, 220, 160, Color.rgba(220, 60, 60, 128));  // translucent red, overlapping
+        g.fillRect(560, 400, 130, 130, Color.WHITE);                   // solid white
+        g.end();
     }
 
     private void cleanup() {

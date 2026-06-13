@@ -60,6 +60,24 @@ public class Pipeline {
     private final long handle;               // VkPipeline
 
     /**
+     * Which of jvre's three pipeline shapes this is. The kinds differ only in a
+     * handful of fixed-function choices -- vertex layout, cull, depth, blend,
+     * bound resources, and the push range -- so one constructor body bakes all
+     * three by branching on the kind. (This replaced a single {@code boolean
+     * fullscreen} the instant a THIRD vertex layout -- the 2D shapes -- arrived:
+     * exactly the "becomes a parameter the moment a second layout exists" note
+     * the cube's vertex-input comment predicted.)
+     */
+    public enum Kind {
+        /** 3D scene: [x y z | r g b | u v] verts, back-face cull, depth on, UBO + sampler. */
+        SCENE,
+        /** ShaderEffect: no vertex input (fullscreen triangle), no depth/resources, 20-byte frag push. */
+        FULLSCREEN_EFFECT,
+        /** L2 shapes: [x y | r g b a] verts, no cull/depth, blend on, no resources, 8-byte vertex push. */
+        SHAPES_2D
+    }
+
+    /**
      * Build the SCENE pipeline from two SPIR-V classpath resources (compiled
      * from GLSL by the Gradle compileShaders task at build time), rendering
      * into color attachment(s) of the given format.
@@ -68,7 +86,7 @@ public class Pipeline {
                     String vertResource, String fragResource) {
         this(device, colorFormat, depthFormat, sampleCount,
                 readResource(vertResource), readResource(fragResource),
-                false, vertResource + " + " + fragResource);
+                Kind.SCENE, vertResource + " + " + fragResource);
     }
 
     /**
@@ -90,11 +108,27 @@ public class Pipeline {
                                             int sampleCount, byte[] vertSpirv, byte[] fragSpirv,
                                             String label) {
         return new Pipeline(device, colorFormat, depthFormat, sampleCount,
-                vertSpirv, fragSpirv, true, label);
+                vertSpirv, fragSpirv, Kind.FULLSCREEN_EFFECT, label);
+    }
+
+    /**
+     * Build the L2 SHAPES-2D pipeline from two SPIR-V classpath resources. It
+     * sits between the other two: it HAS a vertex layout (interleaved
+     * {@code [x y | r g b a]}, position in pixels) like the scene, but is a flat
+     * 2D pass like the effect -- cull NONE, depth OFF, no descriptors. Blend is
+     * ON (translucent shapes), and the push range is 8 bytes at the VERTEX stage
+     * (vec2 uResolution, for the pixels->NDC conversion the shape vertex shader
+     * does).
+     */
+    public static Pipeline shapes2D(Device device, int colorFormat, int depthFormat,
+                                    int sampleCount, String vertResource, String fragResource) {
+        return new Pipeline(device, colorFormat, depthFormat, sampleCount,
+                readResource(vertResource), readResource(fragResource),
+                Kind.SHAPES_2D, vertResource + " + " + fragResource);
     }
 
     private Pipeline(Device device, int colorFormat, int depthFormat, int sampleCount,
-                     byte[] vertSpirv, byte[] fragSpirv, boolean fullscreen, String label) {
+                     byte[] vertSpirv, byte[] fragSpirv, Kind kind, String label) {
         this.device = device;
 
         try (MemoryStack stack = stackPush()) {
@@ -130,13 +164,14 @@ public class Pipeline {
             //   location 0 (vec3 inPosition) <- offset 0
             //   location 1 (vec3 inColor)    <- offset 12 (after 3 floats)
             //   location 2 (vec2 inUV)       <- offset 24 (after 6 floats)
-            // Position is vec3 now (3D); R32G32B32_SFLOAT = vec3. (Hardcoded to
-            // jvre's one vertex layout for now; becomes a parameter the moment a
-            // second layout exists.)
+            // Position is vec3 (3D); R32G32B32_SFLOAT = vec3. This WAS "jvre's one
+            // vertex layout" until the 2D shapes added a second -- the layout is
+            // now chosen by Kind (the moment the old comment anticipated).
             VkPipelineVertexInputStateCreateInfo vertexInput =
                     VkPipelineVertexInputStateCreateInfo.calloc(stack);
             vertexInput.sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO);
-            if (!fullscreen) {
+            if (kind == Kind.SCENE) {
+                // Cube: [x y z | r g b | u v], 8 floats/vertex.
                 VkVertexInputBindingDescription.Buffer binding =
                         VkVertexInputBindingDescription.calloc(1, stack);
                 binding.binding(0);
@@ -154,10 +189,28 @@ public class Pipeline {
 
                 vertexInput.pVertexBindingDescriptions(binding);
                 vertexInput.pVertexAttributeDescriptions(attributes);
+            } else if (kind == Kind.SHAPES_2D) {
+                // L2 shapes: [x y | r g b a], 6 floats/vertex -- position in
+                // pixels (location 0), linear color (location 1).
+                VkVertexInputBindingDescription.Buffer binding =
+                        VkVertexInputBindingDescription.calloc(1, stack);
+                binding.binding(0);
+                binding.stride(6 * Float.BYTES);
+                binding.inputRate(VK_VERTEX_INPUT_RATE_VERTEX);
+
+                VkVertexInputAttributeDescription.Buffer attributes =
+                        VkVertexInputAttributeDescription.calloc(2, stack);
+                attributes.get(0).location(0).binding(0)
+                        .format(VK_FORMAT_R32G32_SFLOAT).offset(0);
+                attributes.get(1).location(1).binding(0)
+                        .format(VK_FORMAT_R32G32B32A32_SFLOAT).offset(2 * Float.BYTES);
+
+                vertexInput.pVertexBindingDescriptions(binding);
+                vertexInput.pVertexAttributeDescriptions(attributes);
             }
-            // (fullscreen: left EMPTY -- zero bindings, zero attributes. The
-            // vertex shader reads only gl_VertexIndex; "no vertex buffer" is a
-            // pipeline-level fact, not just an unbound buffer.)
+            // (FULLSCREEN_EFFECT: left EMPTY -- zero bindings, zero attributes.
+            // The vertex shader reads only gl_VertexIndex; "no vertex buffer" is
+            // a pipeline-level fact, not just an unbound buffer.)
 
             // ---- Input assembly: how vertices group into primitives ----
             // TRIANGLE_LIST: every 3 consecutive vertices = one independent triangle.
@@ -197,9 +250,9 @@ public class Pipeline {
                     VkPipelineRasterizationStateCreateInfo.calloc(stack);
             rasterizer.sType(VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO);
             rasterizer.polygonMode(VK_POLYGON_MODE_FILL);   // fill, not wireframe
-            // (fullscreen: cull NONE -- one screen-covering triangle whose
-            // winding we control; culling buys nothing and risks everything.)
-            rasterizer.cullMode(fullscreen ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT);
+            // Only the 3D scene culls. The flat passes (effect, 2D shapes) draw
+            // known-facing geometry, so culling buys nothing and risks everything.
+            rasterizer.cullMode(kind == Kind.SCENE ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE);
             rasterizer.frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE);  // two mirrors cancel
             rasterizer.lineWidth(1.0f);  // required even when not drawing lines
 
@@ -223,10 +276,11 @@ public class Pipeline {
             VkPipelineDepthStencilStateCreateInfo depthStencil =
                     VkPipelineDepthStencilStateCreateInfo.calloc(stack);
             depthStencil.sType(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO);
-            // (fullscreen: both OFF -- a 2D pass with nothing to occlude. The
-            // attachment format below is still declared either way.)
-            depthStencil.depthTestEnable(!fullscreen);
-            depthStencil.depthWriteEnable(!fullscreen);
+            // Only the 3D scene tests/writes depth; the flat passes have nothing
+            // to occlude. (The attachment FORMAT below is declared regardless --
+            // the render pass instance always carries a depth attachment.)
+            depthStencil.depthTestEnable(kind == Kind.SCENE);
+            depthStencil.depthWriteEnable(kind == Kind.SCENE);
             depthStencil.depthCompareOp(VK_COMPARE_OP_LESS);
             depthStencil.depthBoundsTestEnable(false);
             depthStencil.stencilTestEnable(false);
@@ -247,9 +301,9 @@ public class Pipeline {
             // or mipmapped sprites would prefer premultiplied to avoid dark halos.)
             VkPipelineColorBlendAttachmentState.Buffer blendAttachment =
                     VkPipelineColorBlendAttachmentState.calloc(1, stack);
-            // (fullscreen: blending OFF/REPLACE -- the effect writes every pixel
-            // opaquely; the factors below are ignored when disabled.)
-            blendAttachment.blendEnable(!fullscreen);
+            // Scene + 2D shapes alpha-blend (translucency); only the fullscreen
+            // effect writes every pixel opaquely (REPLACE -- factors below ignored).
+            blendAttachment.blendEnable(kind != Kind.FULLSCREEN_EFFECT);
             blendAttachment.srcColorBlendFactor(VK_BLEND_FACTOR_SRC_ALPHA);
             blendAttachment.dstColorBlendFactor(VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA);
             blendAttachment.colorBlendOp(VK_BLEND_OP_ADD);
@@ -285,9 +339,9 @@ public class Pipeline {
             // are instances of this shape, pointing at real buffers/images.
             // Identically-defined layouts are compatible, so sets survive a
             // pipeline rebuild (the resize format-change path).
-            if (fullscreen) {
-                // v1 effects bind no resources at all -- their entire interface
-                // is the push-constant block. No layout to create.
+            if (kind != Kind.SCENE) {
+                // Neither the effect nor the 2D shapes bind resources -- their
+                // whole interface is the push-constant block. No layout to create.
                 descriptorSetLayout = VK_NULL_HANDLE;
             } else {
                 VkDescriptorSetLayoutBinding.Buffer bindings =
@@ -321,13 +375,20 @@ public class Pipeline {
             // push_constant block is consumed). Spec floor for push space: 128
             // bytes. (Hardcoded to jvre's one shader interface, like the
             // vertex layout: parameterized the moment shaders vary.)
+            // Each kind's push interface differs in STAGE and SIZE:
+            //   SCENE             -> 4 bytes  @ fragment (the time pulse)
+            //   FULLSCREEN_EFFECT -> 20 bytes @ fragment (uResolution/uMouse/uTime)
+            //   SHAPES_2D         -> 8 bytes  @ vertex   (uResolution, for px->NDC)
+            // (Spec floor for push space is 128 bytes; all three are well under.)
             VkPushConstantRange.Buffer pushRange = VkPushConstantRange.calloc(1, stack);
-            pushRange.stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
+            pushRange.stageFlags(kind == Kind.SHAPES_2D
+                    ? VK_SHADER_STAGE_VERTEX_BIT : VK_SHADER_STAGE_FRAGMENT_BIT);
             pushRange.offset(0);
-            // Scene: 4 bytes of time (the pulse). Fullscreen effect: the 20-byte
-            // builtin block -- vec2 uResolution @0, vec2 uMouse @8, float uTime
-            // @16 (std430 packing; well under the 128-byte spec floor).
-            pushRange.size(fullscreen ? 5 * Float.BYTES : Float.BYTES);
+            pushRange.size(switch (kind) {
+                case SCENE -> Float.BYTES;
+                case FULLSCREEN_EFFECT -> 5 * Float.BYTES;
+                case SHAPES_2D -> 2 * Float.BYTES;
+            });
 
             VkPipelineLayoutCreateInfo layoutInfo = VkPipelineLayoutCreateInfo.calloc(stack);
             layoutInfo.sType(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);

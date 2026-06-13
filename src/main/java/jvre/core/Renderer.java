@@ -64,6 +64,8 @@ public class Renderer {
     // users bring their own shaders (the L2 Shadertoy altitude).
     private static final String TRIANGLE_VERT = "/shaders/triangle.vert.spv";
     private static final String TRIANGLE_FRAG = "/shaders/triangle.frag.spv";
+    private static final String SHAPE2D_VERT = "/shaders/shape2d.vert.spv";
+    private static final String SHAPE2D_FRAG = "/shaders/shape2d.frag.spv";
 
     // The demo CUBE's geometry -- interleaved, 8 floats per vertex:
     // [x y z | r g b | u v]. 24 vertices (4 per face x 6 faces, NOT 8 shared
@@ -144,6 +146,17 @@ public class Renderer {
     // jvre's own fullscreen-triangle vertex shader (build-time compiled, like
     // all internal shaders) -- shared by every effect.
     private static final String FULLSCREEN_VERT = "/shaders/fullscreen.vert.spv";
+
+    // The optional L2 Renderer2D (the "just draw" altitude). Like the effect it
+    // is a CONTENT SEAM: when the user has drawn shapes this frame,
+    // recordCommandBuffer draws THEM. Its pipeline + per-frame vertex arenas live
+    // HERE -- pipelines bake swapchain formats, and the arenas are fence-guarded
+    // per-frame slots exactly like the UBOs. Created lazily on renderer2D().
+    private Renderer2D renderer2D;
+    private Pipeline shapePipeline;
+    private Buffer[] shapeArenas;   // [frame in flight], host-visible, grown on overflow
+    // Initial per-frame arena (~2730 shape vertices at 6 floats each); grows if exceeded.
+    private static final long INITIAL_ARENA_BYTES = 64 * 1024;
 
     // Uniform buffers, one PER FRAME IN FLIGHT (same reasoning as the sync
     // objects: frame N+1's CPU write must not stomp frame N's in-flight GPU
@@ -263,6 +276,57 @@ public class Renderer {
                 swapchain.imageFormat(), swapchain.depthFormat(), swapchain.sampleCount(),
                 Pipeline.readResource(FULLSCREEN_VERT), effect.fragmentSpirv(),
                 "fullscreen + " + effect.name());
+    }
+
+    // ------------------------------------------------------------------
+    // Renderer2D (the L2 "just draw" altitude)
+    // ------------------------------------------------------------------
+
+    /**
+     * The L2 immediate-mode 2D surface, created on first use. The user calls
+     * begin() / fillRect() / ... / end() each frame; drawFrame then uploads the
+     * accumulated vertices into this frame's arena and draws them -- a content
+     * seam alongside the cube and the effect.
+     */
+    public Renderer2D renderer2D() {
+        if (renderer2D == null) {
+            renderer2D = new Renderer2D();
+            buildShapePipeline();
+            shapeArenas = new Buffer[MAX_FRAMES_IN_FLIGHT];
+            for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+                shapeArenas[i] = new Buffer(device, INITIAL_ARENA_BYTES,
+                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
+            }
+        }
+        return renderer2D;
+    }
+
+    private void buildShapePipeline() {
+        if (shapePipeline != null) {
+            shapePipeline.close();
+        }
+        shapePipeline = Pipeline.shapes2D(device, swapchain.imageFormat(),
+                swapchain.depthFormat(), swapchain.sampleCount(), SHAPE2D_VERT, SHAPE2D_FRAG);
+    }
+
+    /** True when the L2 surface exists and the user drew at least one shape this frame. */
+    private boolean shapeBatchActive() {
+        return renderer2D != null && renderer2D.floatCount() > 0;
+    }
+
+    /**
+     * Grow this frame's arena if the batch outgrew it. Safe to destroy the old
+     * buffer: the slot's fence already signaled (waited on at the top of
+     * drawFrame), so the GPU is done reading it.
+     */
+    private void ensureArenaCapacity(int frame, int floatCount) {
+        long needed = (long) floatCount * Float.BYTES;
+        long have = shapeArenas[frame].size();
+        if (needed > have) {
+            shapeArenas[frame].close();
+            shapeArenas[frame] = new Buffer(device, Math.max(needed, have * 2),
+                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
+        }
     }
 
     // ------------------------------------------------------------------
@@ -671,6 +735,17 @@ public class Renderer {
                 // Not indexed, no instances: literally "run the vertex shader
                 // three times".
                 vkCmdDraw(cmd, 3, 1, 0, 0);
+            } else if (shapeBatchActive()) {
+                // ---- L2 Renderer2D shapes ----
+                // One vertex buffer (this frame's arena), no index buffer, no
+                // descriptors. The 8-byte VERTEX push carries uResolution so the
+                // shape vertex shader maps pixels -> NDC.
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shapePipeline.handle());
+                vkCmdBindVertexBuffers(cmd, 0,
+                        stack.longs(shapeArenas[currentFrame].handle()), stack.longs(0));
+                vkCmdPushConstants(cmd, shapePipeline.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0,
+                        stack.floats(swapchain.width(), swapchain.height()));
+                vkCmdDraw(cmd, renderer2D.vertexCount(), 1, 0, 0);
             } else {
                 // ---- The cube demo ----
                 // Bind the pipeline: ONE call swaps in the shaders + all the
@@ -840,10 +915,19 @@ public class Renderer {
             // This frame's animation clock, used by BOTH data tiers below.
             float time = (System.nanoTime() - startNanos) * 1e-9f;
 
-            // Rewrite this slot's UBO with the fresh transform (safe: the fence
-            // wait above guarantees the GPU finished reading this slot's UBO).
-            // A ShaderEffect uses no UBO at all -- skip the work entirely.
-            if (effectPipeline == null) {
+            // Per-frame upload, keyed to which content seam is live (all
+            // fence-guarded: the wait above means the GPU finished reading this
+            // slot's resources, so rewriting them is safe).
+            if (effectPipeline != null) {
+                // The effect's whole input is the push block -- nothing to upload.
+            } else if (shapeBatchActive()) {
+                // L2 shapes: upload this frame's accumulated vertices into the
+                // slot's arena (growing it first if the batch outgrew it).
+                int floats = renderer2D.floatCount();
+                ensureArenaCapacity(currentFrame, floats);
+                shapeArenas[currentFrame].uploadFloats(renderer2D.vertexData(), floats);
+            } else {
+                // The cube: rewrite this slot's transform UBO.
                 float aspect = swapchain.width() / (float) swapchain.height();
                 uniformBuffers[currentFrame].uploadFloats(modelViewProjection(time, aspect));
             }
@@ -971,10 +1055,13 @@ public class Renderer {
             pipeline.close();
             pipeline = new Pipeline(device, swapchain.imageFormat(), swapchain.depthFormat(),
                     swapchain.sampleCount(), TRIANGLE_VERT, TRIANGLE_FRAG);
-            // The effect pipeline baked the same formats -- rebuild it too (the
-            // user's SPIR-V is still in the ShaderEffect; no recompile needed).
+            // The effect + shape pipelines baked the same formats -- rebuild them
+            // too (the effect's SPIR-V is still in the ShaderEffect; no recompile).
             if (effect != null) {
                 buildEffectPipeline();
+            }
+            if (renderer2D != null) {
+                buildShapePipeline();
             }
         }
 
@@ -1030,6 +1117,16 @@ public class Renderer {
         }
         if (effectPipeline != null) {
             effectPipeline.close();
+        }
+        if (shapePipeline != null) {
+            shapePipeline.close();
+        }
+        if (shapeArenas != null) {
+            for (Buffer arena : shapeArenas) {
+                if (arena != null) {
+                    arena.close();
+                }
+            }
         }
         if (texture != null) {
             texture.close();

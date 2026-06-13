@@ -141,14 +141,24 @@ public class Buffer {
      * norm -- and the required flush anywhere else).
      */
     public void uploadFloats(float[] data) {
-        long bytes = (long) data.length * Float.BYTES;
+        uploadFloats(data, data.length);
+    }
+
+    /**
+     * Upload only the first {@code count} floats of {@code data} -- for a
+     * growable arena (e.g. the L2 shape vertex buffer) whose backing array is
+     * oversized and only partly live each frame.
+     */
+    public void uploadFloats(float[] data, int count) {
+        long bytes = (long) count * Float.BYTES;
         checkFits(bytes);
         try (MemoryStack stack = stackPush()) {
             PointerBuffer pData = stack.mallocPointer(1);
             Vk.check(vmaMapMemory(device.allocator(), allocation, pData),
                     "Failed to map buffer memory");
-            // Wrap the raw mapped pointer as a FloatBuffer and bulk-copy.
-            memFloatBuffer(pData.get(0), data.length).put(data);
+            // Wrap the raw mapped pointer as a FloatBuffer and bulk-copy the
+            // live prefix.
+            memFloatBuffer(pData.get(0), count).put(data, 0, count);
             vmaUnmapMemory(device.allocator(), allocation);
             vmaFlushAllocation(device.allocator(), allocation, 0, bytes);
         }

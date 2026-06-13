@@ -78,4 +78,51 @@ class Renderer2DTest {
         assertThrows(IllegalArgumentException.class,
                 () -> g.fillRect(0, 0, -5, 10, Color.WHITE));
     }
+
+    @Test
+    void fillCircleTessellatesIntoAFan() {
+        Renderer2D g = new Renderer2D();
+        g.begin();
+        g.fillCircle(200, 200, 50, Color.GREEN);
+        g.end();
+
+        int verts = g.vertexCount();
+        assertTrue(verts % 3 == 0, "a triangle list must be a multiple of 3: " + verts);
+        assertTrue(verts >= 8 * 3, "even a small circle gets the minimum segment count");
+
+        float[] v = g.vertexData();
+        int stride = Renderer2D.FLOATS_PER_VERTEX;
+        for (int i = 0; i < verts; i += 3) {
+            // Every fan triangle starts at the centre...
+            assertEquals(200f, v[i * stride], 1e-4f);
+            assertEquals(200f, v[i * stride + 1], 1e-4f);
+            // ...and all three corners lie within the radius (+ a hair).
+            for (int t = 0; t < 3; t++) {
+                float x = v[(i + t) * stride];
+                float y = v[(i + t) * stride + 1];
+                double d = Math.hypot(x - 200, y - 200);
+                assertTrue(d <= 50 + 1e-3, "vertex outside the radius: " + d);
+            }
+        }
+    }
+
+    @Test
+    void biggerCirclesGetMoreSegments() {
+        Renderer2D g = new Renderer2D();
+        g.begin();
+        g.fillCircle(0, 0, 10, Color.WHITE);
+        int small = g.vertexCount();
+        g.fillCircle(0, 0, 500, Color.WHITE);
+        int both = g.vertexCount();
+        g.end();
+        assertTrue((both - small) > small, "a 500px circle needs more segments than a 10px one");
+    }
+
+    @Test
+    void negativeRadiusIsRejected() {
+        Renderer2D g = new Renderer2D();
+        g.begin();
+        assertThrows(IllegalArgumentException.class,
+                () -> g.fillCircle(0, 0, -1, Color.WHITE));
+    }
 }

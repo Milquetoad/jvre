@@ -115,6 +115,9 @@ public class Main {
         g.begin();
         g.fillRect(100, 100, 220, 160, Color.rgb(40, 120, 220));       // solid blue, anchored top-left
         g.fillRect(250, 200, 220, 160, Color.rgba(220, 60, 60, 128));  // translucent red, overlapping
+        // A filled circle (centre + radius), tessellated. Translucent so its
+        // round edge shows against the rectangles it overlaps.
+        g.fillCircle(360, 300, 110, Color.rgba(80, 220, 130, 160));     // translucent green circle
         // Anchored to the BOTTOM-RIGHT via the live framebuffer size -- relative
         // layout as plain arithmetic (no coordinate mode). Resize the window and
         // this square tracks the corner while the others stay pinned top-left.

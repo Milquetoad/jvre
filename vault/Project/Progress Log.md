@@ -2,6 +2,13 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-13 — L2 beat 3 begins: fillCircle (first tessellated shape) ⭕✅
+- **`fillCircle(cx, cy, r, color)`** — centre+radius (the circle's natural convention). The first **tessellated** primitive: a triangle FAN (centre, rim_i, rim_i+1) emitted as a flat triangle list (the arena is non-indexed). Verified on the 4090 (translucent green circle, smooth/round edge, blends over the rects; relative-anchored white square also confirmed tracking the corner on resize).
+- **Segment count scales with radius** from a ~0.3px chord-error target: `segments = ceil(2pi / (2*acos(1 - e/r)))`, clamped to [8, 512]. Big circles stay smooth, tiny ones stay cheap — and the tests pin it (a 500px circle gets more segments than a 10px one).
+- **This hard-tessellated rim is exactly what SDF edge-AA will later soften** — the catalogued reason curves get their own shader path down the line. For now MSAA smooths the silhouette; the facets are sub-0.3px anyway.
+- **Tests**: 4 new (fan starts at centre, every corner within radius, segment scaling, negative radius rejected) — still all GPU-free. 
+- **Next in beat 3**: `fillEllipse` (trivially the same with rx/ry), `fillTriangle`/`fillQuad` (explicit vertices), then the strokes.
+
 ## 2026-06-13 — L2 Renderer2D beat 2: first rectangles on screen (GPU half) 🟦✅
 - **The L2 "just draw" altitude draws** ([[L2 Feature Set - Renderer2D]] beat 2): three filled rectangles on screen, **verified on the 4090** (solid blue; a translucent red overlapping the blue AND the orange clear → correctly blended in both bands; solid white). Validation **fully silent**, clean exit (the new arena + shape-pipeline teardown leaks nothing — VMA's destroy assert would have fired).
 - **`Pipeline` grew its third `Kind`** — `boolean fullscreen` became `enum Kind { SCENE, FULLSCREEN_EFFECT, SHAPES_2D }`, the moment the cube's "vertex layout becomes a parameter when a second exists" comment predicted. One constructor body bakes all three; the 2D kind = its own `[x y | r g b a]` layout, cull NONE, depth OFF, blend ON, no descriptors, an **8-byte push at the VERTEX stage** (uResolution, for pixels→NDC).

@@ -93,6 +93,60 @@ public final class Renderer2D {
         vertex(x,     y,     c);
     }
 
+    /**
+     * Fill a circle: centre {@code (cx, cy)} + radius {@code r}, in pixels.
+     * Centre-and-radius is the circle's natural convention (geometry; even
+     * Processing defaults ellipseMode to CENTER).
+     *
+     * Tessellated into a triangle FAN -- one slice {@code (centre, p_i, p_i+1)}
+     * per segment -- emitted as a flat triangle list (the arena has no index
+     * buffer). The segment count scales with the radius so a big circle stays
+     * smooth and a tiny one stays cheap. This hard-tessellated edge is what the
+     * planned SDF edge-AA will later soften (smoothstepping alpha over ~1px of
+     * signed distance), which is why curves get their own shader path eventually.
+     */
+    public void fillCircle(float cx, float cy, float r, Color color) {
+        requireInFrame("fillCircle");
+        if (r < 0f) {
+            throw new IllegalArgumentException("fillCircle: negative radius (" + r + ")");
+        }
+        float[] c = color.linearRGBA();
+        int segments = circleSegments(r);
+        float step = (float) (2.0 * Math.PI / segments);
+
+        // Walk the rim once; each step makes a triangle from the centre to the
+        // current and next rim points. Start at angle 0 (the +x point).
+        float prevX = cx + r;
+        float prevY = cy;
+        for (int i = 1; i <= segments; i++) {
+            float a = i * step;
+            float nextX = cx + r * (float) Math.cos(a);
+            float nextY = cy + r * (float) Math.sin(a);
+            vertex(cx, cy, c);
+            vertex(prevX, prevY, c);
+            vertex(nextX, nextY, c);
+            prevX = nextX;
+            prevY = nextY;
+        }
+    }
+
+    /**
+     * How many segments to tessellate a circle of radius {@code r} into. Derived
+     * from a target chord error (~0.3px): the angle whose chord deviates from the
+     * arc by that much is {@code 2*acos(1 - e/r)}, and a full turn divided by it
+     * is the count. Clamped to a sane band so tiny circles still look round and
+     * huge ones don't explode the vertex count.
+     */
+    private static int circleSegments(float r) {
+        if (r <= 0.5f) {
+            return 6;
+        }
+        double maxError = 0.3;  // pixels
+        double theta = 2.0 * Math.acos(Math.max(-1.0, 1.0 - maxError / r));
+        int segments = (int) Math.ceil(2.0 * Math.PI / theta);
+        return Math.max(8, Math.min(segments, 512));
+    }
+
     // ------------------------------------------------------------------
     // package-private: what the Renderer reads to draw the batch
     // ------------------------------------------------------------------

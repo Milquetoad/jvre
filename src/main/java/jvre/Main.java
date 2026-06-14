@@ -49,6 +49,7 @@ public class Main {
     private Renderer renderer;
     private Renderer2D g;   // the L2 surface, when DEMO_2D
     private float cursorSize = 48;   // the interactive cursor box; scroll resizes it
+    private float spin = 0f;          // accumulated rotation, integrated from dt()
     private Texture demoImage;    // a generated texture drawn via g.image(), when DEMO_2D
     private Texture demoImage2;   // a SECOND texture -- proves multi-texture batching (flush-on-switch)
 
@@ -201,6 +202,17 @@ public class Main {
         g.scale(1.3f);
         g.fillRoundedRect(-55, -22, 110, 44, 12, Color.rgba(70, 160, 210, 220));
         g.text("rotated", -46, -13, 24, Color.WHITE);
+        g.pop();
+        // ANIMATION via the time/delta source. A dot slides with the absolute
+        // clock time(); a small square spins by INTEGRATING dt() (so its speed is
+        // frame-rate independent). One glance confirms both accessors are live.
+        float t = renderer.time();
+        g.fillCircle(400f + (float) Math.sin(t * 2.0) * 150f, 22, 11, Color.rgb(255, 220, 40));
+        spin += renderer.dt() * 1.5f;
+        g.push();
+        g.translate(755, 565);
+        g.rotate(spin);
+        g.fillRect(-12, -12, 24, 24, Color.rgb(120, 90, 230));
         g.pop();
         // INTERACTIVE: a rounded box that follows the cursor (framebuffer pixels,
         // so it sits exactly under the pointer), turns red while the left button

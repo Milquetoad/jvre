@@ -2,6 +2,12 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-14 — Interactivity: a time / delta source ⏱️✅
+- **`renderer.time()`** (seconds since startup, live) + **`renderer.dt()`** (the previous frame's wall-clock duration) -- [[Roadmap]] Phase 1b. Makes animation a first-class L2 thing; before this an L2 user had to reach for `System.nanoTime()` (the Renderer already tracked an internal clock for the cube/effect -- this just exposes it cleanly + adds the delta).
+- **`dt()` measured once per `drawFrame`, before any early-return** (so a resize-skipped frame still advances the clock), and read by the NEXT frame's `drawShapes` -- i.e. the previous frame's duration, which is exactly what `distance = speed * dt()` wants for frame-rate independence.
+- **Verified on the 4090**: a dot slides with `time()` (sin), a square spins by integrating `dt()` -- both smooth, alongside the cursor box from 1a.
+- **Closes Phase 1a+1b (interactivity).** Next on Phase 1: keyboard + typed text (input beat 2). Next on the parallel infra track: R1 (de-pin LWJGL natives) + 1c (Linux + CI) -- toward the v1.0/Maven Central goal.
+
 ## 2026-06-14 — Interactivity: the input seam (mouse) 🖱️✅
 - **L2 stops being draw-only.** New `Input` (owned by `Window`, surfaced via `window.input()`): mouse position, buttons, scroll -- the first [[Roadmap]] Phase 1 item. **Verified on the 4090**: a rounded box tracks the cursor, turns red while the left button is held, resizes with the scroll wheel.
 - **Position in FRAMEBUFFER PIXELS** (same space L2 draws in, so `input.mouseX()` lines up with `g.fillRect`). GLFW reports cursor in window coords; we convert by the framebuffer/window ratio -- closing the DPI caveat the old `Window.cursorPos` flagged.

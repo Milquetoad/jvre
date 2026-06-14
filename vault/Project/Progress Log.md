@@ -2,6 +2,12 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-15 — Release: jvre is publicly installable -- JitPack + v0.1.0 (R3) 🚀✅
+- **The first public consumption path.** `jitpack.yml` (JDK 21 + `publishToMavenLocal`) lets JitPack build jvre from a git tag in its SDK-less env -- possible now that the build is self-contained (shaderc, not glslc). A tagged **`v0.1.0`** GitHub Release is the marker; from it, anyone can `implementation 'com.github.Milquetoad:jvre:v0.1.0'`.
+- **README "Using jvre as a library"** section: the JitPack repo + coordinate, and the per-OS LWJGL **natives** the consumer adds themselves (the "consumer picks" reality made concrete -- the LWJGL libs arrive transitively via jvre's POM, only the natives are theirs). Also fixed two stale README bits: the Vulkan SDK is now *optional* (build needs no glslc), and natives are *auto-detected* (no build.gradle edit).
+- **Release ladder so far:** R1 de-pin natives -> 1c CI -> branch protection -> R2 consumable artifact -> shaderc self-contained build -> **R3 public via JitPack**. Remaining for the v1.0 finish line: R4 (Maven Central + GPG signing) once the API stabilizes.
+- **Next**: turn to the big remaining FEATURE -- Phase 2 (the L1 geometry escape hatch). (Camera helper Q raised -- see [[Roadmap]] / API vision.)
+
 ## 2026-06-14 — Build: self-contained shaders via shaderc (glslc retired) -- R3 unblocker 🛠️✅
 - **The build no longer needs the Vulkan SDK.** `compileShaders` stopped shelling out to the `glslc` executable; it now runs `jvre.tools.ShaderTool`, a tiny build tool that drives jvre's own `ShaderCompiler` (the bundled `lwjgl-shaderc` -- the very compiler `glslc` wraps). So the build is self-contained: works on CI, on **JitPack** (the reason this came up -- R3's blocker), and on any from-source consumer, no SDK.
 - **Chosen approach A (reuse shaderc-as-a-library at build time) over B (compile built-ins at runtime):** reliable + maintainable beats clever -- the build keeps producing `.spv` resources exactly as before; only the compiler invocation changed (glslc-exe -> shaderc-lib). Verified locally: all 5 shaders compile, `clean build` green.

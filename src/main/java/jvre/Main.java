@@ -4,6 +4,7 @@ import jvre.core.Color;
 import jvre.core.Diagnostics;
 import jvre.core.Input;
 import jvre.core.Instance;
+import jvre.core.Key;
 import jvre.core.MouseButton;
 import jvre.core.Renderer;
 import jvre.core.Renderer2D;
@@ -50,6 +51,7 @@ public class Main {
     private Renderer2D g;   // the L2 surface, when DEMO_2D
     private float cursorSize = 48;   // the interactive cursor box; scroll resizes it
     private float spin = 0f;          // accumulated rotation, integrated from dt()
+    private final StringBuilder typed = new StringBuilder();   // the demo text field's contents
     private Texture demoImage;    // a generated texture drawn via g.image(), when DEMO_2D
     private Texture demoImage2;   // a SECOND texture -- proves multi-texture batching (flush-on-switch)
 
@@ -224,6 +226,17 @@ public class Main {
                 ? Color.rgb(235, 70, 70) : Color.rgba(60, 200, 120, 200);
         float half = cursorSize * 0.5f;
         g.fillRoundedRect(in.mouseX() - half, in.mouseY() - half, cursorSize, cursorSize, 10, box);
+        // INTERACTIVE TEXT FIELD: typed characters flow in via typedChars()
+        // (layout/shift handled, character keys auto-repeat); BACKSPACE deletes,
+        // ESCAPE clears. One glance confirms keyboard text + key edges.
+        typed.append(in.typedChars());
+        if (in.keyPressed(Key.BACKSPACE) && typed.length() > 0) {
+            typed.deleteCharAt(typed.length() - 1);
+        }
+        if (in.keyPressed(Key.ESCAPE)) {
+            typed.setLength(0);
+        }
+        g.text("type something: " + typed + "_", 40, 86, 22, Color.rgb(20, 20, 20));
         g.end();
     }
 

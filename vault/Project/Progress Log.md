@@ -2,6 +2,13 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-14 — Interactivity: keyboard + typed text (input beat 2) ⌨️✅ -> Phase 1 COMPLETE
+- **`Key` enum** (letters, digits, named/navigation keys, modifiers, F1-F12 -- no raw GLFW codes) + **`Input.keyDown`/`keyPressed`/`keyReleased`** (same level/edge model as the mouse, via `GLFWKeyCallback`), and **`Input.typedChars()`** for text fields.
+- **Typed text is its own channel** -- from `GLFWCharCallback` (layout + shift applied, character keys OS-auto-repeat). The right source for a text field; raw key codes aren't (they don't know `a` vs `A`). Editing keys (Backspace/arrows) come from `keyPressed`. **Verified on the 4090**: a `type something:` field fills as you type (shift -> capitals/symbols, held letters repeat), Backspace deletes, Escape clears.
+- **Known v1 limit**: non-character keys don't auto-repeat (only the char stream does) -- held Backspace deletes once. Catalogued.
+- GLFW-coupled -> hardware-verified, not unit-tested ([[Definition of Done]]).
+- **Phase 1 (interactivity + proof) is essentially complete** -- input (mouse + keyboard + text) and a time/delta source. The remaining 1d (approachability proof / getting-started docs) folds into the release track. **Next**: R2 (`maven-publish` plumbing -> a consumable artifact) on the road to v1.0/Central. See [[Input Seam]].
+
 ## 2026-06-14 — Infra: de-pinned natives (R1) + Linux/Windows CI (1c) 🐧🪟✅
 - **The PM/delivery track begins**, toward the v1.0/Maven Central goal. Two pieces:
 - **R1 -- de-pinned LWJGL natives.** `build.gradle` no longer hardcodes `natives-windows`; the classifier is **auto-detected from the host** (`os.name`/`os.arch`), so the same build works on Hal (Windows) AND a Linux CI runner with no edit. Local build still resolves `natives-windows` -> unchanged on Hal. (Shipping a library will instead let the *consumer* pick -- the later R2+ step; this is the own-build/CI fix.)

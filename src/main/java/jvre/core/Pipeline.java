@@ -191,19 +191,21 @@ public class Pipeline {
                 vertexInput.pVertexAttributeDescriptions(attributes);
             } else if (kind == Kind.SHAPES_2D) {
                 // L2 shapes: [x y | r g b a | localX localY | halfX halfY |
-                // cornerRadius], 11 floats/vertex. pos (loc 0) + color (loc 1)
-                // every shape uses; local (loc 2) + half (loc 3) + cornerRadius
-                // (loc 4) drive the SDF rounded-box coverage path (flat shapes
-                // pass 0,0,0,0,-1). One layout for flat AND SDF shapes, so they
-                // share a batch and keep their draw order.
+                // cornerRadius | u v | mode], 14 floats/vertex. pos (loc 0) +
+                // color (loc 1) every shape uses; local (loc 2) + half (loc 3) +
+                // cornerRadius (loc 4) drive the SDF rounded-box coverage path;
+                // uv (loc 5) is the texture coordinate (image/text); mode (loc 6)
+                // SELECTS what the fragment shader does -- 0 flat, 1 SDF box,
+                // 2 textured image, 3 SDF text. One layout for every shape kind,
+                // so they share a batch and keep their draw order.
                 VkVertexInputBindingDescription.Buffer binding =
                         VkVertexInputBindingDescription.calloc(1, stack);
                 binding.binding(0);
-                binding.stride(11 * Float.BYTES);
+                binding.stride(14 * Float.BYTES);
                 binding.inputRate(VK_VERTEX_INPUT_RATE_VERTEX);
 
                 VkVertexInputAttributeDescription.Buffer attributes =
-                        VkVertexInputAttributeDescription.calloc(5, stack);
+                        VkVertexInputAttributeDescription.calloc(7, stack);
                 attributes.get(0).location(0).binding(0)
                         .format(VK_FORMAT_R32G32_SFLOAT).offset(0);
                 attributes.get(1).location(1).binding(0)
@@ -214,6 +216,10 @@ public class Pipeline {
                         .format(VK_FORMAT_R32G32_SFLOAT).offset(8 * Float.BYTES);
                 attributes.get(4).location(4).binding(0)
                         .format(VK_FORMAT_R32_SFLOAT).offset(10 * Float.BYTES);
+                attributes.get(5).location(5).binding(0)
+                        .format(VK_FORMAT_R32G32_SFLOAT).offset(11 * Float.BYTES);
+                attributes.get(6).location(6).binding(0)
+                        .format(VK_FORMAT_R32_SFLOAT).offset(13 * Float.BYTES);
 
                 vertexInput.pVertexBindingDescriptions(binding);
                 vertexInput.pVertexAttributeDescriptions(attributes);
@@ -349,11 +355,34 @@ public class Pipeline {
             // are instances of this shape, pointing at real buffers/images.
             // Identically-defined layouts are compatible, so sets survive a
             // pipeline rebuild (the resize format-change path).
-            if (kind != Kind.SCENE) {
-                // Neither the effect nor the 2D shapes bind resources -- their
-                // whole interface is the push-constant block. No layout to create.
+            if (kind == Kind.FULLSCREEN_EFFECT) {
+                // The effect's whole interface is the push-constant block -- it
+                // binds no resources, so there is no layout to create.
                 descriptorSetLayout = VK_NULL_HANDLE;
-            } else {
+            } else if (kind == Kind.SHAPES_2D) {
+                // L2 shapes bind ONE resource: the texture that image (mode 2)
+                // and text (mode 3) sample. binding 0 = a COMBINED_IMAGE_SAMPLER
+                // in the FRAGMENT stage. Flat/SDF shapes (modes 0/1) never read
+                // it, but it must still be a VALID bound descriptor -- the shader
+                // references the sampler statically -- so the Renderer always
+                // binds something (a 1x1 white default when no image is drawn).
+                VkDescriptorSetLayoutBinding.Buffer bindings =
+                        VkDescriptorSetLayoutBinding.calloc(1, stack);
+                bindings.get(0).binding(0);                                  // = shader binding 0
+                bindings.get(0).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+                bindings.get(0).descriptorCount(1);
+                bindings.get(0).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
+
+                VkDescriptorSetLayoutCreateInfo setLayoutInfo =
+                        VkDescriptorSetLayoutCreateInfo.calloc(stack);
+                setLayoutInfo.sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
+                setLayoutInfo.pBindings(bindings);
+
+                LongBuffer pSetLayout = stack.longs(VK_NULL_HANDLE);
+                Vk.check(vkCreateDescriptorSetLayout(device.handle(), setLayoutInfo, null, pSetLayout),
+                        "Failed to create the shape descriptor set layout");
+                descriptorSetLayout = pSetLayout.get(0);
+            } else {  // SCENE (the cube): a UBO + a texture
                 VkDescriptorSetLayoutBinding.Buffer bindings =
                         VkDescriptorSetLayoutBinding.calloc(2, stack);
 

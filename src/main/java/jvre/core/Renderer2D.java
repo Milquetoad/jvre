@@ -25,11 +25,13 @@ public final class Renderer2D {
 
     // Interleaved layout: vec2 position (pixels) + vec4 color (linear) + vec2
     // local (SDF pixel offset within the shape) + vec2 half (SDF box half-extents)
-    // + float cornerRadius (px; < 0 means "flat shape -> full coverage"). Flat
-    // shapes pass 0,0,0,0,-1 for the SDF fields; SDF shapes (circle, rounded-rect)
-    // fill them. One layout, one batch -> draw order is preserved across flat and
-    // SDF shapes alike.
-    static final int FLOATS_PER_VERTEX = 11;
+    // + float cornerRadius (px) + vec2 uv (texture coord) + float mode. The MODE
+    // selects what the fragment shader does: 0 = flat (full coverage, flat color),
+    // 1 = SDF rounded box (uses local/half/cornerRadius), 2 = textured image
+    // (uses uv), 3 = SDF text (uses uv). Flat shapes pass mode 0 and leave the
+    // SDF/uv fields zero; SDF shapes (circle, rounded-rect) pass mode 1 + the box
+    // fields. One layout, one batch -> draw order is preserved across every kind.
+    static final int FLOATS_PER_VERTEX = 14;
 
     private float[] verts = new float[6 * 6 * 64];  // room for ~64 rects before growing
     private int count = 0;                          // floats written this frame
@@ -41,6 +43,19 @@ public final class Renderer2D {
     // positioning policy (centered, proportional, anchored) is the user's, by
     // design -- no coordinate modes (the mechanism/policy boundary).
     private final Renderer owner;
+
+    // Draw RUNS -- the flush-on-texture-switch batching. The vertex arena stays
+    // one buffer in paint order; runs slice it into contiguous ranges that each
+    // need a different texture bound. runFirst[i] = the first vertex of run i;
+    // runTex[i] = the texture for run i (null -> the 1x1 white default). A run
+    // ends where the next begins (the last runs to vertexCount()). Flat/SDF
+    // shapes join the current run (they ignore the texture); an image() with a
+    // DIFFERENT texture opens a new run. So draw order is preserved across any
+    // mix of shapes and images -- the Renderer draws the runs in order, binding
+    // each run's texture. (Modeled on raylib's rlgl default batch.)
+    private int[] runFirst = new int[8];
+    private Texture[] runTex = new Texture[8];
+    private int runCount = 0;
 
     Renderer2D() { this.owner = null; }              // CPU-only (tests)
     Renderer2D(Renderer owner) { this.owner = owner; }  // the Renderer vends this one
@@ -66,6 +81,7 @@ public final class Renderer2D {
         }
         inFrame = true;
         count = 0;
+        runCount = 0;
     }
 
     /** Close the frame. The accumulated shapes are now ready to be drawn. */
@@ -108,8 +124,8 @@ public final class Renderer2D {
      * computes the exact distance to the rim per pixel and fades alpha across
      * ~1px -- an analytic, resolution-independent edge (no facets at any zoom,
      * crisper than coverage sampling). It rides the SAME batch and pipeline as
-     * the flat shapes (they pass sdfRadius < 0), so draw order is preserved: to
-     * the L2 caller this is still just {@code fillCircle}, technique invisible.
+     * the flat shapes (which carry mode 0), so draw order is preserved: to the
+     * L2 caller this is still just {@code fillCircle}, technique invisible.
      *
      * (An ELLIPSE has no closed-form signed distance, so {@link #fillEllipse}
      * stays a fan for now; that's why the circle no longer delegates to it.)
@@ -214,6 +230,171 @@ public final class Renderer2D {
         vertex(x1, y1, c);
         vertex(x3, y3, c);
         vertex(x4, y4, c);
+    }
+
+    // ------------------------------------------------------------------
+    // Images (the first gated content primitive). A textured quad: same two
+    // triangles as fillRect, but each corner also carries a UV, and the vertices
+    // are tagged mode 2 so the fragment shader samples the bound texture instead
+    // of using a flat color. Rides the SAME batch and pipeline as every other
+    // shape -- draw order preserved -- with the texture bound as the shape
+    // pipeline's one descriptor.
+    // ------------------------------------------------------------------
+
+    /**
+     * Draw {@code img} at its natural pixel size, top-left corner at {@code (x,
+     * y)}. Convenience for {@link #image(Texture, float, float, float, float)}
+     * with {@code w = img.width()}, {@code h = img.height()}.
+     */
+    public void image(Texture img, float x, float y) {
+        image(img, x, y, img.width(), img.height());
+    }
+
+    /**
+     * Draw {@code img} into the rectangle corner {@code (x, y)} + size {@code w x
+     * h}, in pixels (scaled to fit; the sampler decides the filtering). Corner +
+     * size matches {@link #fillRect} -- an image is a textured rectangle.
+     *
+     * Any number of images and textures per frame: an image whose texture differs
+     * from the current run opens a new {@linkplain #runCount() draw run}. Drawing
+     * the same texture repeatedly (an atlas / sprite sheet) all batches into one
+     * run; alternating textures costs one draw per switch -- so group same-texture
+     * draws when it matters.
+     */
+    public void image(Texture img, float x, float y, float w, float h) {
+        requireInFrame("image");
+        if (img == null) {
+            throw new IllegalArgumentException("image: null texture");
+        }
+        if (w < 0f || h < 0f) {
+            throw new IllegalArgumentException("image: negative size (" + w + " x " + h + ")");
+        }
+        useTexture(img);
+
+        // White tint = the texture passes through unchanged (mode 2 multiplies the
+        // sample by this color). UVs map the quad's corners across the whole
+        // texture: top-left (0,0) -> bottom-right (1,1). Pixel coords are y-down
+        // and textures upload top-to-bottom, so there is no V flip.
+        float[] c = Color.WHITE.linearRGBA();
+        imageVertex(x,     y,     c, 0f, 0f);
+        imageVertex(x + w, y,     c, 1f, 0f);
+        imageVertex(x + w, y + h, c, 1f, 1f);
+        imageVertex(x + w, y + h, c, 1f, 1f);
+        imageVertex(x,     y + h, c, 0f, 1f);
+        imageVertex(x,     y,     c, 0f, 0f);
+    }
+
+    /** Append one textured-image vertex (mode 2, carrying a UV; SDF fields unused). */
+    private void imageVertex(float px, float py, float[] c, float u, float v) {
+        emit(px, py, c, 0f, 0f, 0f, 0f, 0f, u, v, MODE_IMAGE);
+    }
+
+    // ------------------------------------------------------------------
+    // Text (the second gated content primitive). One quad per glyph, sampling
+    // the font's SDF atlas (mode 3). The atlas is one texture, so a whole string
+    // -- and consecutive text() calls in the same font -- batch into one run.
+    // ------------------------------------------------------------------
+
+    /** Draw {@code s} at the built-in font's natural size, top-left at {@code (x, y)}. */
+    public void text(String s, float x, float y, Color color) {
+        Font font = owner.font();
+        text(font, s, x, y, font.naturalSize(), color);
+    }
+
+    /** Draw {@code s} at {@code size} pixels (cap height ~ size), top-left at {@code (x, y)},
+     *  in the built-in font. */
+    public void text(String s, float x, float y, float size, Color color) {
+        text(owner.font(), s, x, y, size, color);
+    }
+
+    /**
+     * Draw {@code s} in {@code font} at {@code size} pixels, the text box's
+     * top-left corner at {@code (x, y)} (corner convention, like {@link
+     * #fillRect}). Walks the string advancing a pen along the baseline; each glyph
+     * is a textured quad sampling the font's SDF atlas (mode 3), placed by its
+     * metrics. One bake size renders at any {@code size} -- the SDF scales for
+     * free. {@code '\n'} starts a new line; characters outside the baked range are
+     * skipped (advanced like a space).
+     */
+    public void text(Font font, String s, float x, float y, float size, Color color) {
+        requireInFrame("text");
+        if (font == null) {
+            throw new IllegalArgumentException("text: null font");
+        }
+        if (size < 0f) {
+            throw new IllegalArgumentException("text: negative size (" + size + ")");
+        }
+        if (s.isEmpty()) {
+            return;
+        }
+        useTexture(font.atlas());
+        float[] c = color.linearRGBA();
+        float scale = font.scaleFor(size);
+        float startX = x;
+        float penX = x;
+        float baseline = y + font.ascent() * scale;   // (x, y) is the TOP-left; drop to the baseline
+
+        for (int i = 0; i < s.length(); i++) {
+            char ch = s.charAt(i);
+            if (ch == '\n') {
+                penX = startX;
+                baseline += font.lineHeight() * scale;
+                continue;
+            }
+            Font.Glyph g = font.glyph(ch);
+            if (g == null) {
+                Font.Glyph space = font.glyph(' ');
+                penX += (space != null ? space.advance : size * 0.3f) * scale;
+                continue;
+            }
+            if (g.w > 0f) {   // whitespace has no quad, only an advance
+                float qx = penX + g.xoff * scale;
+                float qy = baseline + g.yoff * scale;
+                float qw = g.w * scale;
+                float qh = g.h * scale;
+                textVertex(qx,      qy,      c, g.u0, g.v0);
+                textVertex(qx + qw, qy,      c, g.u1, g.v0);
+                textVertex(qx + qw, qy + qh, c, g.u1, g.v1);
+                textVertex(qx + qw, qy + qh, c, g.u1, g.v1);
+                textVertex(qx,      qy + qh, c, g.u0, g.v1);
+                textVertex(qx,      qy,      c, g.u0, g.v0);
+            }
+            penX += g.advance * scale;
+        }
+    }
+
+    /** Append one SDF-text vertex (mode 3, carrying an atlas UV; SDF box fields unused). */
+    private void textVertex(float px, float py, float[] c, float u, float v) {
+        emit(px, py, c, 0f, 0f, 0f, 0f, 0f, u, v, MODE_TEXT);
+    }
+
+    /**
+     * Note that the next vertices will sample {@code tex}, opening a new draw run
+     * if the current run is already committed to a different texture. Three cases:
+     * no run yet -> start run 0 with tex; current run has no texture yet (only
+     * flat/SDF shapes, which don't sample) -> adopt tex for it; current run
+     * already uses a different texture -> split a new run at the current vertex.
+     * (Same texture again: nothing -- it just keeps batching.)
+     */
+    private void useTexture(Texture tex) {
+        if (runCount == 0) {
+            pushRun(0, tex);
+        } else if (runTex[runCount - 1] == null) {
+            runTex[runCount - 1] = tex;            // adopt: flat shapes share this run
+        } else if (runTex[runCount - 1] != tex) {
+            pushRun(vertexCount(), tex);           // switch: new run from here on
+        }
+    }
+
+    /** Append a run starting at {@code firstVertex} with texture {@code tex}. */
+    private void pushRun(int firstVertex, Texture tex) {
+        if (runCount == runFirst.length) {
+            runFirst = Arrays.copyOf(runFirst, runFirst.length * 2);
+            runTex = Arrays.copyOf(runTex, runTex.length * 2);
+        }
+        runFirst[runCount] = firstVertex;
+        runTex[runCount] = tex;
+        runCount++;
     }
 
     // ------------------------------------------------------------------
@@ -482,23 +663,53 @@ public final class Renderer2D {
         return count / FLOATS_PER_VERTEX;
     }
 
+    /** Number of draw runs this frame (>= 1 once anything is drawn). */
+    int runCount() {
+        return runCount;
+    }
+
+    /** First vertex of run {@code i}. The run ends at the next run's first vertex,
+     *  or at {@link #vertexCount()} for the last run. */
+    int runFirstVertex(int i) {
+        return runFirst[i];
+    }
+
+    /** Texture for run {@code i}, or null -- the Renderer binds the white default
+     *  for a null (flat/SDF-only) run. */
+    Texture runTexture(int i) {
+        return runTex[i];
+    }
+
     // ------------------------------------------------------------------
     // internals
     // ------------------------------------------------------------------
 
-    /** Append a FLAT-shape vertex: full coverage (cornerRadius = -1, SDF unused). */
+    // Mode selectors -- mirror the fragment shader's per-vertex switch.
+    private static final float MODE_FLAT  = 0f;  // full coverage, flat color
+    private static final float MODE_SDF   = 1f;  // SDF rounded box (local/half/cornerRadius)
+    private static final float MODE_IMAGE = 2f;  // textured image (samples the bound texture at uv)
+    private static final float MODE_TEXT  = 3f;  // SDF text (samples the glyph atlas distance at uv)
+
+    /** Append a FLAT-shape vertex: full coverage, flat color (SDF/uv fields unused). */
     private void vertex(float px, float py, float[] c) {
-        sdfVertex(px, py, c, 0f, 0f, 0f, 0f, -1f);
+        emit(px, py, c, 0f, 0f, 0f, 0f, 0f, 0f, 0f, MODE_FLAT);
     }
 
     /**
-     * Append a vertex with explicit SDF fields. {@code local} is the pixel offset
-     * within the shape, {@code half} the box half-extents, {@code cornerRadius}
-     * the corner rounding in px (>= 0 enables the distance-field edge; < 0 = flat
-     * shape). The one low-level emit both paths funnel through.
+     * Append the lowest-level vertex: every field explicit. {@code local} is the
+     * SDF pixel offset within the shape, {@code half} the box half-extents,
+     * {@code cornerRadius} the corner rounding in px, {@code u/v} the texture
+     * coordinate, {@code mode} the fragment-shader selector (see the layout note
+     * up top). The one emit every path funnels through.
      */
-    private void sdfVertex(float px, float py, float[] c, float localX, float localY,
-                           float halfX, float halfY, float cornerRadius) {
+    private void emit(float px, float py, float[] c, float localX, float localY,
+                      float halfX, float halfY, float cornerRadius,
+                      float u, float v, float mode) {
+        // Every shape lives in some run. The first vertex of the frame opens run 0
+        // (texture null -> the white default); image() may later adopt or split it.
+        if (runCount == 0) {
+            pushRun(0, null);
+        }
         ensureCapacity(FLOATS_PER_VERTEX);
         verts[count++] = px;
         verts[count++] = py;
@@ -511,6 +722,9 @@ public final class Renderer2D {
         verts[count++] = halfX;
         verts[count++] = halfY;
         verts[count++] = cornerRadius;
+        verts[count++] = u;
+        verts[count++] = v;
+        verts[count++] = mode;
     }
 
     /**
@@ -524,12 +738,12 @@ public final class Renderer2D {
                         float cornerRadius, float[] c) {
         float px = halfX + 1.5f;
         float py = halfY + 1.5f;
-        sdfVertex(cx - px, cy - py, c, -px, -py, halfX, halfY, cornerRadius);
-        sdfVertex(cx + px, cy - py, c,  px, -py, halfX, halfY, cornerRadius);
-        sdfVertex(cx + px, cy + py, c,  px,  py, halfX, halfY, cornerRadius);
-        sdfVertex(cx - px, cy - py, c, -px, -py, halfX, halfY, cornerRadius);
-        sdfVertex(cx + px, cy + py, c,  px,  py, halfX, halfY, cornerRadius);
-        sdfVertex(cx - px, cy + py, c, -px,  py, halfX, halfY, cornerRadius);
+        emit(cx - px, cy - py, c, -px, -py, halfX, halfY, cornerRadius, 0f, 0f, MODE_SDF);
+        emit(cx + px, cy - py, c,  px, -py, halfX, halfY, cornerRadius, 0f, 0f, MODE_SDF);
+        emit(cx + px, cy + py, c,  px,  py, halfX, halfY, cornerRadius, 0f, 0f, MODE_SDF);
+        emit(cx - px, cy - py, c, -px, -py, halfX, halfY, cornerRadius, 0f, 0f, MODE_SDF);
+        emit(cx + px, cy + py, c,  px,  py, halfX, halfY, cornerRadius, 0f, 0f, MODE_SDF);
+        emit(cx - px, cy + py, c, -px,  py, halfX, halfY, cornerRadius, 0f, 0f, MODE_SDF);
     }
 
     private void ensureCapacity(int more) {

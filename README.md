@@ -87,9 +87,19 @@ Current phase — refactor into reusable components + modernize:
 - [x] Push constants 🌀 — the triangle **spins**: per-frame time + aspect pushed straight into the command buffer
 - [x] Index buffers — the quad: unique vertices + UINT16 indices, `vkCmdDrawIndexed`
 - [x] Uniform buffers + descriptor sets 🛰️ — the quad **orbits**: per-frame mat4 UBO through the layout/pool/set machinery; push constants move to the fragment stage (both tiers side by side)
-- [ ] Textures — images + samplers + `COMBINED_IMAGE_SAMPLER` descriptors; then 3D + depth, then MSAA
+- [x] Textures — images + samplers + `COMBINED_IMAGE_SAMPLER` descriptors
+- [x] 3D + depth buffer — perspective MVP, depth test/write, back-face culling
+- [x] **MSAA** 🧊 — a tumbling, depth-tested, 4×-antialiased cube (multisampled color + depth, resolve built into dynamic rendering)
+- [x] **VMA** — VMA-managed memory (intent-over-flags); standing allocation advisories closed
 
-After that: 2D rendering, text, a self-built GUI, 3D, and eventually ray/path tracing.
+🧊 **Milestone reached: textures → 3D + depth → MSAA complete.**
+
+Then the two altitudes of the [layered API](#) took shape:
+
+- [x] **`ShaderEffect`** ✨ — the Shadertoy altitude: runtime-compiled (shaderc) user fragment shaders over a fullscreen triangle, named builtin uniforms, a SPIRV-Cross effect-contract guard
+- [x] **L2 `Renderer2D`** 🎨 — the "just draw" altitude (v1 surface complete): a per-frame vertex arena + shape pipeline; **fills** (rect, circle, ellipse, triangle, quad, rounded-rect), **strokes** (line, rect, circle/ellipse, triangle/quad with miter joins — CPU-triangulated, no `wideLines`), an **SDF render path** (analytic circle + rounded-box, one batch, draw order preserved), **`image`** (textured quads + multi-texture flush-on-switch batching), and **`text`** (single-channel **SDF glyphs** via stb_truetype, built-in DejaVu Sans, crisp at any size from one bake)
+
+After that: a self-built GUI, more 3D, and eventually ray/path tracing.
 
 ## Contributing
 

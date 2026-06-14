@@ -2,7 +2,9 @@ package jvre;
 
 import jvre.core.Color;
 import jvre.core.Diagnostics;
+import jvre.core.Input;
 import jvre.core.Instance;
+import jvre.core.MouseButton;
 import jvre.core.Renderer;
 import jvre.core.Renderer2D;
 import jvre.core.ShaderEffect;
@@ -46,6 +48,7 @@ public class Main {
     private Surface surface;
     private Renderer renderer;
     private Renderer2D g;   // the L2 surface, when DEMO_2D
+    private float cursorSize = 48;   // the interactive cursor box; scroll resizes it
     private Texture demoImage;    // a generated texture drawn via g.image(), when DEMO_2D
     private Texture demoImage2;   // a SECOND texture -- proves multi-texture batching (flush-on-switch)
 
@@ -199,6 +202,16 @@ public class Main {
         g.fillRoundedRect(-55, -22, 110, 44, 12, Color.rgba(70, 160, 210, 220));
         g.text("rotated", -46, -13, 24, Color.WHITE);
         g.pop();
+        // INTERACTIVE: a rounded box that follows the cursor (framebuffer pixels,
+        // so it sits exactly under the pointer), turns red while the left button
+        // is held, and resizes with the scroll wheel. One glance confirms
+        // position + button + scroll all flow through the input seam.
+        Input in = window.input();
+        cursorSize = Math.max(12f, Math.min(240f, cursorSize + in.scrollY() * 6f));
+        Color box = in.mouseDown(MouseButton.LEFT)
+                ? Color.rgb(235, 70, 70) : Color.rgba(60, 200, 120, 200);
+        float half = cursorSize * 0.5f;
+        g.fillRoundedRect(in.mouseX() - half, in.mouseY() - half, cursorSize, cursorSize, 10, box);
         g.end();
     }
 

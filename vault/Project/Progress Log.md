@@ -2,6 +2,13 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-14 — Build: self-contained shaders via shaderc (glslc retired) -- R3 unblocker 🛠️✅
+- **The build no longer needs the Vulkan SDK.** `compileShaders` stopped shelling out to the `glslc` executable; it now runs `jvre.tools.ShaderTool`, a tiny build tool that drives jvre's own `ShaderCompiler` (the bundled `lwjgl-shaderc` -- the very compiler `glslc` wraps). So the build is self-contained: works on CI, on **JitPack** (the reason this came up -- R3's blocker), and on any from-source consumer, no SDK.
+- **Chosen approach A (reuse shaderc-as-a-library at build time) over B (compile built-ins at runtime):** reliable + maintainable beats clever -- the build keeps producing `.spv` resources exactly as before; only the compiler invocation changed (glslc-exe -> shaderc-lib). Verified locally: all 5 shaders compile, `clean build` green.
+- **Bonus: CI now compiles shaders cross-platform** -- the `-x compileShaders` workaround is gone; CI runs full `./gradlew build` (compile + shaders + artifacts + tests) on Linux + Windows.
+- **Gotchas handled:** the JavaExec classpath is compiled-classes + runtime-deps + natives, NOT the source set's full runtimeClasspath (which includes the resources dir this task PRODUCES -> a cycle); the tool is excluded from the published jar + sources jar (build-only).
+- **Render verification pending on the 4090** (shaderc == glslc under the hood, so output should be identical -- but the demo should be eyeballed to confirm). **Next**: R3 -- `jitpack.yml` (JDK 21) + a tagged `v0.1.0` GitHub Release = the first PUBLIC `implementation 'com.github.Milquetoad:jvre:v0.1.0'`. See [[Testing and CI-CD]].
+
 ## 2026-06-14 — Release: a consumable artifact (R2) + main protected 📦🔒✅
 - **jvre is now publishable.** `maven-publish` + `java-library` produce **jar + `-sources.jar` + `-javadoc.jar` + a complete POM** (name/description/AGPL/SCM/developer), coordinates `io.github.milquetoad:jvre:0.1.0`. Verified via `publishToMavenLocal` (-> `~/.m2`): the full artifact set generates and the POM is correct. The CD half of the v1.0/Central road begins.
 - **api vs implementation split:** lwjgl core + lwjgl-vulkan are `api` (public L1 returns `Vk*` types, so consumers compile against them); everything else is `implementation` (runtime). 

@@ -16,17 +16,18 @@ GPU/GLFW-coupled code (`Texture`, `Font`, `Window`, `Input`, actual drawing) is 
 
 - **Matrix:** `ubuntu-latest` + `windows-latest` (`fail-fast: false` -- an OS-specific break is the whole point).
 - **Triggers:** push to `main` + every PR to `main`.
-- **Runs:** `./gradlew test -x compileShaders` (JDK 21, temurin, gradle cache).
+- **Runs:** `./gradlew build` (JDK 21, temurin, gradle cache) -- compile + **shader compilation** + artifacts + the GPU-free unit tests.
 
-**Two deliberate choices:**
-1. **No GPU in CI.** Runners are headless -- CI proves the code *compiles* and the *GPU-free unit tests pass* on both OSes. It catches a Linux build break, a cross-platform native-loading failure, or a logic regression. It does NOT (cannot) verify rendering -- that's the hardware step.
-2. **`-x compileShaders`.** The `compileShaders` task needs `glslc` (Vulkan SDK), which the runners lack. The unit tests use the *in-process* shaderc/spvc, not the compiled `.spv`, so skipping it loses no coverage. Verifying shader compilation cross-platform (install glslc in CI) is a catalogued later enhancement.
+**The deliberate scope:** runners are headless -- CI proves the code *compiles*, the *shaders compile*, the *artifacts build*, and the *GPU-free unit tests pass* on both OSes. It catches a Linux build break, a cross-platform native-loading failure, or a logic regression. It does NOT (cannot) verify rendering -- that's the hardware step. (Until 2026-06-14 CI ran `test -x compileShaders` because shader compilation needed `glslc` from the Vulkan SDK; that workaround is gone now that shaders compile via the bundled shaderc -- see below.)
 
 ## `main` is protected (set 2026-06-14)
 CI is only as good as its enforcement. `main` is a protected branch: **no direct pushes** (every change is a branch + PR), and a merge requires **both CI checks green** + an up-to-date branch. PR required with **0 approvals** (so the solo owner isn't locked out -- you can't approve your own PR), enforced on admins, linear history, force-push/delete blocked. So the workflow is fixed: branch -> PR -> green CI -> rebase-merge -> sync. (Set via `gh api ... branches/main/protection` -- note: on Git Bash, omit the leading slash or MSYS rewrites the endpoint to a filesystem path.)
 
 ## What made Linux CI possible: de-pinned natives (R1)
 `build.gradle` used to hardcode `lwjglNatives = 'natives-windows'`, so a Linux build pulled the wrong `.dll`s and the native-loading tests (shaderc/spvc/stb) would fail. Now the classifier is **auto-detected from the host** `os.name`/`os.arch`, so the same build works on any dev machine and on each CI runner.
+
+## Self-contained shader build (no Vulkan SDK) -- 2026-06-14
+The built-in shaders used to compile with the `glslc` *executable* (Vulkan SDK), which CI/JitPack/from-source consumers don't have. Now the `compileShaders` task runs `jvre.tools.ShaderTool`, which drives jvre's own [[Shaders - GLSL and SPIR-V|ShaderCompiler]] (the bundled `lwjgl-shaderc` -- the same compiler `glslc` wraps) over `src/main/glsl/*.{vert,frag}`. So the **build needs no SDK** -- it works on CI, on JitPack (the R3 unblocker), and on any machine. Bonus: CI now compiles shaders cross-platform (the `-x compileShaders` workaround is retired). The tool is excluded from the published jar/sources jar (it's build-only). Gotcha avoided: its classpath is the compiled classes + runtime deps + natives, NOT the source set's full runtimeClasspath (which includes the resources dir this task *produces* -> a cycle). *Chosen over runtime compilation of built-ins: reliable + maintainable over clever.*
 
 ## Publishing the artifact (R2, done 2026-06-14 -- the CD half begins)
 `maven-publish` + `java-library` produce a consumable artifact: **jar + `-sources.jar` + `-javadoc.jar` + a complete POM** (name/description/AGPL license/SCM/developer), coordinates `io.github.milquetoad:jvre:0.1.0`. Verify locally with `gradlew publishToMavenLocal` (-> `~/.m2`).

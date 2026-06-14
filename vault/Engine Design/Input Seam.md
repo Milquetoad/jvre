@@ -1,11 +1,14 @@
 # Input Seam
 
-**Shipped 2026-06-14 (mouse).** The seam that turns L2 from *draw-only* into *interactive* -- [[Roadmap]] Phase 1a. Before this, the only input on the public surface was `Window.cursorPos` (raw LWJGL buffers, window coords). Now: `Input`, owned by `Window`, read via `window.input()`.
+**Shipped 2026-06-14 (mouse + keyboard + text).** The seam that turns L2 from *draw-only* into *interactive* -- [[Roadmap]] Phase 1a. Before this, the only input on the public surface was `Window.cursorPos` (raw LWJGL buffers, window coords). Now: `Input`, owned by `Window`, read via `window.input()`.
 
 ## The shape
 ```java
 Input in = window.input();
 in.mouseX(); in.mouseY();                 // framebuffer pixels (L2's space)
+in.keyDown(Key.W);                        // key held / went down / went up
+in.keyPressed(Key.BACKSPACE);
+String text = in.typedChars();            // characters typed this frame (text fields)
 in.mouseDown(MouseButton.LEFT);           // held now (LEVEL)
 in.mousePressed(MouseButton.LEFT);        // went down THIS frame (EDGE)
 in.mouseReleased(MouseButton.LEFT);       // went up THIS frame (EDGE)
@@ -27,8 +30,13 @@ in.scrollX(); in.scrollY();               // accumulated this frame (delta)
 ## Not unit-tested -- hardware-verified
 `Input` is GLFW-coupled (native callbacks + cursor queries), so per the [[Definition of Done]] it is verified on hardware (a cursor-tracking demo box: follows the pointer, reddens on left-button, resizes on scroll), not mocked into a unit test -- the same call as [[Windowing - GLFW and the Surface|Window]].
 
+## Keyboard + typed text (beat 2, shipped)
+- **Key state** mirrors the mouse: `keyDown` (level) + `keyPressed`/`keyReleased` (edges), via `GLFWKeyCallback`, addressed by a `Key` enum (letters, digits, named/navigation keys, modifiers, F1-F12 -- no raw GLFW codes leak).
+- **Typed text is SEPARATE** -- `typedChars()` returns this frame's text from `GLFWCharCallback`, which already applies layout + shift and auto-repeats held character keys. That's the right source for a text field; raw key codes are not (they don't know `a` vs `A`, or symbols). Editing keys (Backspace/arrows) come from `keyPressed`.
+- **Known v1 limit:** non-character keys don't auto-repeat (only the char stream does), so a held Backspace deletes once -- a catalogued later refinement.
+
 ## Next
-- **Keyboard + typed text** (input beat 2): key level/edge + a typed-character queue (text fields). Same callback model (`GLFWKeyCallback` + `GLFWCharCallback`).
-- Pairs with **1b** (a time/delta source) to make interactive, animated L2 programs first-class.
+- Pairs with **1b** (time/delta) -- interactive, animated L2 programs are now first-class. Phase 1 complete.
+- Possible later: gamepad, raw key-repeat, IME/clipboard -- only if a consumer needs them.
 
 #design #input #L2

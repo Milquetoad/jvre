@@ -27,6 +27,10 @@ public class Window {
     private final GLFWErrorCallback errorCallback;
     private final GLFWFramebufferSizeCallback resizeCallback;
 
+    // The per-frame input snapshot (mouse for now). Owned here because input is a
+    // window/GLFW concern; kept fresh automatically in pollEvents().
+    private final Input input;
+
     // Set by the resize callback, consumed by the renderer. A FLAG rather than
     // reacting inside the callback: GLFW may fire it many times during one drag,
     // and mid-callback is no place to rebuild a swapchain -- the render loop
@@ -54,6 +58,14 @@ public class Window {
 
         resizeCallback = GLFWFramebufferSizeCallback.create((win, w, h) -> framebufferResized = true);
         glfwSetFramebufferSizeCallback(handle, resizeCallback);
+
+        // Install input callbacks (mouse buttons + scroll) on this window.
+        input = new Input(handle);
+    }
+
+    /** The per-frame input snapshot (mouse position/buttons/scroll). */
+    public Input input() {
+        return input;
     }
 
     /** Raw GLFW handle -- needed for Vulkan surface creation and size queries. */
@@ -66,7 +78,12 @@ public class Window {
     }
 
     public void pollEvents() {
+        // Bracket the GLFW dispatch: clear this frame's edges/scroll, let GLFW
+        // fire the callbacks, then snapshot the cursor. Input is fresh afterward
+        // with no extra call for the user to remember.
+        input.newFrame();
         glfwPollEvents();
+        input.snapshot();
     }
 
     /** Current framebuffer size in PIXELS (not screen coords), written into w/h. */
@@ -105,5 +122,6 @@ public class Window {
         glfwSetErrorCallback(null);
         errorCallback.free();
         resizeCallback.free();
+        input.free();   // free the mouse/scroll callbacks (already detached by destroy)
     }
 }

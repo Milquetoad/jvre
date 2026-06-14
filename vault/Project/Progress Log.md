@@ -2,6 +2,14 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-14 — Interactivity: the input seam (mouse) 🖱️✅
+- **L2 stops being draw-only.** New `Input` (owned by `Window`, surfaced via `window.input()`): mouse position, buttons, scroll -- the first [[Roadmap]] Phase 1 item. **Verified on the 4090**: a rounded box tracks the cursor, turns red while the left button is held, resizes with the scroll wheel.
+- **Position in FRAMEBUFFER PIXELS** (same space L2 draws in, so `input.mouseX()` lines up with `g.fillRect`). GLFW reports cursor in window coords; we convert by the framebuffer/window ratio -- closing the DPI caveat the old `Window.cursorPos` flagged.
+- **LEVEL vs EDGE state** (the immediate-mode GUI staple): `mouseDown` (held) vs `mousePressed`/`mouseReleased` (went down/up THIS frame -- what a click actually is). Edges come from **GLFW callbacks, not polling**, so a press+release inside one frame (a fast tap) is never dropped; `pressed`/`released` are latched by the callback and cleared each `newFrame`. Scroll accumulates per frame.
+- **Zero ceremony:** `Window.pollEvents()` brackets `glfwPollEvents()` with `input.newFrame()` (clear edges/scroll) + `input.snapshot()` (capture cursor), so input is fresh with no extra call. `MouseButton` enum keeps raw GLFW ints out of the surface. Callbacks freed at close.
+- **GLFW-coupled -> hardware-verified, not unit-tested** (like `Window`), per the [[Definition of Done]].
+- **Next**: 1b time/delta source (animation as a first-class L2 thing), then keyboard + typed text (input beat 2), with R1 (de-pin natives) / 1c (Linux + CI) alongside. See [[Input Seam]].
+
 ## 2026-06-14 — L2: the transform stack -- push/translate/rotate/scale/pop 🔄✅
 - **`push()/pop()/translate(dx,dy)/rotate(rad)/scale(s|sx,sy)`** -- the ONE sanctioned piece of L2 drawing state, legal because it is explicitly scoped (push/pop pairs; `end()` asserts balance, `pop()`-without-`push()` throws). Completes the L2 spec's principle 3 (the principled answer to Processing's `rectMode(CENTER)`: to rotate a rect about its centre you `translate` to it, `rotate`, draw centred -- no hidden coordinate mode). **Verified on the 4090**: a rotated+scaled rounded-rect with a text label in the same nested transform; the rest of the frame unmoved (push/pop isolation).
 - **Applied CPU-side at append time, to the POSITION only** (JOML `Matrix3x2f` current transform + an `ArrayDeque` stack). The SDF `local` and the `uv` stay in the shape's own frame -- they interpolate relative to the transformed quad like a UV, so the fragment computes its distance / samples its texel in that frame regardless of the transform. So the shader stays trivial and EVERY primitive (fills, strokes, SDF, image, text) transforms uniformly with zero per-primitive code. Identity transform = exact passthrough.

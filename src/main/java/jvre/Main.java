@@ -188,6 +188,17 @@ public class Main {
         g.text("jvre", 470, 110, 72, Color.rgb(20, 20, 20));
         g.text("the L2 'just draw' altitude:\nshapes, images, and text.", 300, 540, 22,
                 Color.rgb(30, 30, 30));
+        // Transform stack: a rotated + scaled rounded-rect with a text label drawn
+        // in the SAME nested transform (one group). The SDF rounded-rect stays
+        // crisp under rotation/scale (screen-space AA); push/pop scope it so the
+        // rest of the frame is unaffected.
+        g.push();
+        g.translate(650, 440);
+        g.rotate((float) Math.toRadians(-18));
+        g.scale(1.3f);
+        g.fillRoundedRect(-55, -22, 110, 44, 12, Color.rgba(70, 160, 210, 220));
+        g.text("rotated", -46, -13, 24, Color.WHITE);
+        g.pop();
         g.end();
     }
 

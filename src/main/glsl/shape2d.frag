@@ -61,8 +61,12 @@ void main() {
         // round it.
         vec2 q = abs(vLocal) - vHalf + vCornerRadius;
         float d = min(max(q.x, q.y), 0.0) + length(max(q, vec2(0.0))) - vCornerRadius;
-        // ~1px ramp centered on the edge: d=-0.5 -> inside (1), d=+0.5 -> out (0).
-        coverage = clamp(0.5 - d, 0.0, 1.0);
+        // Anti-alias over ~1 SCREEN pixel using the distance field's screen-space
+        // gradient: w = |grad d| is ~1 at identity (a true distance field) and
+        // scales with any transform, so a rotated/scaled SDF shape keeps a clean
+        // ~1px edge. (At identity this reduces to the old clamp(0.5 - d).)
+        float w = max(length(vec2(dFdx(d), dFdy(d))), 1e-6);
+        coverage = clamp(0.5 - d / w, 0.0, 1.0);
     }
     outColor = vec4(vColor.rgb, vColor.a * coverage);
 }

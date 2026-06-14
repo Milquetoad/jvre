@@ -1,6 +1,10 @@
 package jvre.core;
 
+import org.joml.Matrix3x2f;
+
+import java.util.ArrayDeque;
 import java.util.Arrays;
+import java.util.Deque;
 
 /**
  * The L2 "just draw" surface -- the high-level altitude from
@@ -57,6 +61,17 @@ public final class Renderer2D {
     private Texture[] runTex = new Texture[8];
     private int runCount = 0;
 
+    // The transform stack -- the ONE sanctioned piece of drawing state, legal
+    // because it is explicitly scoped (push/pop pairs; end() asserts balance).
+    // `transform` is the current 2D affine; push() saves a copy, pop() restores
+    // it. Applied CPU-side to every vertex position at append time (see emit), so
+    // the shader stays trivial and EVERY primitive transforms uniformly. This is
+    // the principled answer to declaration modes like Processing's rectMode(CENTER):
+    // to rotate a rect about its centre you translate to the centre, rotate, and
+    // draw it centred -- no hidden coordinate mode.
+    private final Matrix3x2f transform = new Matrix3x2f();
+    private final Deque<Matrix3x2f> transformStack = new ArrayDeque<>();
+
     Renderer2D() { this.owner = null; }              // CPU-only (tests)
     Renderer2D(Renderer owner) { this.owner = owner; }  // the Renderer vends this one
 
@@ -82,6 +97,8 @@ public final class Renderer2D {
         inFrame = true;
         count = 0;
         runCount = 0;
+        transform.identity();      // each frame starts in the untransformed pixel space
+        transformStack.clear();
     }
 
     /** Close the frame. The accumulated shapes are now ready to be drawn. */
@@ -89,7 +106,58 @@ public final class Renderer2D {
         if (!inFrame) {
             throw new IllegalStateException("Renderer2D.end() called without a matching begin()");
         }
+        if (!transformStack.isEmpty()) {
+            int n = transformStack.size();
+            throw new IllegalStateException("end(): " + n + " push() call(s) without a matching pop()");
+        }
         inFrame = false;
+    }
+
+    // ------------------------------------------------------------------
+    // Transform stack -- push/pop/translate/rotate/scale. The composition is
+    // LOCAL: each call multiplies into the current transform, so transforms nest
+    // (a child is positioned relative to its parent). All affect every subsequent
+    // drawing call until popped. Angles are in RADIANS (Math.toRadians for
+    // degrees), consistent with java.lang.Math and JOML.
+    // ------------------------------------------------------------------
+
+    /** Save the current transform, to be restored by the matching {@link #pop()}. */
+    public void push() {
+        requireInFrame("push");
+        transformStack.push(new Matrix3x2f(transform));
+    }
+
+    /** Restore the transform saved by the matching {@link #push()}. */
+    public void pop() {
+        requireInFrame("pop");
+        if (transformStack.isEmpty()) {
+            throw new IllegalStateException("pop() called without a matching push()");
+        }
+        transform.set(transformStack.pop());
+    }
+
+    /** Shift the origin by {@code (dx, dy)} pixels for subsequent drawing. */
+    public void translate(float dx, float dy) {
+        requireInFrame("translate");
+        transform.translate(dx, dy);
+    }
+
+    /** Rotate subsequent drawing about the current origin by {@code radians}
+     *  (positive = toward +y, which is DOWN in L2's top-left pixel space). */
+    public void rotate(float radians) {
+        requireInFrame("rotate");
+        transform.rotate(radians);
+    }
+
+    /** Uniformly scale subsequent drawing about the current origin. */
+    public void scale(float s) {
+        scale(s, s);
+    }
+
+    /** Scale subsequent drawing about the current origin by {@code (sx, sy)}. */
+    public void scale(float sx, float sy) {
+        requireInFrame("scale");
+        transform.scale(sx, sy);
     }
 
     /**
@@ -710,9 +778,16 @@ public final class Renderer2D {
         if (runCount == 0) {
             pushRun(0, null);
         }
+        // Apply the current transform CPU-side, to the POSITION only. The SDF
+        // local coord and the uv stay in the shape's own frame: they interpolate
+        // relative to the transformed quad (like a UV), so the fragment computes
+        // its distance / samples its texel in that frame, and the SDF's analytic
+        // AA uses screen-space derivatives. Identity transform = exact passthrough.
+        float tx = transform.m00() * px + transform.m10() * py + transform.m20();
+        float ty = transform.m01() * px + transform.m11() * py + transform.m21();
         ensureCapacity(FLOATS_PER_VERTEX);
-        verts[count++] = px;
-        verts[count++] = py;
+        verts[count++] = tx;
+        verts[count++] = ty;
         verts[count++] = c[0];
         verts[count++] = c[1];
         verts[count++] = c[2];

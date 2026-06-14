@@ -375,6 +375,73 @@ class Renderer2DTest {
     }
 
     @Test
+    void translateShiftsVertices() {
+        Renderer2D g = new Renderer2D();
+        g.begin();
+        g.translate(10, 20);
+        g.fillRect(0, 0, 5, 5, Color.WHITE);
+        g.end();
+        float[] v = g.vertexData();
+        assertEquals(10f, v[0], 1e-4f);   // corner (0,0) shifted to (10,20)
+        assertEquals(20f, v[1], 1e-4f);
+    }
+
+    @Test
+    void scaleScalesVertices() {
+        Renderer2D g = new Renderer2D();
+        g.begin();
+        g.scale(2f, 3f);
+        g.fillTriangle(3, 4, 1, 0, 0, 1, Color.WHITE);
+        g.end();
+        float[] v = g.vertexData();
+        assertEquals(6f, v[0], 1e-4f);    // (3,4) -> (6,12)
+        assertEquals(12f, v[1], 1e-4f);
+    }
+
+    @Test
+    void rotateTransformsAPoint() {
+        Renderer2D g = new Renderer2D();
+        g.begin();
+        g.rotate((float) (Math.PI / 2));   // +90 deg: (10,0) -> (0,10)
+        g.fillTriangle(10, 0, 20, 0, 15, 5, Color.WHITE);
+        g.end();
+        float[] v = g.vertexData();
+        assertEquals(0f, v[0], 1e-4f);
+        assertEquals(10f, v[1], 1e-4f);
+    }
+
+    @Test
+    void pushPopRestoresTheTransform() {
+        Renderer2D g = new Renderer2D();
+        g.begin();
+        g.translate(10, 0);
+        g.push();
+        g.translate(5, 0);   // inside the scope
+        g.pop();             // back to translate(10,0)
+        g.fillRect(0, 0, 1, 1, Color.WHITE);
+        g.end();
+        float[] v = g.vertexData();
+        assertEquals(10f, v[0], 1e-4f);   // not 15 -- the inner translate was popped
+        assertEquals(0f, v[1], 1e-4f);
+    }
+
+    @Test
+    void unbalancedPushIsCaughtAtEnd() {
+        Renderer2D g = new Renderer2D();
+        g.begin();
+        g.push();
+        IllegalStateException e = assertThrows(IllegalStateException.class, g::end);
+        assertTrue(e.getMessage().contains("push"), e.getMessage());
+    }
+
+    @Test
+    void popWithoutPushThrows() {
+        Renderer2D g = new Renderer2D();
+        g.begin();
+        assertThrows(IllegalStateException.class, g::pop);
+    }
+
+    @Test
     void quadSplitsOnTheZeroTwoDiagonal() {
         Renderer2D g = new Renderer2D();
         g.begin();

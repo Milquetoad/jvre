@@ -1,0 +1,44 @@
+name: CI
+
+# jvre's automated cross-platform check. Runners are headless with NO GPU, so CI
+# verifies what's verifiable in the cloud: the code COMPILES and the GPU-free unit
+# tests PASS on both Linux and Windows. Actual rendering is verified by hand on
+# real hardware (the DoD's "shipped" tier). This is how Linux gets validated
+# without keeping a Linux box -- the Ubuntu runner is the Linux test bed.
+#
+# Shaders are NOT compiled here (`-x compileShaders`): glslc ships with the Vulkan
+# SDK, which the runners lack, and the unit tests use the in-process shaderc/spvc
+# (not the compiled .spv), so skipping it loses no test coverage. Adding glslc to
+# also verify shader compilation cross-platform is a later enhancement.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-test:
+    name: build + test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false   # let both OSes report; a Windows-only or Linux-only break is the whole point
+      matrix:
+        os: [ ubuntu-latest, windows-latest ]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Build + GPU-free tests
+        shell: bash   # so ./gradlew works identically on the Windows runner (Git bash)
+        run: |
+          chmod +x ./gradlew
+          ./gradlew test -x compileShaders --no-daemon --stacktrace

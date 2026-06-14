@@ -221,8 +221,12 @@ public class Renderer {
     // Which frame-in-flight slot we're on (cycles 0..MAX_FRAMES_IN_FLIGHT-1).
     private int currentFrame = 0;
 
-    // Animation clock: the time push constant counts seconds from here.
+    // Animation clock: the time push constant + the public time()/dt() count
+    // seconds from here. lastFrameNanos + deltaSeconds drive dt() (the previous
+    // frame's wall-clock duration, for frame-rate-independent animation).
     private final long startNanos = System.nanoTime();
+    private long lastFrameNanos = startNanos;
+    private float deltaSeconds = 0f;
 
     public Renderer(Instance instance, Surface surface, Window window,
                     float clearR, float clearG, float clearB) {
@@ -1048,6 +1052,13 @@ public class Renderer {
      * Acquire/present results drive swapchain recreation on resize.
      */
     public void drawFrame() {
+        // Wall-clock delta since the last drawFrame call -- exposed as dt() so the
+        // NEXT frame's drawShapes (which runs before this) reads the previous
+        // frame's duration. Measured here, once per call, before any early-return.
+        long now = System.nanoTime();
+        deltaSeconds = (now - lastFrameNanos) * 1e-9f;
+        lastFrameNanos = now;
+
         try (MemoryStack stack = stackPush()) {
             // 1. Block until THIS SLOT's previous frame finished. (With an
             //    infinite timeout the only non-SUCCESS results are real errors
@@ -1251,6 +1262,18 @@ public class Renderer {
         for (long s : renderFinishedSemaphores) {
             vkDestroySemaphore(device.handle(), s, null);
         }
+    }
+
+    /** Seconds elapsed since the renderer was created -- a live animation clock
+     *  for L2 (read it any time; it is always current). */
+    public float time() {
+        return (System.nanoTime() - startNanos) * 1e-9f;
+    }
+
+    /** Duration of the previous frame in seconds. Multiply per-frame movement by
+     *  this for frame-rate-independent animation (distance = speed * dt()). */
+    public float dt() {
+        return deltaSeconds;
     }
 
     /** Block until the GPU is fully idle -- call before tearing anything down. */

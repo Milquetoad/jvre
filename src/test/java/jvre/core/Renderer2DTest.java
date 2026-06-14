@@ -27,6 +27,24 @@ class Renderer2DTest {
         assertEquals(20f, v[1]);
         assertEquals(Color.RED.r, v[2]);
         assertEquals(Color.RED.a, v[5]);
+        // A flat shape carries mode 0 (offset 13) -- the fragment shader's "full
+        // coverage, flat color" path.
+        assertEquals(0f, v[13]);
+    }
+
+    @Test
+    void aFlatOnlyFrameIsOneNullTextureRun() {
+        // No image() -> a single draw run starting at vertex 0 with no texture
+        // (the Renderer binds the white default for it). The image() run-splitting
+        // is GPU-verified (it needs real Texture objects).
+        Renderer2D g = new Renderer2D();
+        g.begin();
+        g.fillRect(0, 0, 10, 10, Color.WHITE);
+        g.fillCircle(50, 50, 5, Color.RED);
+        g.end();
+        assertEquals(1, g.runCount());
+        assertEquals(0, g.runFirstVertex(0));
+        assertNull(g.runTexture(0));
     }
 
     @Test
@@ -101,6 +119,8 @@ class Renderer2DTest {
             // centre -- so position - centre == local.
             assertEquals(v[i * s] - 200f, v[i * s + 6], 1e-4f);
             assertEquals(v[i * s + 1] - 200f, v[i * s + 7], 1e-4f);
+            // An SDF shape carries mode 1 (offset 13) -- the rounded-box path.
+            assertEquals(1f, v[i * s + 13], 1e-4f);
         }
     }
 

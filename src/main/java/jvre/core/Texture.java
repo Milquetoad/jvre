@@ -80,20 +80,47 @@ public class Texture {
      */
     public static Texture create(Device device, long commandPool,
                                  byte[] pixels, int width, int height) {
-        long imageBytes = (long) width * height * 4;  // R8G8B8A8 = 4 bytes/texel
+        // R8G8B8A8_SRGB (4 bytes/texel, GPU linearizes on sample) + NEAREST (the
+        // pixel-art default). The sprite/image path.
+        return upload(device, commandPool, pixels, width, height,
+                VK_FORMAT_R8G8B8A8_SRGB, 4, VK_FILTER_NEAREST);
+    }
+
+    /**
+     * Build a SINGLE-CHANNEL (R8) texture with a LINEAR sampler -- the L2 text
+     * glyph atlas. The bytes are one coverage/distance value per texel (the SDF
+     * the font baker produced). R8_UNORM keeps the value LINEAR (it is a distance,
+     * not a color -- no sRGB curve), and LINEAR filtering is what lets the
+     * fragment shader smoothstep a clean anti-aliased edge between texels. Same
+     * staging upload as {@link #create}, just a narrower format + smarter filter.
+     */
+    public static Texture createSdfAtlas(Device device, long commandPool,
+                                         byte[] coverage, int width, int height) {
+        return upload(device, commandPool, coverage, width, height,
+                VK_FORMAT_R8_UNORM, 1, VK_FILTER_LINEAR);
+    }
+
+    /** The shared staging upload: stage the pixels, create the image in {@code
+     *  format}, copy + transition, then build the view + a sampler of {@code
+     *  filter}. {@code bytesPerTexel} sizes the staging buffer for the format. */
+    private static Texture upload(Device device, long commandPool, byte[] pixels,
+                                  int width, int height, int format,
+                                  int bytesPerTexel, int filter) {
+        long imageBytes = (long) width * height * bytesPerTexel;
         if (pixels.length != imageBytes) {
             throw new IllegalArgumentException("Expected " + imageBytes
-                    + " bytes for " + width + "x" + height + " RGBA, got " + pixels.length);
+                    + " bytes for " + width + "x" + height + " (" + bytesPerTexel
+                    + " B/texel), got " + pixels.length);
         }
 
         Buffer staging = new Buffer(device, imageBytes,
                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);  // hostVisible: CPU writes the pixels in
         staging.uploadBytes(pixels);
 
-        Texture texture = new Texture(device, width, height, VK_FORMAT_R8G8B8A8_SRGB,
+        Texture texture = new Texture(device, width, height, format,
                 VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
         texture.uploadFrom(commandPool, staging);
-        texture.createViewAndSampler();
+        texture.createViewAndSampler(filter);
 
         staging.close();  // served its purpose; the pixels live in the image now
         return texture;
@@ -229,7 +256,7 @@ public class Texture {
      * texture path ({@link #create}); a render-target image would need a view
      * but no sampler.
      */
-    private void createViewAndSampler() {
+    private void createViewAndSampler(int filter) {
         try (MemoryStack stack = stackPush()) {
             // ---- Image view: identical idea to the swapchain image views ----
             VkImageViewCreateInfo viewInfo = VkImageViewCreateInfo.calloc(stack);
@@ -251,12 +278,13 @@ public class Texture {
             // ---- Sampler: coordinate -> color. THE pixel-art knob lives here ----
             VkSamplerCreateInfo samplerInfo = VkSamplerCreateInfo.calloc(stack);
             samplerInfo.sType(VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO);
-            // NEAREST = take the single closest texel, no blending -> crisp, hard
-            // pixel edges (what pixel art wants). LINEAR would bilerp the 4 nearest
-            // texels and smear the grid into mush. mag = texture drawn LARGER than
-            // its texel grid (the common sprite case); min = drawn smaller.
-            samplerInfo.magFilter(VK_FILTER_NEAREST);
-            samplerInfo.minFilter(VK_FILTER_NEAREST);
+            // The filter (caller's choice): NEAREST = the single closest texel, no
+            // blending -> crisp, hard pixel edges (what pixel art wants); LINEAR =
+            // bilerp the 4 nearest texels (smears a color image, but is exactly
+            // what an SDF atlas needs -- a smooth distance gradient to threshold).
+            // mag = drawn LARGER than the texel grid; min = drawn smaller.
+            samplerInfo.magFilter(filter);
+            samplerInfo.minFilter(filter);
             // Address mode = behavior for UVs outside [0,1]. CLAMP_TO_EDGE stretches
             // the edge texel (sane sprite default; REPEAT would tile, for terrain).
             samplerInfo.addressModeU(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);

@@ -7,6 +7,7 @@ import jvre.core.Renderer;
 import jvre.core.Renderer2D;
 import jvre.core.ShaderEffect;
 import jvre.core.Surface;
+import jvre.core.Texture;
 import jvre.core.Window;
 
 import org.lwjgl.system.Configuration;
@@ -45,6 +46,8 @@ public class Main {
     private Surface surface;
     private Renderer renderer;
     private Renderer2D g;   // the L2 surface, when DEMO_2D
+    private Texture demoImage;    // a generated texture drawn via g.image(), when DEMO_2D
+    private Texture demoImage2;   // a SECOND texture -- proves multi-texture batching (flush-on-switch)
 
     public static void main(String[] args) {
         // See the MemoryStack gotcha note: this machine's GPUs expose enough
@@ -89,7 +92,39 @@ public class Main {
             // The L2 altitude: ask the renderer for its 2D surface. From here the
             // loop is begin() / draw shapes / end() -- no Vulkan in sight.
             g = renderer.renderer2D();
+            // Two small generated images. Real programs will load a PNG; for now
+            // we synthesize recognizable pixels. TWO distinct textures in one frame
+            // is what exercises the flush-on-texture-switch batching.
+            demoImage = renderer.createImage(makeDemoImage(64, false), 64, 64);
+            demoImage2 = renderer.createImage(makeDemoImage(64, true), 64, 64);
+            // Bake the default font now (at startup) rather than lazily on the
+            // first text() call mid-loop -- avoids a one-time hitch in frame 1.
+            renderer.font();
         }
+    }
+
+    /**
+     * Build a {@code size x size} RGBA texture: a 4x4 checker of distinct colors
+     * over green/blue ramps. The ramps make UV orientation obvious (a flipped V
+     * would show). {@code swap} recolors it so the two demo textures are visibly
+     * different (and clearly two separate images, not one).
+     */
+    private static byte[] makeDemoImage(int size, boolean swap) {
+        byte[] px = new byte[size * size * 4];
+        int cell = size / 4;
+        for (int y = 0; y < size; y++) {
+            for (int x = 0; x < size; x++) {
+                boolean odd = ((x / cell) + (y / cell)) % 2 == 1;
+                int i = (y * size + x) * 4;
+                int ramp = x * 255 / size;
+                int ramp2 = y * 255 / size;
+                px[i]     = (byte) (odd ? 255 : 40);          // R
+                px[i + 1] = (byte) (swap ? ramp2 : ramp);     // G
+                px[i + 2] = (byte) (swap ? ramp : ramp2);     // B
+                px[i + 3] = (byte) 255;                       // opaque
+            }
+        }
+        return px;
     }
 
     private void mainLoop() {
@@ -141,10 +176,30 @@ public class Main {
         // layout as plain arithmetic (no coordinate mode). Resize the window and
         // this square tracks the corner while the others stay pinned top-left.
         g.fillRect(g.width() - 170, g.height() - 170, 130, 130, Color.WHITE);
+        // Textured IMAGES -- the 64x64 generated textures scaled up to 120x120,
+        // so NEAREST sampling shows crisp texels. Drawn after the shapes, so they
+        // sit on top (one paint order across flat, SDF, and textured alike). TWO
+        // distinct textures in one frame -> two draw runs (flush-on-switch).
+        g.image(demoImage, 40, 120, 120, 120);
+        g.image(demoImage2, 40, 250, 120, 120);
+        // TEXT (SDF glyphs, the built-in DejaVu Sans). Different sizes from one
+        // baked atlas -- crisp at each -- proving the SDF scales for free. The
+        // multi-line string exercises '\n'.
+        g.text("jvre", 470, 110, 72, Color.rgb(20, 20, 20));
+        g.text("the L2 'just draw' altitude:\nshapes, images, and text.", 300, 540, 22,
+                Color.rgb(30, 30, 30));
         g.end();
     }
 
     private void cleanup() {
+        // The demo image is caller-owned: close it BEFORE the renderer (it frees
+        // VMA memory the device owns, and the device dies with the renderer).
+        if (demoImage != null) {
+            demoImage.close();
+        }
+        if (demoImage2 != null) {
+            demoImage2.close();
+        }
         // Reverse order of creation: the renderer (the whole device context)
         // goes first, then the instance-level objects, then the window.
         renderer.close();

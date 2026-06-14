@@ -158,6 +158,23 @@ public class Renderer {
     // Initial per-frame arena (~2730 shape vertices at 6 floats each); grows if exceeded.
     private static final long INITIAL_ARENA_BYTES = 64 * 1024;
 
+    // The shape pipeline's texture descriptors. A frame can draw several textures
+    // (one DRAW RUN each -- see Renderer2D), and a single set can't be rebound
+    // between draws in one command buffer, so we need one set PER RUN. The textbook
+    // pattern: a TRANSIENT per-frame pool, RESET and re-allocated each frame (one
+    // set per run), fence-guarded like every other per-frame resource. One pool
+    // per frame in flight; it grows if a frame ever needs more runs than it holds.
+    private long[] shapeDescriptorPools;   // [frame in flight]
+    private int[] shapePoolCapacity;       // current maxSets per pool (for growth)
+    private long[] currentRunSets;         // this frame's per-run sets (transient, rebuilt each frame)
+    private static final int INITIAL_SHAPE_POOL_SETS = 16;
+    // A 1x1 opaque white texture: the always-valid default bound when no image is
+    // drawn (the shader's sampler is referenced statically, so SOMETHING must be
+    // bound even when no shape samples it). White also = the neutral tint.
+    private Texture defaultWhiteTexture;
+    // The built-in font (DejaVu Sans), baked to an SDF atlas on first text use.
+    private Font defaultFont;
+
     // Uniform buffers, one PER FRAME IN FLIGHT (same reasoning as the sync
     // objects: frame N+1's CPU write must not stomp frame N's in-flight GPU
     // read; the slot's fence guards the handoff). Host-visible on purpose --
@@ -297,8 +314,37 @@ public class Renderer {
                 shapeArenas[i] = new Buffer(device, INITIAL_ARENA_BYTES,
                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
             }
+            // The 1x1 white default + the per-frame texture descriptor sets the
+            // image/text shapes sample through.
+            defaultWhiteTexture = Texture.create(device, commandPool,
+                    new byte[] { (byte) 255, (byte) 255, (byte) 255, (byte) 255 }, 1, 1);
+            createShapeDescriptors();
         }
         return renderer2D;
+    }
+
+    /**
+     * Create a drawable image from raw RGBA pixels (R8G8B8A8, row-major,
+     * top-to-bottom) for {@link Renderer2D#image}. The L1 image entry point:
+     * decoding image FILES (PNG/JPG, via stb_image) is a later convenience that
+     * will funnel here too. The caller OWNS the returned Texture and must
+     * {@code close()} it before the Renderer (it frees VMA memory the device owns).
+     */
+    public Texture createImage(byte[] rgbaPixels, int width, int height) {
+        return Texture.create(device, commandPool, rgbaPixels, width, height);
+    }
+
+    /**
+     * The built-in default font (DejaVu Sans), baked to an SDF atlas on first use.
+     * What {@link Renderer2D#text} draws with. Renderer-owned (lives as long as
+     * the device); loading custom fonts is a later convenience that will funnel
+     * through the same {@link Font#load}.
+     */
+    public Font font() {
+        if (defaultFont == null) {
+            defaultFont = Font.load(device, commandPool, "/fonts/DejaVuSans.ttf", 48f);
+        }
+        return defaultFont;
     }
 
     private void buildShapePipeline() {
@@ -331,6 +377,110 @@ public class Renderer {
             shapeArenas[frame].close();
             shapeArenas[frame] = new Buffer(device, Math.max(needed, have * 2),
                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
+        }
+    }
+
+    /**
+     * Create the per-frame transient descriptor pools the shape runs allocate
+     * from. One pool per frame in flight (so resetting one never touches a pool
+     * the GPU is still reading from another in-flight frame). Created once;
+     * survives a pipeline rebuild (identically-defined layouts are compatible).
+     */
+    private void createShapeDescriptors() {
+        shapeDescriptorPools = new long[MAX_FRAMES_IN_FLIGHT];
+        shapePoolCapacity = new int[MAX_FRAMES_IN_FLIGHT];
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            shapePoolCapacity[i] = INITIAL_SHAPE_POOL_SETS;
+            shapeDescriptorPools[i] = createShapePool(INITIAL_SHAPE_POOL_SETS);
+        }
+    }
+
+    /** A descriptor pool holding up to {@code maxSets} combined-image-sampler sets. */
+    private long createShapePool(int maxSets) {
+        try (MemoryStack stack = stackPush()) {
+            VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(1, stack);
+            poolSizes.get(0).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+            poolSizes.get(0).descriptorCount(maxSets);
+
+            VkDescriptorPoolCreateInfo poolInfo = VkDescriptorPoolCreateInfo.calloc(stack);
+            poolInfo.sType(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO);
+            poolInfo.pPoolSizes(poolSizes);
+            poolInfo.maxSets(maxSets);  // reset-and-reallocate; no FREE_DESCRIPTOR_SET bit needed
+
+            LongBuffer pPool = stack.longs(VK_NULL_HANDLE);
+            Vk.check(vkCreateDescriptorPool(device.handle(), poolInfo, null, pPool),
+                    "Failed to create a shape descriptor pool");
+            return pPool.get(0);
+        }
+    }
+
+    /**
+     * Rebuild this frame's per-run descriptor sets: reset the frame's pool (the
+     * slot's fence was waited on in drawFrame, so the GPU is done with last time's
+     * sets), then allocate + write one set per run, each pointing at its run's
+     * texture (or the white default for a null/flat run). The handles land in
+     * {@link #currentRunSets} for recordCommandBuffer to bind per draw. Grows the
+     * pool first if this frame has more runs than it currently holds.
+     */
+    private void prepareShapeDescriptors(int frame) {
+        int runs = renderer2D.runCount();
+        if (runs > shapePoolCapacity[frame]) {
+            int cap = shapePoolCapacity[frame];
+            while (cap < runs) {
+                cap *= 2;
+            }
+            vkDestroyDescriptorPool(device.handle(), shapeDescriptorPools[frame], null);
+            shapeDescriptorPools[frame] = createShapePool(cap);
+            shapePoolCapacity[frame] = cap;
+        } else {
+            vkResetDescriptorPool(device.handle(), shapeDescriptorPools[frame], 0);
+        }
+
+        if (currentRunSets == null || currentRunSets.length < runs) {
+            currentRunSets = new long[runs];
+        }
+
+        try (MemoryStack stack = stackPush()) {
+            // Allocate all the run sets at once (one layout handle per set).
+            LongBuffer layouts = stack.mallocLong(runs);
+            for (int r = 0; r < runs; r++) {
+                layouts.put(shapePipeline.descriptorSetLayout());
+            }
+            layouts.flip();
+
+            VkDescriptorSetAllocateInfo allocInfo = VkDescriptorSetAllocateInfo.calloc(stack);
+            allocInfo.sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO);
+            allocInfo.descriptorPool(shapeDescriptorPools[frame]);
+            allocInfo.pSetLayouts(layouts);
+
+            LongBuffer pSets = stack.mallocLong(runs);
+            Vk.check(vkAllocateDescriptorSets(device.handle(), allocInfo, pSets),
+                    "Failed to allocate shape run descriptor sets");
+
+            // Point each run's set at its texture (binding 0).
+            for (int r = 0; r < runs; r++) {
+                long set = pSets.get(r);
+                currentRunSets[r] = set;
+                Texture tex = renderer2D.runTexture(r);
+                if (tex == null) {
+                    tex = defaultWhiteTexture;
+                }
+
+                VkDescriptorImageInfo.Buffer imageInfo = VkDescriptorImageInfo.calloc(1, stack);
+                imageInfo.imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                imageInfo.imageView(tex.view());
+                imageInfo.sampler(tex.sampler());
+
+                VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(1, stack);
+                writes.get(0).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+                writes.get(0).dstSet(set);
+                writes.get(0).dstBinding(0);
+                writes.get(0).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+                writes.get(0).descriptorCount(1);
+                writes.get(0).pImageInfo(imageInfo);
+
+                vkUpdateDescriptorSets(device.handle(), writes, null);
+            }
         }
     }
 
@@ -750,7 +900,23 @@ public class Renderer {
                         stack.longs(shapeArenas[currentFrame].handle()), stack.longs(0));
                 vkCmdPushConstants(cmd, shapePipeline.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0,
                         stack.floats(swapchain.width(), swapchain.height()));
-                vkCmdDraw(cmd, renderer2D.vertexCount(), 1, 0, 0);
+                // One draw per RUN, in paint order: bind the run's texture (flat/
+                // SDF shapes ignore it but it must be validly bound), then draw the
+                // run's vertex slice. The arena is one buffer; firstVertex offsets
+                // into it. Same-texture runs already merged in Renderer2D.
+                int runs = renderer2D.runCount();
+                int total = renderer2D.vertexCount();
+                for (int r = 0; r < runs; r++) {
+                    int first = renderer2D.runFirstVertex(r);
+                    int last = (r + 1 < runs) ? renderer2D.runFirstVertex(r + 1) : total;
+                    int vcount = last - first;
+                    if (vcount <= 0) {
+                        continue;
+                    }
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            shapePipeline.layout(), 0, stack.longs(currentRunSets[r]), null);
+                    vkCmdDraw(cmd, vcount, 1, first, 0);
+                }
             } else {
                 // ---- The cube demo ----
                 // Bind the pipeline: ONE call swaps in the shaders + all the
@@ -931,6 +1097,9 @@ public class Renderer {
                 int floats = renderer2D.floatCount();
                 ensureArenaCapacity(currentFrame, floats);
                 shapeArenas[currentFrame].uploadFloats(renderer2D.vertexData(), floats);
+                // Build this frame's per-run texture descriptor sets (one per draw
+                // run -- the run that flush-on-texture-switch produced).
+                prepareShapeDescriptors(currentFrame);
             } else {
                 // The cube: rewrite this slot's transform UBO.
                 float aspect = swapchain.width() / (float) swapchain.height();
@@ -1132,6 +1301,20 @@ public class Renderer {
                     arena.close();
                 }
             }
+        }
+        // The shape texture descriptors (each pool frees its sets) + the default.
+        if (shapeDescriptorPools != null) {
+            for (long pool : shapeDescriptorPools) {
+                if (pool != VK_NULL_HANDLE) {
+                    vkDestroyDescriptorPool(device.handle(), pool, null);
+                }
+            }
+        }
+        if (defaultWhiteTexture != null) {
+            defaultWhiteTexture.close();
+        }
+        if (defaultFont != null) {
+            defaultFont.close();
         }
         if (texture != null) {
             texture.close();

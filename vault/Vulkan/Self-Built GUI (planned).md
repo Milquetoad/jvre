@@ -1,5 +1,7 @@
 # Self-Built GUI (planned)
 
+> **Revised scope (2026-06-14): a GUI is a CAPABILITY jvre enables, not a FEATURE it ships.** Re-examined once L2 v1 was complete (and against the [[Design North Star]]: jvre is a *rendering framework* between Processing and raw Vulkan -- and Processing, its upper reference, isn't a GUI toolkit either; people reach for the ControlP5 *add-on*). A full GUI is off jvre's core axis (its remaining learning payoff is application-layer UI logic, not the graphics/native core) and a classic scope sink. So the only sanctioned form is a **deliberately tiny immediate-mode demo built ON L2** -- a worked example + L2 stress test, NOT a jvre pillar (see [[Roadmap]] phase 3b). If a real GUI is ever needed for tooling, drop in [[GUI Options|Dear ImGui / Nuklear]]. The original 2026-06-09 design below stands as the blueprint for that bounded demo.
+
 **Decision (2026-06-09):** jvre will ship its own **immediate-mode GUI**, built by us (not [[GUI Options|ImGui/Nuklear]]). Fits the learning goal and the algorithm-visualization use case. Scoped + sequenced so it's *not* scope creep.
 
 ## Why immediate-mode (not retained-mode)

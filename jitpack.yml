@@ -1,0 +1,10 @@
+# JitPack builds jvre from a git tag in its own (SDK-less) environment, then
+# serves it as com.github.Milquetoad:jvre:<tag>. Two things it needs from us:
+#   - JDK 21 (its default is older; the Gradle toolchain requires 21).
+#   - the publish step -> our maven-publish artifact lands in ~/.m2 for JitPack
+#     to pick up. The build is self-contained (shaders compile via the bundled
+#     shaderc), so no Vulkan SDK is required here.
+jdk:
+  - openjdk21
+install:
+  - ./gradlew publishToMavenLocal

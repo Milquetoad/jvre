@@ -25,8 +25,8 @@ Longer-term: a self-built immediate-mode GUI, 3D rendering, and (reachable, not 
 | Tool | Version | Notes |
 |---|---|---|
 | JDK | 21 | Gradle toolchain will enforce this |
-| Vulkan SDK | 1.3+ | Needed for the validation layers and `glslc`; install from [LunarG](https://vulkan.lunarg.com/) |
 | GPU + driver | Vulkan 1.3 | Dynamic rendering (the render path) is core in 1.3; any vendor, a discrete GPU is preferred automatically |
+| Vulkan SDK | 1.3+ | **Optional** — only for the validation layers during development. Not needed to *build*: shaders compile via the bundled shaderc, no SDK required. |
 
 LWJGL (Vulkan + GLFW bindings) is pulled in by Gradle — no manual install. The Vulkan **loader** itself (`vulkan-1.dll` / `libvulkan.so`) comes from your system / GPU driver, not from LWJGL.
 
@@ -44,9 +44,37 @@ The project ships a Gradle **wrapper**, so you don't need Gradle installed — j
 
 You should see a window open and console output reporting each Vulkan bootstrap step (instance, surface, chosen GPU, ...). Close the window to exit.
 
+## Using jvre as a library (early)
+
+> ⚠️ Pre-1.0: the API is unstable and versions may break. Published via [JitPack](https://jitpack.io) for now; Maven Central is planned at 1.0.
+
+```gradle
+repositories {
+    mavenCentral()
+    maven { url 'https://jitpack.io' }
+}
+
+dependencies {
+    implementation 'com.github.Milquetoad:jvre:v0.1.0'
+
+    // jvre does NOT bundle platform natives -- you choose them for your OS.
+    // Add the natives classifier for the LWJGL modules jvre uses:
+    def lwjgl = '3.3.4'
+    def natives = 'natives-windows' // or natives-linux / natives-macos / -arm64
+    runtimeOnly("org.lwjgl:lwjgl:$lwjgl:$natives")
+    runtimeOnly("org.lwjgl:lwjgl-glfw:$lwjgl:$natives")
+    runtimeOnly("org.lwjgl:lwjgl-vma:$lwjgl:$natives")
+    runtimeOnly("org.lwjgl:lwjgl-shaderc:$lwjgl:$natives")
+    runtimeOnly("org.lwjgl:lwjgl-spvc:$lwjgl:$natives")
+    runtimeOnly("org.lwjgl:lwjgl-stb:$lwjgl:$natives")
+}
+```
+
+The LWJGL libraries themselves arrive transitively through jvre's POM; only the per-OS **natives** are yours to pick (the standard LWJGL consumer pattern). A future convenience may bundle these.
+
 ## Cross-platform
 
-The code is OS-agnostic by design: windowing and surface creation go through GLFW, which picks the right platform call on each OS. The only per-platform difference is the LWJGL **natives** classifier in `build.gradle` (`natives-windows` / `natives-linux` / `natives-macos`). Windows and Linux are first-class; macOS additionally needs MoltenVK and the `-XstartOnFirstThread` JVM flag.
+The code is OS-agnostic by design: windowing and surface creation go through GLFW, which picks the right platform call on each OS. The LWJGL **natives** classifier is auto-detected from the build host (`build.gradle`), so no edit is needed to build on Windows, Linux, or macOS. Windows and Linux are first-class (both run in CI); macOS additionally needs MoltenVK and the `-XstartOnFirstThread` JVM flag.
 
 ## Project layout
 

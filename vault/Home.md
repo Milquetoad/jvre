@@ -51,6 +51,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 32. [[MSAA]] — multisampled color target + built-in resolve; coverage vs texture aliasing (smooth silhouettes ✨)
 
 **6. Looking ahead — optional, for the curious**
+- [[Roadmap]] — the prioritized forward plan (start here for "what's next")
 - [[GUI Options]] / [[Self-Built GUI (planned)]], [[Ray Tracing and Path Tracing (future)]], [[Device Selection and Cross-Platform (planned)]]
 
 > Prefer a story to an index? [[Progress Log]] is the dated, diary-form version of this same journey.
@@ -60,6 +61,8 @@ New here? The Map of Content below is a reference index, not a path. To actually
 ### Project
 - [[Toolchain Setup]] — what's installed and why
 - [[Progress Log]] — dated diary of what we've done
+- [[Roadmap]] — the forward-looking plan + the *why* behind its ordering (the current source of truth for "what next")
+- [[Definition of Done]] — the tiered quality bar a change must clear to count as done
 - [[API Vision - Layered Altitudes]] — the engine's north star (high-level + shader-art on one stack)
 - [[Design North Star]] — the sweet spot (smaller than Processing; powerful, flexible, approachable) + how we measure it
 - [[ShaderEffect - The Shadertoy Altitude]] — the first realized altitude: runtime-compiled user fragment shaders on a fullscreen triangle (the shader-art path made real)

@@ -145,31 +145,34 @@ application {
 }
 
 // ---------------------------------------------------------------------------
-// Shaders: compile GLSL -> SPIR-V at build time with glslc (ships with the
-// Vulkan SDK). Vulkan consumes SPIR-V binaries, never GLSL source. Each
-// src/main/glsl/*.vert|frag|comp becomes build/generated/shaders/shaders/
-// <name>.spv, which rides into the jar as a classpath resource
-// (/shaders/<name>.spv) -- that's where the engine loads it from.
+// Shaders: compile GLSL -> SPIR-V at build time using the BUNDLED shaderc (via
+// jvre.tools.ShaderTool / ShaderCompiler), NOT the external glslc executable.
+// This makes the build self-contained -- no Vulkan SDK needed on CI, JitPack, or
+// any from-source consumer. Each src/main/glsl/*.vert|frag becomes
+// build/generated/shaders/shaders/<name>.spv, which rides into the jar as a
+// classpath resource (/shaders/<name>.spv) -- where the engine loads it from.
 // ---------------------------------------------------------------------------
 def shaderSrcDir = layout.projectDirectory.dir('src/main/glsl')
 def shaderOutDir = layout.buildDirectory.dir('generated/shaders')
 
-tasks.register('compileShaders') {
-    description = 'Compiles GLSL shaders to SPIR-V with glslc'
+tasks.register('compileShaders', JavaExec) {
+    description = 'Compiles GLSL shaders to SPIR-V using the bundled shaderc (no Vulkan SDK)'
+    dependsOn 'compileJava'
     inputs.dir(shaderSrcDir)
     outputs.dir(shaderOutDir)
-    doLast {
-        def outDir = new File(shaderOutDir.get().asFile, 'shaders')
-        outDir.mkdirs()
-        shaderSrcDir.asFile.eachFileMatch(~/.+\.(vert|frag|comp)$/) { src ->
-            def dst = new File(outDir, src.name + '.spv')
-            exec {
-                // glslc infers the shader stage from the file extension.
-                commandLine 'glslc', src.absolutePath, '-o', dst.absolutePath
-            }
-        }
-    }
+    // Classpath = compiled main classes (the tool + ShaderCompiler) + the runtime
+    // deps (lwjgl-shaderc) + the host shaderc natives. Deliberately NOT the source
+    // set's full runtimeClasspath: that includes the resources dir this task
+    // PRODUCES (via processResources), which would be a dependency cycle.
+    classpath = sourceSets.main.output.classesDirs +
+            configurations.runtimeClasspath + configurations.nativesRuntime
+    mainClass = 'jvre.tools.ShaderTool'
+    args shaderSrcDir.asFile.absolutePath,
+            new File(shaderOutDir.get().asFile, 'shaders').absolutePath
 }
+
+// The build tool is not part of the library -- keep it out of the published jar.
+tasks.named('jar') { exclude 'jvre/tools/**' }
 
 // Treat the generated .spv files as ordinary resources, built before them.
 sourceSets.main.resources.srcDir(shaderOutDir)
@@ -180,7 +183,8 @@ tasks.named('processResources') { dependsOn 'compileShaders' }
 // .spv binaries -- a sources jar should carry source, not build artifacts.
 tasks.named('sourcesJar') {
     dependsOn 'compileShaders'
-    exclude 'shaders/**'
+    exclude 'shaders/**'        // generated .spv binaries don't belong in a sources jar
+    exclude 'jvre/tools/**'     // the build tool isn't part of the library
 }
 
 // Make `gradle run` flush native crash logs etc. nicely; harmless defaults.

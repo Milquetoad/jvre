@@ -14,7 +14,15 @@
 
 plugins {
     id 'application'
+    id 'java-library'   // adds the `api` configuration -> a publishable library, not just an app
+    id 'maven-publish'  // produces the consumable artifact (jar + sources + javadoc + POM)
 }
+
+// Maven coordinates. groupId is the GitHub-verified reverse-domain namespace
+// (io.github.<user>), so this can reach Maven Central at 1.0 without owning a
+// domain. 0.x = the API is still unstable (pre-1.0 churn is allowed/expected).
+group = 'io.github.milquetoad'
+version = '0.1.0'
 
 repositories {
     mavenCentral()
@@ -46,16 +54,30 @@ java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(21)
     }
+    withSourcesJar()    // publish a -sources.jar (browsable source for consumers + IDEs)
+    withJavadocJar()    // publish a -javadoc.jar
+}
+
+// A PRIVATE configuration for the host's LWJGL natives: needed to RUN/TEST jvre
+// itself, but a downstream consumer must pick the natives for THEIR platform --
+// so these are kept OUT of the published POM (added to run + test classpaths
+// below, never to the library's dependencies). This is R1's "consumer picks"
+// promise, enforced at publish time.
+configurations {
+    nativesRuntime
 }
 
 dependencies {
-    // The BOM (Bill of Materials) pins every lwjgl-* artifact to the same version,
-    // so we don't have to repeat the version string on each line below.
-    implementation platform("org.lwjgl:lwjgl-bom:$lwjglVersion")
+    // The BOM aligns every lwjgl-* version; `api` so consumers inherit the same
+    // alignment transitively.
+    api platform("org.lwjgl:lwjgl-bom:$lwjglVersion")
 
-    implementation "org.lwjgl:lwjgl"
+    // PUBLIC L1 exposes Vulkan types (e.g. Device returns VkPhysicalDevice/VkDevice/
+    // VkQueue), so lwjgl core + lwjgl-vulkan are `api` -- a consumer building on L1
+    // compiles against them. Everything else jvre uses INTERNALLY -> implementation.
+    api "org.lwjgl:lwjgl"
+    api "org.lwjgl:lwjgl-vulkan"
     implementation "org.lwjgl:lwjgl-glfw"
-    implementation "org.lwjgl:lwjgl-vulkan"
 
     // VMA (Vulkan Memory Allocator, AMD): sub-allocates many buffers/images out
     // of few big VkDeviceMemory blocks -- the real-engine memory pattern. Retires
@@ -90,14 +112,18 @@ dependencies {
     // hand-parsing TrueType outlines. Native library -> has natives.
     implementation "org.lwjgl:lwjgl-stb"
 
-    // Native libraries (.dll) for this platform, needed only at runtime.
-    runtimeOnly "org.lwjgl:lwjgl::$lwjglNatives"
-    runtimeOnly "org.lwjgl:lwjgl-glfw::$lwjglNatives"
-    runtimeOnly "org.lwjgl:lwjgl-vma::$lwjglNatives"
-    runtimeOnly "org.lwjgl:lwjgl-shaderc::$lwjglNatives"
-    runtimeOnly "org.lwjgl:lwjgl-spvc::$lwjglNatives"
-    runtimeOnly "org.lwjgl:lwjgl-stb::$lwjglNatives"
-    // (no lwjgl-vulkan natives on Windows — the loader is system-provided)
+    // Native libraries for the HOST -- into the PRIVATE nativesRuntime config (not
+    // runtimeOnly), so they stay off the published POM. Wired onto run + test
+    // below. The BOM is re-declared here because a separate configuration doesn't
+    // inherit the api one's version constraints.
+    // (no lwjgl-vulkan natives on Windows/Linux -- the Vulkan loader is system-provided)
+    nativesRuntime platform("org.lwjgl:lwjgl-bom:$lwjglVersion")
+    nativesRuntime "org.lwjgl:lwjgl::$lwjglNatives"
+    nativesRuntime "org.lwjgl:lwjgl-glfw::$lwjglNatives"
+    nativesRuntime "org.lwjgl:lwjgl-vma::$lwjglNatives"
+    nativesRuntime "org.lwjgl:lwjgl-shaderc::$lwjglNatives"
+    nativesRuntime "org.lwjgl:lwjgl-spvc::$lwjglNatives"
+    nativesRuntime "org.lwjgl:lwjgl-stb::$lwjglNatives"
 
     // JUnit 5 -- jvre's first unit tests arrive with ShaderCompiler: a pure
     // GLSL-in/SPIR-V-out function needing NO GPU, unlike nearly everything else
@@ -111,6 +137,7 @@ dependencies {
 tasks.named('test') {
     useJUnitPlatform()
     testLogging { events 'passed', 'failed', 'skipped' }
+    classpath += configurations.nativesRuntime   // the host natives the test JVM loads
 }
 
 application {
@@ -148,9 +175,60 @@ tasks.register('compileShaders') {
 sourceSets.main.resources.srcDir(shaderOutDir)
 tasks.named('processResources') { dependsOn 'compileShaders' }
 
+// The generated-shaders dir is a resource srcDir, so the SOURCES jar reads it too:
+// declare the producer dependency (Gradle requires it), and exclude the compiled
+// .spv binaries -- a sources jar should carry source, not build artifacts.
+tasks.named('sourcesJar') {
+    dependsOn 'compileShaders'
+    exclude 'shaders/**'
+}
+
 // Make `gradle run` flush native crash logs etc. nicely; harmless defaults.
 tasks.named('run') {
     // GLFW must own the main thread. On macOS this needs -XstartOnFirstThread;
     // on Windows nothing special is required, but we keep stdout unbuffered.
     standardInput = System.in
+    classpath += configurations.nativesRuntime   // the host natives the app loads
+}
+
+// Heavy prose comments are the house style, not spec-perfect HTML -- don't let
+// javadoc's strict doclint fail the -javadoc.jar build over comment formatting.
+tasks.withType(Javadoc).configureEach {
+    options.addStringOption('Xdoclint:none', '-quiet')
+}
+
+// The publishable artifact: jar + sources + javadoc + a complete POM. Verify
+// locally with `gradlew publishToMavenLocal` (-> ~/.m2). The natives are absent
+// from the POM by design (see the nativesRuntime config). Central upload with GPG
+// signing is the later R4 step; pre-1.0 distribution is JitPack / GitHub Releases.
+publishing {
+    publications {
+        maven(MavenPublication) {
+            from components.java
+            pom {
+                name = 'jvre'
+                description = 'A from-scratch Java + Vulkan rendering framework (LWJGL): ' +
+                        'two altitudes -- an approachable "just draw" 2D surface and a ' +
+                        'low-level Vulkan escape hatch.'
+                url = 'https://github.com/Milquetoad/jvre'
+                licenses {
+                    license {
+                        name = 'GNU Affero General Public License v3.0'
+                        url = 'https://www.gnu.org/licenses/agpl-3.0.txt'
+                    }
+                }
+                developers {
+                    developer {
+                        id = 'Milquetoad'
+                        name = 'Milquetoad'
+                    }
+                }
+                scm {
+                    url = 'https://github.com/Milquetoad/jvre'
+                    connection = 'scm:git:https://github.com/Milquetoad/jvre.git'
+                    developerConnection = 'scm:git:ssh://git@github.com/Milquetoad/jvre.git'
+                }
+            }
+        }
+    }
 }

@@ -2,6 +2,14 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-14 — Release: a consumable artifact (R2) + main protected 📦🔒✅
+- **jvre is now publishable.** `maven-publish` + `java-library` produce **jar + `-sources.jar` + `-javadoc.jar` + a complete POM** (name/description/AGPL/SCM/developer), coordinates `io.github.milquetoad:jvre:0.1.0`. Verified via `publishToMavenLocal` (-> `~/.m2`): the full artifact set generates and the POM is correct. The CD half of the v1.0/Central road begins.
+- **api vs implementation split:** lwjgl core + lwjgl-vulkan are `api` (public L1 returns `Vk*` types, so consumers compile against them); everything else is `implementation` (runtime). 
+- **Natives kept OUT of the POM** -- the key correctness move. They live in a private `nativesRuntime` configuration (wired onto `run` + `test`, never published), so a downstream consumer picks the natives for THEIR platform. The R1 "consumer picks" promise, enforced at publish time. Confirmed: zero `natives-*` classifiers in the generated POM.
+- **Gradle gotcha hit + fixed:** the sources jar reads the generated-shaders resource dir -> overlapping-output validation failed it until `sourcesJar dependsOn compileShaders` (and the `.spv` are `exclude`d -- source jars carry source, not binaries). javadoc doclint disabled so heavy prose comments don't fail the `-javadoc.jar`.
+- **`main` is now a PROTECTED branch** (the side-quest that prompted this): no direct pushes; merge needs both CI checks green + up-to-date; PR required with 0 approvals (no solo lockout); enforced on admins; linear history; force-push/delete blocked. CI is now *enforced*, not just habit. (gotcha: `gh api` on Git Bash needs the leading slash omitted.)
+- **Next**: R3 -- JitPack + tagged GitHub Releases (the first PUBLIC consumption path), then later R4 (Maven Central + GPG at 1.0). Or pivot to Phase 2 (the L1 geometry escape hatch). See [[Testing and CI-CD]], [[Roadmap]].
+
 ## 2026-06-14 — Interactivity: keyboard + typed text (input beat 2) ⌨️✅ -> Phase 1 COMPLETE
 - **`Key` enum** (letters, digits, named/navigation keys, modifiers, F1-F12 -- no raw GLFW codes) + **`Input.keyDown`/`keyPressed`/`keyReleased`** (same level/edge model as the mouse, via `GLFWKeyCallback`), and **`Input.typedChars()`** for text fields.
 - **Typed text is its own channel** -- from `GLFWCharCallback` (layout + shift applied, character keys OS-auto-repeat). The right source for a text field; raw key codes aren't (they don't know `a` vs `A`). Editing keys (Backspace/arrows) come from `keyPressed`. **Verified on the 4090**: a `type something:` field fills as you type (shift -> capitals/symbols, held letters repeat), Backspace deletes, Escape clears.

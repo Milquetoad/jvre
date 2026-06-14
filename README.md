@@ -1,5 +1,7 @@
 # jvre — Java Vulkan Rendering Engine
 
+[![CI](https://github.com/Milquetoad/jvre/actions/workflows/ci.yml/badge.svg)](https://github.com/Milquetoad/jvre/actions/workflows/ci.yml)
+
 ![The first triangle: RGB-interpolated, on an orange clear](vault/assets/first-triangle.png)
 
 A general-purpose rendering framework written **from scratch in Java on top of [Vulkan](https://www.vulkan.org/)** (via [LWJGL](https://www.lwjgl.org/)). The goal is twofold:

@@ -2,6 +2,14 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-14 — Infra: de-pinned natives (R1) + Linux/Windows CI (1c) 🐧🪟✅
+- **The PM/delivery track begins**, toward the v1.0/Maven Central goal. Two pieces:
+- **R1 -- de-pinned LWJGL natives.** `build.gradle` no longer hardcodes `natives-windows`; the classifier is **auto-detected from the host** (`os.name`/`os.arch`), so the same build works on Hal (Windows) AND a Linux CI runner with no edit. Local build still resolves `natives-windows` -> unchanged on Hal. (Shipping a library will instead let the *consumer* pick -- the later R2+ step; this is the own-build/CI fix.)
+- **1c -- GitHub Actions CI** (`.github/workflows/ci.yml`): matrix `ubuntu-latest` + `windows-latest`, JDK 21, runs `./gradlew test -x compileShaders` on every push/PR to `main`. **Since Hal stays on Windows, the Ubuntu runner IS the Linux test bed** -- this is how cross-platform gets validated without a Linux box.
+- **Two deliberate calls:** (1) runners are headless/no-GPU, so CI verifies *compile + GPU-free unit tests* on both OSes, not rendering (that stays the hardware step). (2) `-x compileShaders` -- `glslc` (Vulkan SDK) isn't on the runners, and the tests use the in-process shaderc/spvc not the `.spv`, so no coverage lost; glslc-in-CI is a catalogued later enhancement.
+- **Verified locally**: host-detect picks `natives-windows`, `clean test -x compileShaders` green (incl. the shaderc/spvc native-loading tests). **The real Linux verification is the CI run on this PR.** README got a CI badge.
+- **Next**: watch CI go green on Linux; then continue Phase 1 (keyboard + typed text) or R2 (maven-publish plumbing). See [[Testing and CI-CD]].
+
 ## 2026-06-14 — Interactivity: a time / delta source ⏱️✅
 - **`renderer.time()`** (seconds since startup, live) + **`renderer.dt()`** (the previous frame's wall-clock duration) -- [[Roadmap]] Phase 1b. Makes animation a first-class L2 thing; before this an L2 user had to reach for `System.nanoTime()` (the Renderer already tracked an internal clock for the cube/effect -- this just exposes it cleanly + adds the delta).
 - **`dt()` measured once per `drawFrame`, before any early-return** (so a resize-skipped frame still advances the clock), and read by the NEXT frame's `drawShapes` -- i.e. the previous frame's duration, which is exactly what `distance = speed * dt()` wants for frame-rate independence.

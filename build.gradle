@@ -23,8 +23,23 @@ repositories {
 ext {
     lwjglVersion = '3.3.4'
     jomlVersion = '1.10.8'
-    // We're on Windows x64. Other options exist (natives-linux, natives-macos, etc.)
-    lwjglNatives = 'natives-windows'
+    // Pick the LWJGL natives for the HOST OS/arch automatically, so the same build
+    // works on any dev machine AND on CI (Windows + Linux) with no edit here. This
+    // is jvre's OWN build/test concern; SHIPPING jvre as a library must instead let
+    // the CONSUMER choose their classifier (the R2+ packaging step -- never force
+    // a platform on a downstream user). Detected from os.name/os.arch (no Gradle
+    // internal API).
+    def osName = System.getProperty('os.name').toLowerCase()
+    def osArch = System.getProperty('os.arch').toLowerCase()
+    def arm = osArch.contains('aarch64') || osArch.startsWith('arm')
+    if (osName.contains('win')) {
+        lwjglNatives = arm ? 'natives-windows-arm64' : 'natives-windows'
+    } else if (osName.contains('mac') || osName.contains('darwin')) {
+        lwjglNatives = arm ? 'natives-macos-arm64' : 'natives-macos'
+    } else {
+        lwjglNatives = arm ? 'natives-linux-arm64' : 'natives-linux'
+    }
+    logger.lifecycle("jvre: LWJGL natives for this host = ${lwjglNatives}")
 }
 
 java {

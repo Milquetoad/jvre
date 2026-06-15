@@ -59,6 +59,10 @@ public class Main {
     // uncapped (MAILBOX where available). Toggle + watch the console FPS line.
     private static final boolean VSYNC = true;
 
+    // Anti-aliasing sample count: 1 (off), 2, 4, 8 (clamped to the device max).
+    // Set to 1 to see jaggies, 4/8 for smooth edges.
+    private static final int MSAA = 4;
+
     // FPS counter (proves the vsync knob): frames since the last 1s report.
     private long fpsLastNanos = System.nanoTime();
     private int fpsFrames = 0;
@@ -139,6 +143,7 @@ public class Main {
         renderer = new Renderer(instance, surface, window, RendererOptions.builder()
                 .clearColor(CLEAR_R, CLEAR_G, CLEAR_B)
                 .vsync(VSYNC)
+                .msaa(MSAA)
                 .build());
 
         if (EFFECT != null) {

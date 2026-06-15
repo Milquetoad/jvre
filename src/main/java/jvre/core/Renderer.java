@@ -117,6 +117,9 @@ public class Renderer {
     // Present-mode preference (creation-time): true = vsync/FIFO, false = uncapped.
     // Stored so swapchain recreation (resize) keeps the same choice.
     private final boolean vsync;
+    // Requested MSAA sample count (creation-time, clamped to device max in the
+    // Swapchain). Stored to keep the choice across swapchain recreation.
+    private final int msaaRequested;
 
     // How many frames the CPU may be preparing AHEAD of the GPU. With 1, CPU and
     // GPU take turns idling (CPU waits for the frame to finish before recording
@@ -158,11 +161,12 @@ public class Renderer {
         this.clearG = options.clearG;
         this.clearB = options.clearB;
         this.vsync = options.vsync;
+        this.msaaRequested = options.msaa;
 
         // The device context, top to bottom. The pipeline needs the swapchain's
         // image format (dynamic rendering's one remaining coupling).
         this.device = new Device(instance, surface);
-        this.swapchain = new Swapchain(device, surface, window, vsync);
+        this.swapchain = new Swapchain(device, surface, window, vsync, msaaRequested);
         // The command pool: one-shot transfer command buffers (texture/buffer
         // uploads from createImage / createVertexBuffer / font) record from it, as
         // do the per-frame command buffers. No built-in geometry anymore -- the
@@ -535,24 +539,32 @@ public class Renderer {
             depInfo.sType(VK_STRUCTURE_TYPE_DEPENDENCY_INFO);
             depInfo.pImageMemoryBarriers(barrier);
 
-            // The dynamic-rendering color attachment, now with MSAA: the scene
-            // renders into the MULTISAMPLED image; the acquired swapchain image
-            // is only the RESOLVE destination. Dynamic rendering builds the
-            // resolve into the attachment itself (resolveMode AVERAGE = average
-            // the N samples per pixel) -- no extra pass, it happens at
-            // vkCmdEndRendering. storeOp on the MSAA image is DONT_CARE: once
-            // resolved, the per-sample data is garbage; storing it is wasted
-            // bandwidth (same logic as depth).
+            // The dynamic-rendering color attachment. TWO paths, by MSAA:
+            //   - MSAA ON: the scene renders into the MULTISAMPLED image; the
+            //     swapchain image is only the RESOLVE destination (resolveMode
+            //     AVERAGE -- averaged at vkCmdEndRendering, no extra pass). storeOp
+            //     DONT_CARE on the MSAA image: once resolved its per-sample data is
+            //     garbage (same logic as depth).
+            //   - MSAA OFF (1 sample): no MSAA target exists; render DIRECTLY into
+            //     the swapchain image, no resolve, storeOp STORE (the rendered
+            //     result IS what presents).
+            boolean msaa = swapchain.sampleCount() != VK_SAMPLE_COUNT_1_BIT;
             VkRenderingAttachmentInfo.Buffer colorAttachment =
                     VkRenderingAttachmentInfo.calloc(1, stack);
             colorAttachment.sType(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO);
-            colorAttachment.imageView(swapchain.msaaColorView());
             colorAttachment.imageLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-            colorAttachment.resolveMode(VK_RESOLVE_MODE_AVERAGE_BIT);
-            colorAttachment.resolveImageView(swapchain.imageView(imageIndex));
-            colorAttachment.resolveImageLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            if (msaa) {
+                colorAttachment.imageView(swapchain.msaaColorView());
+                colorAttachment.resolveMode(VK_RESOLVE_MODE_AVERAGE_BIT);
+                colorAttachment.resolveImageView(swapchain.imageView(imageIndex));
+                colorAttachment.resolveImageLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                colorAttachment.storeOp(VK_ATTACHMENT_STORE_OP_DONT_CARE);
+            } else {
+                colorAttachment.imageView(swapchain.imageView(imageIndex));  // render direct
+                colorAttachment.resolveMode(VK_RESOLVE_MODE_NONE);
+                colorAttachment.storeOp(VK_ATTACHMENT_STORE_OP_STORE);
+            }
             colorAttachment.loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR);
-            colorAttachment.storeOp(VK_ATTACHMENT_STORE_OP_DONT_CARE);
             colorAttachment.clearValue(clearValue.get(0));
 
             // The depth attachment: CLEAR on load; DONT_CARE on store -- the depth
@@ -592,14 +604,18 @@ public class Renderer {
             barrier.dstAccessMask(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
             vkCmdPipelineBarrier2(cmd, depInfo);
 
-            // ---- Barrier 1b: make the MSAA color target renderable ----
+            // ---- Barrier 1b: make the MSAA color target renderable (MSAA only) ----
             // Retarget the same struct. Like the depth buffer, this is ONE image
             // SHARED by all frames in flight (not per-frame, not rotating), so
             // srcStage/srcAccess must cover the PREVIOUS frame's color writes --
-            // the same cross-frame WAW lesson the depth barrier taught.
-            barrier.image(swapchain.msaaColorImage());
-            barrier.srcAccessMask(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);  // prev frame's writes
-            vkCmdPipelineBarrier2(cmd, depInfo);
+            // the same cross-frame WAW lesson the depth barrier taught. Skipped
+            // when MSAA is off (no MSAA target -- we render into the swapchain
+            // image, already transitioned by barrier 1).
+            if (msaa) {
+                barrier.image(swapchain.msaaColorImage());
+                barrier.srcAccessMask(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);  // prev frame's writes
+                vkCmdPipelineBarrier2(cmd, depInfo);
+            }
 
             // ---- Barrier 1b: make the DEPTH image writable (UNDEFINED -> DEPTH) ----
             // Its own barrier: different image, DEPTH aspect, and the depth-test
@@ -989,7 +1005,7 @@ public class Renderer {
         // now: since command buffers are re-recorded every frame, they pick up
         // the new images/extent automatically -- nothing to rebuild there. The
         // pool and per-frame sync objects survive untouched.
-        swapchain = new Swapchain(device, surface, window, vsync);
+        swapchain = new Swapchain(device, surface, window, vsync, msaaRequested);
         createRenderFinishedSemaphores();
 
         // Pipelines bake the attachment FORMAT (not the extent -- viewport is

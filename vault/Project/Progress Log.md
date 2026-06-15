@@ -2,6 +2,14 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-15 — Phase 2b: capability knobs (vsync + MSAA + GPU override) 🎛️✅
+- **`RendererOptions`** -- a creation-time config object (replacing the positional clear-color) that gathers the long-standing hardcoded knobs. `new Renderer(instance, surface, window, RendererOptions.builder()...build())`. All baked at construction (not runtime-toggleable, per the L2 spec).
+- **2b-i present-mode/vsync**: `.vsync(on)` -- ON (default) = FIFO (capped, no tearing); OFF = MAILBOX where available (uncapped). Threaded into `Swapchain.choosePresentMode`. Verified via a console FPS line (capped near refresh vs uncapped).
+- **2b-ii MSAA**: `.msaa(n)` -- 1 (off), 2, 4 (default), 8; clamped to device max. The interesting part is the **off path**: at 1x there's no multisample target, so the renderer skips it and draws DIRECTLY into the swapchain image (no resolve, storeOp STORE, MSAA barrier skipped). Verified at 1/4/8 (jagged-but-correct + validation-silent at 1).
+- **2b-iii GPU override**: `.preferGpu("RTX"/"Intel"/...)` -- a case-insensitive name-substring match wins selection via a big score bonus in `rateDevice`, beating the default discrete>integrated policy; falls back to best-scored + a note if unmatched. Completes the planned "scoring policy + explicit override" (runtime switching still future). Verified via the "Picked GPU:" line.
+- **Defaults chosen**: vsync on, MSAA 4, auto GPU -- saner than the old hardcoded MAILBOX/forced-4x/best-score, and now all user-overridable. Clears the standing "hardcoded MAILBOX / MSAA / GPU" TODOs.
+- **Next**: Phase 3 polish, starting with **SDF curves** -- `fillEllipse`/`strokeCircle`/`strokeEllipse` move from tessellation to the SDF path (crisp at any size, MSAA-independent), the catalogued SDF-edge-AA-for-curves track (the jaggies the user spotted at MSAA 1). See [[Roadmap]].
+
 ## 2026-06-15 — Phase 2a beat 2: bound resources + Camera + the cube DOGFOOD 🧊🎯✅ -> Phase 2a COMPLETE
 - **The escape hatch now reproduces jvre's own textured 3D cube via the PUBLIC API -- and the hardcoded SCENE is retired.** Built in sub-beats, each verified on the 4090:
   - **2-i**: index buffers -- `FrameRenderer.bindIndexBuffer`/`drawIndexed` + `Renderer.createIndexBuffer`.

@@ -2,6 +2,16 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-15 — Phase 2a beat 2: bound resources + Camera + the cube DOGFOOD 🧊🎯✅ -> Phase 2a COMPLETE
+- **The escape hatch now reproduces jvre's own textured 3D cube via the PUBLIC API -- and the hardcoded SCENE is retired.** Built in sub-beats, each verified on the 4090:
+  - **2-i**: index buffers -- `FrameRenderer.bindIndexBuffer`/`drawIndexed` + `Renderer.createIndexBuffer`.
+  - **2-ii**: bound resources + **Camera**. `PipelineSpec.uniformBuffer`/`pushConstants` + a `Stage` enum; jvre owns the descriptor plumbing (per-pipeline per-frame UBO + set, written once), `frame.bind` auto-binds the set, `frame.uniform`/`pushConstants` fill the data. `Camera` (2c): perspective/lookAt, `viewProjection()` as JOML **and** `float[16]`, centralizing the Vulkan Y-flip + zZeroToOne. Demo: a spinning, depth-tested, colored cube via the user pipeline.
+  - **2-iii**: textures (`PipelineSpec.texture` -> binding 1 sampler, `frame.texture` per-frame write) + the **DOGFOOD**: the exact original cube ([pos|color|uv], per-face colors, checker, depth + back-face cull, MVP from the Camera, push pulse) drawn entirely through `createPipeline` + the scene seam.
+- **SCENE retired**: removed the cube geometry, the SCENE pipeline, its UBO/descriptors/texture, `modelViewProjection`, `checkerboardPixels`, the dead `triangle.*` shaders, and all teardown/rebuild. The renderer ships **no built-in geometry** -- 3D is exclusively the public path; the content seam is effect | (scene + shapes) | clear. Nothing privileged left baked in.
+- **Additive + DRY throughout**: the user pipeline funnels through the same bake as the built-ins via `Kind.CUSTOM`; Pipeline owns its own descriptor pool/UBO/sets (variable bindings for UBO and/or texture).
+- **The L1 flexibility half of the North Star is now delivered**: bring your own geometry + shaders + uniforms + textures, mixed with L2, no privileged engine code. See [[L1 Escape Hatch]].
+- **Next**: Phase 2b (capability knobs -- present-mode/vsync, MSAA at construction, GPU-selection override), or pull-based L2 polish, or the power axis. See [[Roadmap]].
+
 ## 2026-06-15 — Phase 2a beat 1: user-defined pipelines (the L1 escape hatch) 🔧✅
 - **jvre's flexibility half goes real.** Beyond the fullscreen-only `ShaderEffect`, a user can now render **their own geometry with their own shaders + vertex layout**, mixed with L2 in one frame -- the North Star's "drop to Vulkan without leaving the engine." **Verified on the 4090**: an RGB custom-pipeline triangle renders under the L2 scene; everything crisp.
 - **The thin, GUARDED seam (design A, chosen over a structured Mesh/Material):**

@@ -1,6 +1,6 @@
 # L1 Escape Hatch (user-defined pipelines)
 
-**Beat 1 shipped 2026-06-15.** [[Roadmap]] Phase 2a -- the most *vision-significant* gap closed: the [[Design North Star]] promises dropping to custom shaders/geometry "without leaving the engine," but before this only `ShaderEffect` (fullscreen, no geometry) honored it. Now a user renders **their own geometry + shaders**, mixed with L2 in one frame.
+**Phase 2a COMPLETE (2026-06-15).** The most *vision-significant* gap closed: the [[Design North Star]] promised dropping to custom shaders/geometry "without leaving the engine," but before this only `ShaderEffect` (fullscreen, no geometry) honored it. Now a user renders **their own geometry + shaders + uniforms + textures**, mixed with L2 in one frame -- and the engine's own textured cube is built on this same public API (the SCENE retirement: nothing privileged left baked in).
 
 ## The shape
 ```java
@@ -31,10 +31,14 @@ renderer.setSceneRenderer(frame -> {
 
 **The record seam is additive.** Non-effect frames run the scene renderer (if set) AND the L2 shapes (if drawn) -- custom geometry under, L2 UI on top. The cube demo is the fallback when neither is set.
 
-## Beat-1 boundaries (what beat 2 adds)
-- **No bound resources yet** -- no descriptors/UBO/push, so no per-draw uniforms or textures. Beat 2 grows `PipelineSpec` (descriptor layout + push) and `FrameRenderer` (`bindIndexBuffer`/`drawIndexed`/`pushConstants`/`bindDescriptor`).
-- **The cube dogfood + the [[Roadmap|Camera (2c)]]** land in beat 2: port the hardcoded cube onto this public path (the real validation) with a real `Camera` feeding the MVP.
-- **Format-change rebuild:** a user pipeline bakes the swapchain format; a format change on resize (rare) would invalidate it. A rebuild hook is a later refinement.
+## Beat 2 (done): bound resources + Camera + the cube dogfood
+- **Index buffers**: `FrameRenderer.bindIndexBuffer`/`drawIndexed`, `Renderer.createIndexBuffer`.
+- **Bound resources**: `PipelineSpec.uniformBuffer(size, stage)` (binding 0) + `texture(stage)` (binding 1) + `pushConstants(size, stage)`, addressed via a `Stage` enum. jvre owns the descriptor plumbing -- the `Pipeline` holds a per-frame UBO buffer + descriptor set (UBO written once, texture written per frame); `frame.bind` auto-binds the set, `frame.uniform`/`frame.texture`/`frame.pushConstants` fill the data. No descriptor pool in user code.
+- **`Camera`** (Phase 2c): perspective/lookAt; `viewProjection()` as JOML `Matrix4f` AND `float[16]`; bakes the Vulkan-correct projection (Y-flip + zZeroToOne).
+- **The dogfood + SCENE retirement**: the engine's exact textured cube now renders through `createPipeline` + the scene seam; the hardcoded SCENE (cube data, its pipeline/UBO/descriptors/texture, `modelViewProjection`, the `triangle.*` shaders) was deleted. The public path is the only path.
+
+## Known limit (catalogued)
+A user pipeline bakes the swapchain format; a format change on resize (rare) would invalidate it. A rebuild hook is a later refinement (see `Renderer.createPipeline`).
 
 ## Not unit-tested -- hardware-verified
 Pipeline creation + the draw seam are GPU-coupled, so per the [[Definition of Done]] this is verified on hardware (a custom RGB triangle rendering under the L2 scene), like every rendering path.

@@ -379,6 +379,15 @@ public class Renderer {
     }
 
     /**
+     * Create a device-local UINT16 index buffer for a custom pipeline's indexed
+     * geometry (shared vertices fetched once, not duplicated). Caller-owned:
+     * {@code close()} it before the Renderer.
+     */
+    public Buffer createIndexBuffer(short[] indices) {
+        return Buffer.deviceLocal(device, commandPool, indices, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+    }
+
+    /**
      * Install the per-frame custom-geometry callback (the L1 scene seam). It runs
      * each frame inside the active render pass, receiving a {@link FrameRenderer}
      * to record bind/draw against. Pass {@code null} to remove it.

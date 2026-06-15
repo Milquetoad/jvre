@@ -2,6 +2,7 @@ package jvre.core;
 
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkDescriptorBufferInfo;
+import org.lwjgl.vulkan.VkDescriptorImageInfo;
 import org.lwjgl.vulkan.VkDescriptorPoolCreateInfo;
 import org.lwjgl.vulkan.VkDescriptorPoolSize;
 import org.lwjgl.vulkan.VkDescriptorSetAllocateInfo;
@@ -117,8 +118,8 @@ public class Pipeline {
                                     int sampleCount, PipelineSpec spec, int framesInFlight) {
         Pipeline p = new Pipeline(device, colorFormat, depthFormat, sampleCount,
                 spec.vertexSpirv, spec.fragmentSpirv, Kind.CUSTOM, spec.label, spec);
-        if (spec.uniformBufferSize > 0) {
-            p.allocateUniformResources(framesInFlight, spec.uniformBufferSize);
+        if (spec.uniformBufferSize > 0 || spec.hasTexture) {
+            p.allocateResources(framesInFlight, spec);
         }
         return p;
     }
@@ -412,18 +413,29 @@ public class Pipeline {
             // Identically-defined layouts are compatible, so sets survive a
             // pipeline rebuild (the resize format-change path).
             if (kind == Kind.FULLSCREEN_EFFECT
-                    || (kind == Kind.CUSTOM && spec.uniformBufferSize == 0)) {
+                    || (kind == Kind.CUSTOM && spec.uniformBufferSize == 0 && !spec.hasTexture)) {
                 // The effect's whole interface is the push block; a CUSTOM pipeline
-                // with no declared UBO binds no resources. Either way, no layout.
+                // with no declared resources binds nothing. Either way, no layout.
                 descriptorSetLayout = VK_NULL_HANDLE;
             } else if (kind == Kind.CUSTOM) {
-                // User-defined: one UBO at binding 0 @ the declared stage.
+                // User-defined: UBO @ binding 0 (if declared) + sampler @ binding 1
+                // (if declared), each at its stage.
+                int n = (spec.uniformBufferSize > 0 ? 1 : 0) + (spec.hasTexture ? 1 : 0);
                 VkDescriptorSetLayoutBinding.Buffer bindings =
-                        VkDescriptorSetLayoutBinding.calloc(1, stack);
-                bindings.get(0).binding(0);
-                bindings.get(0).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
-                bindings.get(0).descriptorCount(1);
-                bindings.get(0).stageFlags(spec.uniformStage.vk);
+                        VkDescriptorSetLayoutBinding.calloc(n, stack);
+                int idx = 0;
+                if (spec.uniformBufferSize > 0) {
+                    bindings.get(idx).binding(0)
+                            .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+                            .descriptorCount(1).stageFlags(spec.uniformStage.vk);
+                    idx++;
+                }
+                if (spec.hasTexture) {
+                    bindings.get(idx).binding(1)
+                            .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                            .descriptorCount(1).stageFlags(spec.textureStage.vk);
+                    idx++;
+                }
 
                 VkDescriptorSetLayoutCreateInfo setLayoutInfo =
                         VkDescriptorSetLayoutCreateInfo.calloc(stack);
@@ -587,12 +599,13 @@ public class Pipeline {
 
     // ---- CUSTOM-pipeline managed uniforms (read by FrameRenderer) ----
 
-    /** True if this (CUSTOM) pipeline declared a UBO -- so a descriptor set exists to bind. */
-    boolean hasUniforms() {
+    /** True if this (CUSTOM) pipeline declared bound resources -- so a descriptor
+     *  set exists to bind (UBO and/or texture). */
+    boolean hasDescriptorSet() {
         return uniformSets != null;
     }
 
-    /** This frame's UBO descriptor set (binding 0). */
+    /** This frame's descriptor set (binding 0 = UBO, binding 1 = texture). */
     long uniformSet(int frame) {
         return uniformSets[frame];
     }
@@ -602,26 +615,57 @@ public class Pipeline {
         uniformBuffers[frame].uploadFloats(data);
     }
 
+    /** Point this frame's descriptor set's binding 1 at {@code tex} (view + sampler). */
+    void uploadTexture(int frame, Texture tex) {
+        try (MemoryStack stack = stackPush()) {
+            VkDescriptorImageInfo.Buffer imgInfo = VkDescriptorImageInfo.calloc(1, stack);
+            imgInfo.imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            imgInfo.imageView(tex.view());
+            imgInfo.sampler(tex.sampler());
+            VkWriteDescriptorSet.Buffer w = VkWriteDescriptorSet.calloc(1, stack);
+            w.get(0).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+            w.get(0).dstSet(uniformSets[frame]);
+            w.get(0).dstBinding(1);
+            w.get(0).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+            w.get(0).descriptorCount(1);
+            w.get(0).pImageInfo(imgInfo);
+            vkUpdateDescriptorSets(device.handle(), w, null);
+        }
+    }
+
     /** The push-constant stage flags (0 if none declared). */
     int pushStageFlags() {
         return pushStageFlags;
     }
 
     /**
-     * Allocate the per-frame UBO buffers + descriptor sets for a CUSTOM pipeline
-     * that declared a uniform buffer. One host-visible UBO + one set per frame in
-     * flight; each set is written ONCE to point at its buffer (the user rewrites
-     * the buffer's CONTENTS per frame). Self-owned -- freed in {@link #close}.
+     * Allocate the per-frame descriptor sets (+ UBO buffers) for a CUSTOM pipeline
+     * that declared bound resources. One set per frame in flight; binding 0 (UBO,
+     * if any) is written ONCE here to point at its per-frame buffer (the user
+     * rewrites contents), and binding 1 (texture, if any) is written per frame via
+     * {@link #uploadTexture}. Self-owned -- freed in {@link #close}.
      */
-    private void allocateUniformResources(int frames, int uboSize) {
-        uniformBuffers = new Buffer[frames];
-        for (int i = 0; i < frames; i++) {
-            uniformBuffers[i] = new Buffer(device, uboSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
+    private void allocateResources(int frames, PipelineSpec spec) {
+        boolean hasUbo = spec.uniformBufferSize > 0;
+        if (hasUbo) {
+            uniformBuffers = new Buffer[frames];
+            for (int i = 0; i < frames; i++) {
+                uniformBuffers[i] = new Buffer(device, spec.uniformBufferSize,
+                        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
+            }
         }
         try (MemoryStack stack = stackPush()) {
-            VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(1, stack);
-            poolSizes.get(0).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
-            poolSizes.get(0).descriptorCount(frames);
+            int n = (hasUbo ? 1 : 0) + (spec.hasTexture ? 1 : 0);
+            VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(n, stack);
+            int pi = 0;
+            if (hasUbo) {
+                poolSizes.get(pi).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(frames);
+                pi++;
+            }
+            if (spec.hasTexture) {
+                poolSizes.get(pi).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(frames);
+                pi++;
+            }
 
             VkDescriptorPoolCreateInfo poolInfo = VkDescriptorPoolCreateInfo.calloc(stack);
             poolInfo.sType(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO);
@@ -648,18 +692,21 @@ public class Pipeline {
             uniformSets = new long[frames];
             for (int i = 0; i < frames; i++) {
                 uniformSets[i] = pSets.get(i);
-                VkDescriptorBufferInfo.Buffer bufInfo = VkDescriptorBufferInfo.calloc(1, stack);
-                bufInfo.buffer(uniformBuffers[i].handle());
-                bufInfo.offset(0);
-                bufInfo.range(VK_WHOLE_SIZE);
-                VkWriteDescriptorSet.Buffer w = VkWriteDescriptorSet.calloc(1, stack);
-                w.get(0).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
-                w.get(0).dstSet(uniformSets[i]);
-                w.get(0).dstBinding(0);
-                w.get(0).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
-                w.get(0).descriptorCount(1);
-                w.get(0).pBufferInfo(bufInfo);
-                vkUpdateDescriptorSets(device.handle(), w, null);
+                if (hasUbo) {
+                    VkDescriptorBufferInfo.Buffer bufInfo = VkDescriptorBufferInfo.calloc(1, stack);
+                    bufInfo.buffer(uniformBuffers[i].handle());
+                    bufInfo.offset(0);
+                    bufInfo.range(VK_WHOLE_SIZE);
+                    VkWriteDescriptorSet.Buffer w = VkWriteDescriptorSet.calloc(1, stack);
+                    w.get(0).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+                    w.get(0).dstSet(uniformSets[i]);
+                    w.get(0).dstBinding(0);
+                    w.get(0).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+                    w.get(0).descriptorCount(1);
+                    w.get(0).pBufferInfo(bufInfo);
+                    vkUpdateDescriptorSets(device.handle(), w, null);
+                }
+                // binding 1 (texture) is written per frame via uploadTexture.
             }
         }
     }

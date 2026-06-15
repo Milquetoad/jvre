@@ -4,6 +4,7 @@ import jvre.core.AttribFormat;
 import jvre.core.Buffer;
 import jvre.core.Camera;
 import jvre.core.Color;
+import jvre.core.Cull;
 import jvre.core.Diagnostics;
 import jvre.core.Input;
 import jvre.core.Instance;
@@ -64,8 +65,9 @@ public class Main {
     private Texture demoImage;    // a generated texture drawn via g.image(), when DEMO_2D
     private Texture demoImage2;   // a SECOND texture -- proves multi-texture batching (flush-on-switch)
     private Pipeline cubePipeline; // a USER-DEFINED pipeline (the L1 escape hatch)
-    private Buffer cubeVerts;      // its vertex geometry (an indexed cube)
+    private Buffer cubeVerts;      // its vertex geometry (an indexed, textured cube)
     private Buffer cubeIndices;    // its UINT16 indices
+    private Texture cubeTexture;   // its checker texture
     private final Camera camera = new Camera();  // computes the cube's view + projection
 
     // A user's own shaders for the custom pipeline -- compiled at runtime via
@@ -76,16 +78,23 @@ public class Main {
             #version 450
             layout(location = 0) in vec3 inPos;
             layout(location = 1) in vec3 inColor;
+            layout(location = 2) in vec2 inUv;
             layout(set = 0, binding = 0) uniform U { mat4 mvp; } u;
             layout(location = 0) out vec3 vColor;
-            void main() { gl_Position = u.mvp * vec4(inPos, 1.0); vColor = inColor; }
+            layout(location = 1) out vec2 vUv;
+            void main() { gl_Position = u.mvp * vec4(inPos, 1.0); vColor = inColor; vUv = inUv; }
             """;
     private static final String CUBE_FRAG = """
             #version 450
             layout(location = 0) in vec3 vColor;
+            layout(location = 1) in vec2 vUv;
+            layout(set = 0, binding = 1) uniform sampler2D tex;
             layout(push_constant) uniform Push { float pulse; } pc;
             layout(location = 0) out vec4 outColor;
-            void main() { outColor = vec4(vColor * pc.pulse, 1.0); }
+            void main() {
+                vec4 t = texture(tex, vUv);          // grayscale checker
+                outColor = vec4(t.rgb * vColor * pc.pulse, t.a);  // tinted per face, pulsed
+            }
             """;
 
     public static void main(String[] args) {
@@ -141,37 +150,45 @@ public class Main {
             renderer.font();
         }
 
-        // The L1 escape hatch: a USER-DEFINED pipeline drawing a spinning 3D cube
-        // with the user's own shaders + vertex layout, a UBO (MVP from a Camera), a
-        // push constant (brightness pulse), and depth testing -- recorded through
-        // the scene seam, UNDER the L2 content (3D world + 2D UI, one frame).
+        // The L1 escape-hatch DOGFOOD: reproduce jvre's own textured 3D cube using
+        // NOTHING but the public API -- the user's shaders, the [pos|color|uv]
+        // vertex layout, a UBO (MVP from a Camera), a checker texture, a push pulse,
+        // depth + back-face cull. Recorded through the scene seam, UNDER the L2
+        // content (a 3D world + a 2D UI overlay in one frame).
         byte[] cubeVs = ShaderCompiler.compileVertex(CUBE_VERT, "cube.vert");
         byte[] cubeFs = ShaderCompiler.compileFragment(CUBE_FRAG, "cube.frag");
-        VertexLayout cubeLayout = VertexLayout.builder(6 * Float.BYTES)
+        VertexLayout cubeLayout = VertexLayout.builder(8 * Float.BYTES)
                 .attribute(0, AttribFormat.VEC3, 0)               // position
                 .attribute(1, AttribFormat.VEC3, 3 * Float.BYTES) // color
+                .attribute(2, AttribFormat.VEC2, 6 * Float.BYTES) // uv
                 .build();
         cubePipeline = renderer.createPipeline(PipelineSpec.builder()
                 .vertexShader(cubeVs).fragmentShader(cubeFs)
                 .vertexLayout(cubeLayout)
-                .depthTest(true).depthWrite(true)                 // solid via depth (cull NONE: winding-safe)
-                .uniformBuffer(16 * Float.BYTES, Stage.VERTEX)    // mat4 MVP
-                .pushConstants(Float.BYTES, Stage.FRAGMENT)       // float pulse
+                .depthTest(true).depthWrite(true).cull(Cull.BACK)  // closed opaque mesh
+                .uniformBuffer(16 * Float.BYTES, Stage.VERTEX)     // mat4 MVP
+                .texture(Stage.FRAGMENT)                           // the checker
+                .pushConstants(Float.BYTES, Stage.FRAGMENT)        // float pulse
                 .label("demo-cube").build());
+        cubeTexture = renderer.createImage(makeChecker(256, 32), 256, 256);
         cubeVerts = renderer.createVertexBuffer(new float[] {
-                //  x   y   z      r  g  b   (corner color from position)
-                -1, -1, -1,   0, 0, 0,
-                 1, -1, -1,   1, 0, 0,
-                 1,  1, -1,   1, 1, 0,
-                -1,  1, -1,   0, 1, 0,
-                -1, -1,  1,   0, 0, 1,
-                 1, -1,  1,   1, 0, 1,
-                 1,  1,  1,   1, 1, 1,
-                -1,  1,  1,   0, 1, 1,
+                //    x      y      z       r     g     b      u   v   (per-face, CCW from outside)
+                -0.5f,-0.5f, 0.5f, 1.0f,0.3f,0.3f, 0f,0f,  0.5f,-0.5f, 0.5f, 1.0f,0.3f,0.3f, 1f,0f,
+                 0.5f, 0.5f, 0.5f, 1.0f,0.3f,0.3f, 1f,1f, -0.5f, 0.5f, 0.5f, 1.0f,0.3f,0.3f, 0f,1f, // +Z red
+                 0.5f,-0.5f,-0.5f, 0.3f,1.0f,0.3f, 0f,0f, -0.5f,-0.5f,-0.5f, 0.3f,1.0f,0.3f, 1f,0f,
+                -0.5f, 0.5f,-0.5f, 0.3f,1.0f,0.3f, 1f,1f,  0.5f, 0.5f,-0.5f, 0.3f,1.0f,0.3f, 0f,1f, // -Z green
+                 0.5f,-0.5f, 0.5f, 0.3f,0.3f,1.0f, 0f,0f,  0.5f,-0.5f,-0.5f, 0.3f,0.3f,1.0f, 1f,0f,
+                 0.5f, 0.5f,-0.5f, 0.3f,0.3f,1.0f, 1f,1f,  0.5f, 0.5f, 0.5f, 0.3f,0.3f,1.0f, 0f,1f, // +X blue
+                -0.5f,-0.5f,-0.5f, 1.0f,1.0f,0.3f, 0f,0f, -0.5f,-0.5f, 0.5f, 1.0f,1.0f,0.3f, 1f,0f,
+                -0.5f, 0.5f, 0.5f, 1.0f,1.0f,0.3f, 1f,1f, -0.5f, 0.5f,-0.5f, 1.0f,1.0f,0.3f, 0f,1f, // -X yellow
+                -0.5f, 0.5f, 0.5f, 0.3f,1.0f,1.0f, 0f,0f,  0.5f, 0.5f, 0.5f, 0.3f,1.0f,1.0f, 1f,0f,
+                 0.5f, 0.5f,-0.5f, 0.3f,1.0f,1.0f, 1f,1f, -0.5f, 0.5f,-0.5f, 0.3f,1.0f,1.0f, 0f,1f, // +Y cyan
+                -0.5f,-0.5f,-0.5f, 1.0f,0.3f,1.0f, 0f,0f,  0.5f,-0.5f,-0.5f, 1.0f,0.3f,1.0f, 1f,0f,
+                 0.5f,-0.5f, 0.5f, 1.0f,0.3f,1.0f, 1f,1f, -0.5f,-0.5f, 0.5f, 1.0f,0.3f,1.0f, 0f,1f, // -Y magenta
         });
         cubeIndices = renderer.createIndexBuffer(new short[] {
-                0, 1, 2,  2, 3, 0,    4, 5, 6,  6, 7, 4,    0, 3, 7,  7, 4, 0,
-                1, 2, 6,  6, 5, 1,    0, 1, 5,  5, 4, 0,    3, 2, 6,  6, 7, 3,
+                 0, 1, 2,  2, 3, 0,    4, 5, 6,  6, 7, 4,    8, 9,10, 10,11, 8,
+                12,13,14, 14,15,12,   16,17,18, 18,19,16,   20,21,22, 22,23,20,
         });
         renderer.setSceneRenderer(frame -> {
             float t = renderer.time();
@@ -179,12 +196,12 @@ public class Main {
             camera.perspective(45f, aspect, 0.1f, 100f).lookAt(0, 0, 4,  0, 0, 0,  0, 1, 0);
             Matrix4f model = new Matrix4f()
                     .translate(1.4f, -1.2f, 0f)          // lower-right of the view
-                    .rotateX(t * 0.6f).rotateY(t)        // tumble so all faces show
-                    .scale(0.5f);
+                    .rotateX(t * 0.6f).rotateY(t);       // tumble so all faces show
             float[] mvp = new Matrix4f(camera.viewProjection()).mul(model).get(new float[16]);
-            float pulse = 0.65f + 0.35f * (float) Math.sin(t * 3.0);
+            float pulse = 0.85f + 0.15f * (float) Math.sin(t * 3.0);
             frame.bind(cubePipeline);
             frame.uniform(mvp);                          // write this frame's UBO
+            frame.texture(cubeTexture);                  // bind this frame's texture
             frame.pushConstants(new float[] { pulse });
             frame.bindVertexBuffer(cubeVerts);
             frame.bindIndexBuffer(cubeIndices);
@@ -211,6 +228,21 @@ public class Main {
                 px[i + 1] = (byte) (swap ? ramp2 : ramp);     // G
                 px[i + 2] = (byte) (swap ? ramp : ramp2);     // B
                 px[i + 3] = (byte) 255;                       // opaque
+            }
+        }
+        return px;
+    }
+
+    /** A grayscale checkerboard (white / dark gray), {@code cell} texels per square,
+     *  as opaque R8G8B8A8 -- the cube's texture, tinted per face by the vertex color. */
+    private static byte[] makeChecker(int size, int cell) {
+        byte[] px = new byte[size * size * 4];
+        for (int y = 0; y < size; y++) {
+            for (int x = 0; x < size; x++) {
+                int v = (((x / cell) + (y / cell)) & 1) == 0 ? 0xFF : 0x40;
+                int i = (y * size + x) * 4;
+                px[i] = px[i + 1] = px[i + 2] = (byte) v;
+                px[i + 3] = (byte) 255;
             }
         }
         return px;
@@ -261,7 +293,7 @@ public class Main {
         g.image(demoImage, 40, 330, 90, 90);
         g.image(demoImage2, 150, 330, 90, 90);
         g.text("jvre", 280, 330, 52, Color.rgb(20, 20, 20));
-        g.text("L2: shapes, images, text.\nL1: the spinning cube (custom pipeline: UBO + push + camera).",
+        g.text("L2: shapes, images, text.\nL1: the textured cube (custom pipeline: UBO + texture + push + camera).",
                 280, 388, 17, Color.rgb(70, 70, 70));
 
         // A nested TRANSFORM group (rotated rounded-rect + label, drawn as a unit).
@@ -316,6 +348,9 @@ public class Main {
             demoImage2.close();
         }
         // Caller-owned custom pipeline + its geometry (close before the renderer).
+        if (cubeTexture != null) {
+            cubeTexture.close();
+        }
         if (cubeIndices != null) {
             cubeIndices.close();
         }

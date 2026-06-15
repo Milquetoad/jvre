@@ -43,8 +43,11 @@ The cheapest, highest-leverage work, and it pays both North Star debts on the L2
 ## Phase 2 -- Deliver L1 flexibility (mid-term)
 The most *vision-significant* gap: the North Star promises dropping to custom shaders/geometry "without leaving the engine," but only fullscreen effects honor it today.
 
-- **2a. The geometry escape hatch.** A sanctioned path to render user geometry with a user vertex format + shaders + (optional) descriptors, mixable with L2 in one program. Requires generalizing the fixed `Pipeline` kinds and lifting the hardcoded cube in `Renderer` into a public mesh/draw path. *Size:* large; the keystone of L1. *Why here:* it's the flexibility half of the whole thesis.
+- **2a. The geometry escape hatch.** A sanctioned path to render user geometry with a user vertex format + shaders + (optional) descriptors, mixable with L2 in one program. The keystone of L1.
+  - **Beat 1 ✅ (2026-06-15)**: user-defined pipelines via the thin guarded seam (`PipelineSpec`/`createPipeline` + `SceneRenderer`/`FrameRenderer`), additive through a `Pipeline.Kind.CUSTOM`. Shaders + vertex layout + draw, mixed with L2. See [[L1 Escape Hatch]].
+  - **Beat 2 (next)**: bound resources (descriptors/UBO/push + textures) on the spec + frame seam, the **Camera (2c)**, and porting the hardcoded cube onto this public path (the real dogfood).
 - **2b. Capability knobs.** Creation-time / policy seams that the planned notes already call for: **present-mode / vsync** (hardcoded MAILBOX today), **MSAA sample count** at construction, and **GPU selection override** + groundwork for runtime switching (the scoring *policy* exists in `rateDevice`; the *override* is unexposed). *Size:* medium. See [[Device Selection and Cross-Platform (planned)]], [[Game-Engine Capabilities (planned)]].
+- **2c. A camera helper (companion to 2a; added 2026-06-15).** An *on-demand* view + projection helper that centralizes the Vulkan-correct projection -- the JOML Y-flip + `zZeroToOne` clip-space lesson already solved once for the cube -- so 3D users don't re-derive it (hide the Vulkan gotcha, not the concept). **Matrix math only in v1** (controllers like orbit/FPS are input-bound -> examples, not the helper). *Open decision:* expose JOML `Matrix4f`, a neutral `float[16]`, or both (JOML is currently implementation-only; a public Camera would surface it). *Why here:* turns "render a mesh" (2a) into "render a scene" -- the API vision lists Mesh/**Camera** together.
 
 ## Phase 3 -- Pull-based polish & the first real consumer
 Slot opportunistically; let need drive it.
@@ -62,11 +65,14 @@ The project-management / delivery half of the learning goal. Climbs a ladder rat
 - Cross-cutting: a **getting-started + API overview + examples** doc set (shares work with 1d), and an **honest scope statement** in the README.
 
 ## Phase 4 -- The power axis (longer-term)
-Net-new capability; "reachable, not promised."
+Net-new capability; "reachable, not promised." None are on the v1.0 path -- all post-1.0. (4b-4d spitballed 2026-06-15.)
 
-- **4a. Render-to-texture / offscreen targets** -- enables screenshot capture and post-processing/effect chains.
-- **4b. Compute shaders** -- compute pipeline, dispatch, storage buffers/images. The big "powerful" milestone the discrete-GPU substrate makes reachable.
-- **4c. Ray / path tracing** -- the long-horizon aspiration; reachable on the hardware, not a promise.
+- **4a. Render-to-texture / offscreen targets.** Render into an image instead of the swapchain -- the FOUNDATION for 4b (readback) and post-processing / effect chains.
+- **4b. Headless + frame readback.** Render with no window (no swapchain) and copy the result image back to CPU memory. Beyond screenshots, the strategic payoff is **automated visual-regression testing** (render a frame -> diff a golden PNG) -- the one thing CI structurally can't do today. Needs a GPU/driver: runs on Hal, a GPU CI runner, or a SOFTWARE Vulkan impl (lavapipe/SwiftShader) headless in CI. *Builds on 4a.* Could be **elevated before 1.0** if rendering-under-test becomes a priority.
+- **4c. Instanced rendering.** One draw call -> N copies with per-instance data (particles, tiles, many meshes). A real Vulkan lesson (per-instance input rate, instance buffers, `vkCmdDraw` instanceCount). Presupposes the 2a geometry path; jvre's L2 already covers "many shapes" via the vertex arena, so this is the 3D/scene side.
+- **4d. GPU timestamp queries.** `vkCmdWriteTimestamp` + query pools to measure GPU-side pass timing -- profiling + a perf HUD. Extends the [[Diagnostics and the Crash Log|Diagnostics]] story from "what crashed" to "what's slow."
+- **4e. Compute shaders** -- compute pipeline, dispatch, storage buffers/images. The big "powerful" milestone the discrete-GPU substrate makes reachable.
+- **4f. Ray / path tracing** -- the long-horizon aspiration; reachable on the hardware, not a promise.
 
 ---
 

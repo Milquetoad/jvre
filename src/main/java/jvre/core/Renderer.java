@@ -1,6 +1,5 @@
 package jvre.core;
 
-import org.joml.Matrix4f;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkClearValue;
@@ -10,7 +9,6 @@ import org.lwjgl.vulkan.VkCommandBufferBeginInfo;
 import org.lwjgl.vulkan.VkCommandBufferSubmitInfo;
 import org.lwjgl.vulkan.VkCommandPoolCreateInfo;
 import org.lwjgl.vulkan.VkDependencyInfo;
-import org.lwjgl.vulkan.VkDescriptorBufferInfo;
 import org.lwjgl.vulkan.VkDescriptorImageInfo;
 import org.lwjgl.vulkan.VkDescriptorPoolCreateInfo;
 import org.lwjgl.vulkan.VkDescriptorPoolSize;
@@ -59,81 +57,11 @@ public class Renderer {
     private final Surface surface;
     private final Window window;
 
-    // The demo triangle's shaders, compiled GLSL -> SPIR-V by the Gradle
-    // compileShaders task and loaded from the classpath. Becomes real API once
-    // users bring their own shaders (the L2 Shadertoy altitude).
-    private static final String TRIANGLE_VERT = "/shaders/triangle.vert.spv";
-    private static final String TRIANGLE_FRAG = "/shaders/triangle.frag.spv";
     private static final String SHAPE2D_VERT = "/shaders/shape2d.vert.spv";
     private static final String SHAPE2D_FRAG = "/shaders/shape2d.frag.spv";
 
-    // The demo CUBE's geometry -- interleaved, 8 floats per vertex:
-    // [x y z | r g b | u v]. 24 vertices (4 per face x 6 faces, NOT 8 shared
-    // corners): a textured, per-face-colored cube can't share corners, because
-    // each face needs its own full UVs (0..1) and its own color. Each face gets a
-    // solid tint; the grayscale checker texture is multiplied by it in the shader,
-    // so every face reads as its own color in a checker pattern. Model space,
-    // side 1 (corners at +/-0.5). Demo content, destined to become API.
-    private static final float[] CUBE_VERTICES = {
-            //    x      y      z       r     g     b      u     v
-            // +Z face (red)
-            -0.5f, -0.5f,  0.5f,   1.0f, 0.3f, 0.3f,  0.0f, 0.0f,
-             0.5f, -0.5f,  0.5f,   1.0f, 0.3f, 0.3f,  1.0f, 0.0f,
-             0.5f,  0.5f,  0.5f,   1.0f, 0.3f, 0.3f,  1.0f, 1.0f,
-            -0.5f,  0.5f,  0.5f,   1.0f, 0.3f, 0.3f,  0.0f, 1.0f,
-            // -Z face (green)
-             0.5f, -0.5f, -0.5f,   0.3f, 1.0f, 0.3f,  0.0f, 0.0f,
-            -0.5f, -0.5f, -0.5f,   0.3f, 1.0f, 0.3f,  1.0f, 0.0f,
-            -0.5f,  0.5f, -0.5f,   0.3f, 1.0f, 0.3f,  1.0f, 1.0f,
-             0.5f,  0.5f, -0.5f,   0.3f, 1.0f, 0.3f,  0.0f, 1.0f,
-            // +X face (blue)
-             0.5f, -0.5f,  0.5f,   0.3f, 0.3f, 1.0f,  0.0f, 0.0f,
-             0.5f, -0.5f, -0.5f,   0.3f, 0.3f, 1.0f,  1.0f, 0.0f,
-             0.5f,  0.5f, -0.5f,   0.3f, 0.3f, 1.0f,  1.0f, 1.0f,
-             0.5f,  0.5f,  0.5f,   0.3f, 0.3f, 1.0f,  0.0f, 1.0f,
-            // -X face (yellow)
-            -0.5f, -0.5f, -0.5f,   1.0f, 1.0f, 0.3f,  0.0f, 0.0f,
-            -0.5f, -0.5f,  0.5f,   1.0f, 1.0f, 0.3f,  1.0f, 0.0f,
-            -0.5f,  0.5f,  0.5f,   1.0f, 1.0f, 0.3f,  1.0f, 1.0f,
-            -0.5f,  0.5f, -0.5f,   1.0f, 1.0f, 0.3f,  0.0f, 1.0f,
-            // +Y face (cyan)
-            -0.5f,  0.5f,  0.5f,   0.3f, 1.0f, 1.0f,  0.0f, 0.0f,
-             0.5f,  0.5f,  0.5f,   0.3f, 1.0f, 1.0f,  1.0f, 0.0f,
-             0.5f,  0.5f, -0.5f,   0.3f, 1.0f, 1.0f,  1.0f, 1.0f,
-            -0.5f,  0.5f, -0.5f,   0.3f, 1.0f, 1.0f,  0.0f, 1.0f,
-            // -Y face (magenta)
-            -0.5f, -0.5f, -0.5f,   1.0f, 0.3f, 1.0f,  0.0f, 0.0f,
-             0.5f, -0.5f, -0.5f,   1.0f, 0.3f, 1.0f,  1.0f, 0.0f,
-             0.5f, -0.5f,  0.5f,   1.0f, 0.3f, 1.0f,  1.0f, 1.0f,
-            -0.5f, -0.5f,  0.5f,   1.0f, 0.3f, 1.0f,  0.0f, 1.0f,
-    };
-
-    // 36 indices = 6 faces x 2 triangles x 3. Each face's 4 corners (base b) form
-    // two triangles b,b+1,b+2 and b+2,b+3,b -- the same diagonal split as the old
-    // quad. Winding is CCW viewed from OUTSIDE each face, consistently -- this is
-    // load-bearing now: the Pipeline back-face-culls, judging winding after the
-    // projection's Y-flip (see the rasterizer comment there). The depth buffer
-    // makes the cube correct; culling makes the hidden half free.
-    // shorts = VK_INDEX_TYPE_UINT16.
-    private static final short[] CUBE_INDICES = {
-             0,  1,  2,   2,  3,  0,   // +Z (red)
-             4,  5,  6,   6,  7,  4,   // -Z (green)
-             8,  9, 10,  10, 11,  8,   // +X (blue)
-            12, 13, 14,  14, 15, 12,   // -X (yellow)
-            16, 17, 18,  18, 19, 16,   // +Y (cyan)
-            20, 21, 22,  22, 23, 20,   // -Y (magenta)
-    };
-
     private final Device device;
     private Swapchain swapchain;
-    private Pipeline pipeline;
-    private Buffer vertexBuffer;
-    private Buffer indexBuffer;
-
-    // The demo texture: a generated checkerboard, uploaded to a device-local
-    // VkImage. Created + filled now (the upload path is validated even before it
-    // is displayed); sampled once the view/sampler/descriptor/shader beats land.
-    private Texture texture;
 
     // The optional fullscreen ShaderEffect: when installed, recordCommandBuffer
     // draws IT instead of the cube demo -- the first content seam in the
@@ -179,19 +107,6 @@ public class Renderer {
     // each frame alongside any L2 shapes; the cube demo is the fallback when
     // neither is active. User-owned pipelines/buffers -- jvre just invokes this.
     private SceneRenderer sceneRenderer;
-
-    // Uniform buffers, one PER FRAME IN FLIGHT (same reasoning as the sync
-    // objects: frame N+1's CPU write must not stomp frame N's in-flight GPU
-    // read; the slot's fence guards the handoff). Host-visible on purpose --
-    // rewritten every frame, so staging to VRAM would just add a copy.
-    private Buffer[] uniformBuffers;
-
-    // Descriptor machinery: the POOL allocates SETS; each set is a pointer
-    // table matching the Pipeline's descriptor set LAYOUT (the shape). Our
-    // sets are written ONCE -- each points permanently at its frame's UBO;
-    // only the buffer CONTENTS change per frame.
-    private long descriptorPool = VK_NULL_HANDLE;
-    private long[] descriptorSets;
 
     // The clear color (RGBA in [0,1]); becomes real API once there is more to
     // render than a clear. The swapchain is an sRGB format, so these linear
@@ -245,35 +160,11 @@ public class Renderer {
         // image format (dynamic rendering's one remaining coupling).
         this.device = new Device(instance, surface);
         this.swapchain = new Swapchain(device, surface, window);
-        this.pipeline = new Pipeline(device, swapchain.imageFormat(), swapchain.depthFormat(),
-                swapchain.sampleCount(), TRIANGLE_VERT, TRIANGLE_FRAG);
-
-        // Pool first: the vertex-buffer upload below records a one-shot
-        // transfer command buffer from it.
+        // The command pool: one-shot transfer command buffers (texture/buffer
+        // uploads from createImage / createVertexBuffer / font) record from it, as
+        // do the per-frame command buffers. No built-in geometry anymore -- the
+        // renderer ships no cube; users bring their own via createPipeline.
         createCommandPool();
-
-        // Vertex + index buffers, in DEVICE_LOCAL memory (VRAM) via staging
-        // uploads -- static geometry belongs where the GPU reads fastest. (The
-        // first version of this used plain HOST_VISIBLE memory: simpler, but
-        // the GPU then re-reads it over the bus every frame.)
-        this.vertexBuffer = Buffer.deviceLocal(device, commandPool,
-                CUBE_VERTICES, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-        this.indexBuffer = Buffer.deviceLocal(device, commandPool,
-                CUBE_INDICES, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
-        System.out.println("Vertex + index buffers created ("
-                + vertexBuffer.size() + " + " + indexBuffer.size()
-                + " bytes, device-local via staging).");
-
-        // A 256x256 checkerboard (32px cells = an 8x8 grid). Generated on the
-        // CPU, staged, and copied into a device-local image with the layout
-        // transitions Texture handles. A checkerboard is the classic
-        // nearest-vs-linear demonstrator -- it earns its keep when we sample it.
-        this.texture = Texture.create(device, commandPool,
-                checkerboardPixels(256, 256, 32), 256, 256);
-        System.out.println("Checkerboard texture created (256x256, device-local via staging).");
-
-        createUniformBuffers();
-        createDescriptors();
         createCommandBuffers();
         createSyncObjects();
     }
@@ -534,164 +425,12 @@ public class Renderer {
     }
 
     // ------------------------------------------------------------------
-    // Uniform buffers + descriptors
+    // (Removed: the built-in cube's uniform buffers, descriptor pool/sets,
+    // model-view-projection, and checkerboard texture -- the hardcoded SCENE is
+    // retired. 3D geometry now goes through the public custom-pipeline API:
+    // createPipeline + a SceneRenderer, with per-pipeline UBO/texture descriptors
+    // owned by Pipeline. See the demo cube in Main.)
     // ------------------------------------------------------------------
-
-    /** One 64-byte (mat4) host-writable UBO per frame in flight (rewritten every
-     *  frame, so staging to VRAM would just add a copy -- hostVisible intent). */
-    private void createUniformBuffers() {
-        uniformBuffers = new Buffer[MAX_FRAMES_IN_FLIGHT];
-        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-            uniformBuffers[i] = new Buffer(device, 16 * Float.BYTES,
-                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
-        }
-    }
-
-    /**
-     * The descriptor plumbing: a POOL sized for exactly our needs, one SET per
-     * frame in flight allocated from it (each an instance of the Pipeline's
-     * set layout), and a one-time vkUpdateDescriptorSets pointing set[i] at
-     * uniformBuffers[i]. After this, nothing here changes again -- per frame
-     * we rewrite buffer CONTENTS and bind the right set; the pointers stand.
-     */
-    private void createDescriptors() {
-        try (MemoryStack stack = stackPush()) {
-            // ---- Pool: capacity must cover EACH descriptor TYPE we allocate --
-            // one uniform-buffer descriptor AND one combined-image-sampler
-            // descriptor per frame in flight. maxSets is still one set per frame
-            // (each set holds both bindings). Pools exist so set allocation is
-            // cheap and arena-like (destroying the pool frees every set).
-            VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(2, stack);
-            poolSizes.get(0).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
-            poolSizes.get(0).descriptorCount(MAX_FRAMES_IN_FLIGHT);
-            poolSizes.get(1).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
-            poolSizes.get(1).descriptorCount(MAX_FRAMES_IN_FLIGHT);
-
-            VkDescriptorPoolCreateInfo poolInfo = VkDescriptorPoolCreateInfo.calloc(stack);
-            poolInfo.sType(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO);
-            poolInfo.pPoolSizes(poolSizes);
-            poolInfo.maxSets(MAX_FRAMES_IN_FLIGHT);
-
-            LongBuffer pPool = stack.longs(VK_NULL_HANDLE);
-            Vk.check(vkCreateDescriptorPool(device.handle(), poolInfo, null, pPool),
-                    "Failed to create the descriptor pool");
-            descriptorPool = pPool.get(0);
-
-            // ---- Allocate the sets: one layout handle per requested set.
-            LongBuffer layouts = stack.mallocLong(MAX_FRAMES_IN_FLIGHT);
-            for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-                layouts.put(pipeline.descriptorSetLayout());
-            }
-            layouts.flip();
-
-            VkDescriptorSetAllocateInfo allocInfo = VkDescriptorSetAllocateInfo.calloc(stack);
-            allocInfo.sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO);
-            allocInfo.descriptorPool(descriptorPool);
-            allocInfo.pSetLayouts(layouts);
-
-            LongBuffer pSets = stack.mallocLong(MAX_FRAMES_IN_FLIGHT);
-            Vk.check(vkAllocateDescriptorSets(device.handle(), allocInfo, pSets),
-                    "Failed to allocate descriptor sets");
-            descriptorSets = new long[MAX_FRAMES_IN_FLIGHT];
-            for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-                descriptorSets[i] = pSets.get(i);
-            }
-
-            // ---- Wire each set's two bindings (once): binding 0 -> this frame's
-            // UBO, binding 1 -> the shared texture (view + sampler). The UBO is
-            // per-frame (its CONTENTS change each frame); the texture is the SAME
-            // image for every set (one picture), so all sets point at it.
-            for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-                VkDescriptorBufferInfo.Buffer bufferInfo =
-                        VkDescriptorBufferInfo.calloc(1, stack);
-                bufferInfo.buffer(uniformBuffers[i].handle());
-                bufferInfo.offset(0);
-                bufferInfo.range(VK_WHOLE_SIZE);
-
-                // The image must be in SHADER_READ_ONLY_OPTIMAL here -- exactly
-                // the layout Texture's upload left it in.
-                VkDescriptorImageInfo.Buffer imageInfo =
-                        VkDescriptorImageInfo.calloc(1, stack);
-                imageInfo.imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-                imageInfo.imageView(texture.view());
-                imageInfo.sampler(texture.sampler());
-
-                // One write per binding, applied together.
-                VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(2, stack);
-                writes.get(0).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
-                writes.get(0).dstSet(descriptorSets[i]);
-                writes.get(0).dstBinding(0);                          // = shader binding 0
-                writes.get(0).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
-                writes.get(0).descriptorCount(1);
-                writes.get(0).pBufferInfo(bufferInfo);
-
-                writes.get(1).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
-                writes.get(1).dstSet(descriptorSets[i]);
-                writes.get(1).dstBinding(1);                          // = shader binding 1
-                writes.get(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
-                writes.get(1).descriptorCount(1);
-                writes.get(1).pImageInfo(imageInfo);
-
-                vkUpdateDescriptorSets(device.handle(), writes, null);
-            }
-        }
-        System.out.println("Descriptor pool + " + MAX_FRAMES_IN_FLIGHT + " sets created.");
-    }
-
-    /**
-     * The per-frame model-view-projection, COLUMN-major as GLSL/std140 expect.
-     * JOML now does the matrix work that "arrives with 3D" (the hand-rolled 2D
-     * affine is retired). Three stages, multiplied proj * view * model:
-     *   - MODEL: a tumble around two axes (X and Y at different rates) so all six
-     *     cube faces rotate into view, and depth testing visibly hides the far
-     *     faces behind the near ones.
-     *   - VIEW: push the world 2.5 units down -z (camera at the origin looking
-     *     down -z, the OpenGL/JOML convention).
-     *   - PROJECTION: a real perspective frustum, 45 deg vertical FOV.
-     *
-     * Two Vulkan-isms JOML must be told about (it defaults to OpenGL):
-     *   - zZeroToOne = true: Vulkan clip-space depth is [0,1], not GL's [-1,1]
-     *     (gets depth testing right once beat 2 lands).
-     *   - flip Y (negate proj.m11): Vulkan clip/NDC Y points DOWN vs GL's UP
-     *     (otherwise everything renders upside down).
-     */
-    private float[] modelViewProjection(float time, float aspect) {
-        Matrix4f model = new Matrix4f()
-                .rotateX(time * 0.6f)   // tumble around two axes so all six
-                .rotateY(time);         // faces come into view
-        Matrix4f view = new Matrix4f().translate(0f, 0f, -2.5f);
-        Matrix4f proj = new Matrix4f().perspective(
-                (float) Math.toRadians(45.0), aspect, 0.1f, 10.0f, true);
-        proj.m11(proj.m11() * -1.0f);  // Vulkan Y-flip
-
-        float[] out = new float[16];
-        proj.mul(view).mul(model).get(out);  // proj*view*model -> column-major floats
-        return out;
-    }
-
-    /**
-     * Generate a {@code width} x {@code height} GRAYSCALE checkerboard, {@code
-     * cell} texels per square, as tightly-packed OPAQUE R8G8B8A8 bytes (row-major,
-     * top-to-bottom). Demo content -- destined to become "load a PNG". Grayscale
-     * (white / dark gray) on purpose: triangle.frag multiplies it by the per-face
-     * vertex color, so each cube face shows as its own tint in a checker pattern.
-     * (Earlier, for the alpha-blend beat, half the cells were transparent magenta;
-     * the cube wants an opaque, tintable texture. The blend pipeline state stays
-     * on -- opaque alpha just makes it a no-op.)
-     */
-    private static byte[] checkerboardPixels(int width, int height, int cell) {
-        byte[] px = new byte[width * height * 4];
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                boolean on = (((x / cell) + (y / cell)) & 1) == 0;
-                int i = (y * width + x) * 4;
-                int v = on ? 0xFF : 0x40;               // white vs dark gray
-                px[i] = px[i + 1] = px[i + 2] = (byte) v;
-                px[i + 3] = (byte) 0xFF;                // opaque
-            }
-        }
-        return px;
-    }
 
     // ------------------------------------------------------------------
     // Command pool + buffers -- record barrier / clear / barrier (dynamic rendering)
@@ -917,8 +656,9 @@ public class Renderer {
             scissor.extent().width(swapchain.width()).height(swapchain.height());
             vkCmdSetScissor(cmd, 0, scissor);
 
-            // The content seam: a fullscreen ShaderEffect when installed,
-            // otherwise the cube demo.
+            // The content seam: a fullscreen ShaderEffect when installed; else the
+            // L1 custom-geometry scene and/or the L2 shapes (both may run); else
+            // just the clear (no built-in geometry).
             if (effectPipeline != null) {
                 // ---- ShaderEffect: 3 vertices, ZERO buffers ----
                 // No vertex buffer, no index buffer, no descriptor sets -- the
@@ -974,43 +714,8 @@ public class Renderer {
                     vkCmdDraw(cmd, vcount, 1, first, 0);
                 }
                 }
-                if (sceneRenderer == null && !shapeBatchActive()) {
-                // ---- The cube demo (fallback) ----
-                // Bind the pipeline: ONE call swaps in the shaders + all the
-                // baked fixed-function state.
-                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
-
-                // Bind the vertex buffer into BINDING 0 (matching the pipeline's
-                // binding description), starting at byte offset 0. Arrays because
-                // several bindings can be bound in one call.
-                vkCmdBindVertexBuffers(cmd, 0,
-                        stack.longs(vertexBuffer.handle()), stack.longs(0));
-
-                // Bind the index buffer (one per draw, unlike the vertex-buffer
-                // ARRAY) and tell Vulkan how wide each index is.
-                vkCmdBindIndexBuffer(cmd, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT16);
-
-                // Bind THIS FRAME SLOT's descriptor set: the vertex shader's
-                // binding 0 now reads this slot's UBO (the transform). firstSet 0,
-                // no dynamic offsets. Binding selects WHICH pointer table is live;
-                // the table itself was wired to its buffer once, at startup.
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                        pipeline.layout(), 0, stack.longs(descriptorSets[currentFrame]), null);
-
-                // Push this frame's time for the FRAGMENT stage's brightness pulse.
-                // Both data tiers in one draw: push constant = tiny + hot, UBO =
-                // bigger + structured. (Per-frame recording is what lets both be
-                // fresh every frame.)
-                vkCmdPushConstants(cmd, pipeline.layout(), VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                        stack.floats(time));
-
-                // THE draw, now INDEXED: walk 6 indices, fetch each index's vertex
-                // from the bound vertex buffer (shared vertices fetched from cache,
-                // not duplicated). Offsets: first index 0, vertex offset 0 (added
-                // to every index -- handy for packing many meshes in one buffer),
-                // first instance 0.
-                vkCmdDrawIndexed(cmd, CUBE_INDICES.length, 1, 0, 0, 0);
-                }
+                // (No built-in fallback geometry: when no effect/scene/shapes are
+                // set, the frame is just the clear. Users draw via the scene seam.)
             }
 
             vkCmdEndRendering(cmd);
@@ -1165,11 +870,9 @@ public class Renderer {
                 // Build this frame's per-run texture descriptor sets (one per draw
                 // run -- the run that flush-on-texture-switch produced).
                 prepareShapeDescriptors(currentFrame);
-            } else {
-                // The cube: rewrite this slot's transform UBO.
-                float aspect = swapchain.width() / (float) swapchain.height();
-                uniformBuffers[currentFrame].uploadFloats(modelViewProjection(time, aspect));
             }
+            // A custom SceneRenderer writes its own UBO during recording
+            // (frame.uniform), not here -- nothing to upload for it.
 
             // Re-record this slot's command buffer for the image we just got
             // (safe for the same fence reason).
@@ -1286,16 +989,13 @@ public class Renderer {
         swapchain = new Swapchain(device, surface, window);
         createRenderFinishedSemaphores();
 
-        // The pipeline baked the attachment FORMAT (not the extent -- viewport
-        // is dynamic), and the rebuilt swapchain renegotiated it. Same format
-        // (the overwhelmingly common case): keep the pipeline. Changed (e.g.
-        // window dragged to a monitor with different surface support): rebake.
+        // Pipelines bake the attachment FORMAT (not the extent -- viewport is
+        // dynamic), and the rebuilt swapchain renegotiated it. Same format (the
+        // overwhelmingly common case): keep them. Changed (e.g. window dragged to a
+        // monitor with different surface support): rebake the engine-owned ones.
+        // (User-created custom pipelines also baked the format; a rebuild hook for
+        // those is the catalogued later refinement -- see createPipeline.)
         if (swapchain.imageFormat() != oldFormat) {
-            pipeline.close();
-            pipeline = new Pipeline(device, swapchain.imageFormat(), swapchain.depthFormat(),
-                    swapchain.sampleCount(), TRIANGLE_VERT, TRIANGLE_FRAG);
-            // The effect + shape pipelines baked the same formats -- rebuild them
-            // too (the effect's SPIR-V is still in the ShaderEffect; no recompile).
             if (effect != null) {
                 buildEffectPipeline();
             }
@@ -1357,15 +1057,6 @@ public class Renderer {
         if (commandPool != VK_NULL_HANDLE) {
             vkDestroyCommandPool(device.handle(), commandPool, null);
         }
-        // Destroying the pool frees every descriptor set allocated from it.
-        if (descriptorPool != VK_NULL_HANDLE) {
-            vkDestroyDescriptorPool(device.handle(), descriptorPool, null);
-        }
-        if (uniformBuffers != null) {
-            for (Buffer ubo : uniformBuffers) {
-                ubo.close();
-            }
-        }
         if (effectPipeline != null) {
             effectPipeline.close();
         }
@@ -1393,16 +1084,6 @@ public class Renderer {
         if (defaultFont != null) {
             defaultFont.close();
         }
-        if (texture != null) {
-            texture.close();
-        }
-        if (indexBuffer != null) {
-            indexBuffer.close();
-        }
-        if (vertexBuffer != null) {
-            vertexBuffer.close();
-        }
-        pipeline.close();
         // Swapchain.close() destroys our image views, then the swapchain (which
         // frees the images it owns). The swapchain was created FROM the device,
         // so it goes before the device.

@@ -61,7 +61,8 @@ public class Main {
     private Texture demoImage;    // a generated texture drawn via g.image(), when DEMO_2D
     private Texture demoImage2;   // a SECOND texture -- proves multi-texture batching (flush-on-switch)
     private Pipeline triPipeline; // a USER-DEFINED pipeline (the L1 escape hatch)
-    private Buffer triBuffer;     // its vertex geometry
+    private Buffer triBuffer;     // its vertex geometry (an indexed quad)
+    private Buffer triIndices;    // its UINT16 indices
 
     // A user's own shaders for the custom pipeline -- compiled at runtime via
     // ShaderCompiler (no build-time step), exactly as a jvre consumer would.
@@ -147,14 +148,19 @@ public class Main {
                 .vertexLayout(triLayout).label("demo-triangle").build());
         triBuffer = renderer.createVertexBuffer(new float[] {
                 //  x      y       r   g   b   (clip space; scales with the window)
-                0.55f, 0.58f,   1f, 0f, 0f,
-                0.92f, 0.58f,   0f, 1f, 0f,
-                0.73f, 0.92f,   0f, 0f, 1f,
+                0.55f, 0.58f,   1f, 0f, 0f,   // 0 top-left
+                0.92f, 0.58f,   0f, 1f, 0f,   // 1 top-right
+                0.92f, 0.92f,   0f, 0f, 1f,   // 2 bottom-right
+                0.55f, 0.92f,   1f, 1f, 0f,   // 3 bottom-left
         });
+        // 4 unique corners + 6 indices = two triangles (shared diagonal) -- the
+        // indexed draw path.
+        triIndices = renderer.createIndexBuffer(new short[] { 0, 1, 2, 2, 3, 0 });
         renderer.setSceneRenderer(frame -> {
             frame.bind(triPipeline);
             frame.bindVertexBuffer(triBuffer);
-            frame.draw(3);
+            frame.bindIndexBuffer(triIndices);
+            frame.drawIndexed(6);
         });
     }
 
@@ -227,7 +233,7 @@ public class Main {
         g.image(demoImage, 40, 330, 90, 90);
         g.image(demoImage2, 150, 330, 90, 90);
         g.text("jvre", 280, 330, 52, Color.rgb(20, 20, 20));
-        g.text("L2: shapes, images, text.\nL1: the RGB triangle (custom pipeline).",
+        g.text("L2: shapes, images, text.\nL1: the RGB quad (custom pipeline, indexed).",
                 280, 388, 17, Color.rgb(70, 70, 70));
 
         // A nested TRANSFORM group (rotated rounded-rect + label, drawn as a unit).
@@ -282,6 +288,9 @@ public class Main {
             demoImage2.close();
         }
         // Caller-owned custom pipeline + its geometry (close before the renderer).
+        if (triIndices != null) {
+            triIndices.close();
+        }
         if (triBuffer != null) {
             triBuffer.close();
         }

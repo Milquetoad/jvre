@@ -38,8 +38,19 @@ public final class FrameRenderer {
         }
     }
 
+    /** Bind a UINT16 index buffer (from {@link Renderer#createIndexBuffer}) for an
+     *  indexed draw -- so shared vertices aren't duplicated. */
+    public void bindIndexBuffer(Buffer buffer) {
+        vkCmdBindIndexBuffer(cmd, buffer.handle(), 0, VK_INDEX_TYPE_UINT16);
+    }
+
     /** Draw {@code vertexCount} vertices (non-indexed), one instance. */
     public void draw(int vertexCount) {
         vkCmdDraw(cmd, vertexCount, 1, 0, 0);
+    }
+
+    /** Draw {@code indexCount} indices from the bound index buffer, one instance. */
+    public void drawIndexed(int indexCount) {
+        vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
     }
 }

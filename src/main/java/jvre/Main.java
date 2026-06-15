@@ -63,6 +63,11 @@ public class Main {
     // Set to 1 to see jaggies, 4/8 for smooth edges.
     private static final int MSAA = 4;
 
+    // GPU override: a name substring ("RTX", "Intel", ...) to prefer over the
+    // default scoring, or null = auto-pick the best (discrete > integrated).
+    // Watch the "Picked GPU:" console line.
+    private static final String PREFER_GPU = null;
+
     // FPS counter (proves the vsync knob): frames since the last 1s report.
     private long fpsLastNanos = System.nanoTime();
     private int fpsFrames = 0;
@@ -144,6 +149,7 @@ public class Main {
                 .clearColor(CLEAR_R, CLEAR_G, CLEAR_B)
                 .vsync(VSYNC)
                 .msaa(MSAA)
+                .preferGpu(PREFER_GPU)
                 .build());
 
         if (EFFECT != null) {

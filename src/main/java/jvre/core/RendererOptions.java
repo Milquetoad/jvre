@@ -21,6 +21,7 @@ public final class RendererOptions {
     final float clearB;
     final boolean vsync;
     final int msaa;   // requested sample count: 1 (off), 2, 4, 8 ... (clamped to device max)
+    final String preferGpu;   // case-insensitive name substring; null = auto-score
 
     private RendererOptions(Builder b) {
         this.clearR = b.clearR;
@@ -28,6 +29,7 @@ public final class RendererOptions {
         this.clearB = b.clearB;
         this.vsync = b.vsync;
         this.msaa = b.msaa;
+        this.preferGpu = b.preferGpu;
     }
 
     /** Sensible defaults: black clear, vsync on. */
@@ -45,6 +47,7 @@ public final class RendererOptions {
         private float clearB = 0f;
         private boolean vsync = true;
         private int msaa = 4;
+        private String preferGpu = null;
 
         /** The per-frame clear color (RGB in [0,1]). Default black. */
         public Builder clearColor(float r, float g, float b) {
@@ -76,6 +79,17 @@ public final class RendererOptions {
                 throw new IllegalArgumentException("msaa must be a power of two (1, 2, 4, 8, ...): " + samples);
             }
             this.msaa = samples;
+            return this;
+        }
+
+        /**
+         * Override GPU selection: prefer a device whose name CONTAINS this
+         * substring (case-insensitive), e.g. "RTX" or "Intel". If no suitable
+         * device matches, falls back to the default scoring (discrete &gt;
+         * integrated). Null (default) = pure scoring.
+         */
+        public Builder preferGpu(String nameSubstring) {
+            this.preferGpu = nameSubstring;
             return this;
         }
 

@@ -20,12 +20,14 @@ public final class RendererOptions {
     final float clearG;
     final float clearB;
     final boolean vsync;
+    final int msaa;   // requested sample count: 1 (off), 2, 4, 8 ... (clamped to device max)
 
     private RendererOptions(Builder b) {
         this.clearR = b.clearR;
         this.clearG = b.clearG;
         this.clearB = b.clearB;
         this.vsync = b.vsync;
+        this.msaa = b.msaa;
     }
 
     /** Sensible defaults: black clear, vsync on. */
@@ -42,6 +44,7 @@ public final class RendererOptions {
         private float clearG = 0f;
         private float clearB = 0f;
         private boolean vsync = true;
+        private int msaa = 4;
 
         /** The per-frame clear color (RGB in [0,1]). Default black. */
         public Builder clearColor(float r, float g, float b) {
@@ -59,6 +62,20 @@ public final class RendererOptions {
          */
         public Builder vsync(boolean on) {
             this.vsync = on;
+            return this;
+        }
+
+        /**
+         * Anti-aliasing sample count: 1 (off), 2, 4 (default), 8, ... -- must be a
+         * power of two. Clamped down to the device's max if higher. Baked into the
+         * swapchain + every pipeline, so it's creation-time only (never a runtime
+         * toggle -- the L2 spec pinned that).
+         */
+        public Builder msaa(int samples) {
+            if (samples < 1 || (samples & (samples - 1)) != 0) {
+                throw new IllegalArgumentException("msaa must be a power of two (1, 2, 4, 8, ...): " + samples);
+            }
+            this.msaa = samples;
             return this;
         }
 

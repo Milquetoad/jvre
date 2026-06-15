@@ -63,7 +63,7 @@ public class Swapchain {
     private long msaaColorAllocation;  // VmaAllocation
     private long msaaColorView;
 
-    public Swapchain(Device device, Surface surface, Window window, boolean vsync) {
+    public Swapchain(Device device, Surface surface, Window window, boolean vsync, int requestedSamples) {
         this.device = device;
 
         try (MemoryStack stack = stackPush()) {
@@ -160,8 +160,10 @@ public class Swapchain {
         }
 
         imageViews = createImageViews();
-        msaaSamples = chooseSampleCount();
-        createColorResources();
+        msaaSamples = chooseSampleCount(requestedSamples);
+        if (msaaSamples != VK_SAMPLE_COUNT_1_BIT) {
+            createColorResources();   // no separate MSAA target when AA is off (1x)
+        }
         createDepthResources();
     }
 
@@ -183,8 +185,10 @@ public class Swapchain {
     public void close() {
         vkDestroyImageView(device.handle(), depthView, null);
         vmaDestroyImage(device.allocator(), depthImage, depthAllocation);
-        vkDestroyImageView(device.handle(), msaaColorView, null);
-        vmaDestroyImage(device.allocator(), msaaColorImage, msaaColorAllocation);
+        if (msaaColorImage != VK_NULL_HANDLE) {   // not created when MSAA is off (1x)
+            vkDestroyImageView(device.handle(), msaaColorView, null);
+            vmaDestroyImage(device.allocator(), msaaColorImage, msaaColorAllocation);
+        }
         for (long view : imageViews) {
             vkDestroyImageView(device.handle(), view, null);
         }
@@ -246,15 +250,21 @@ public class Swapchain {
      * of 8x at half the bandwidth, and universally supported on desktop -- but
      * we still QUERY rather than assume, like the depth format.
      */
-    private int chooseSampleCount() {
+    private int chooseSampleCount(int requested) {
         try (MemoryStack stack = stackPush()) {
             VkPhysicalDeviceProperties props = VkPhysicalDeviceProperties.malloc(stack);
             vkGetPhysicalDeviceProperties(device.physicalDevice(), props);
             int counts = props.limits().framebufferColorSampleCounts()
                     & props.limits().framebufferDepthSampleCounts();
-            if ((counts & VK_SAMPLE_COUNT_4_BIT) != 0) return VK_SAMPLE_COUNT_4_BIT;
-            if ((counts & VK_SAMPLE_COUNT_2_BIT) != 0) return VK_SAMPLE_COUNT_2_BIT;
-            return VK_SAMPLE_COUNT_1_BIT;  // MSAA effectively off
+            // The VK_SAMPLE_COUNT_n_BIT value IS n, so `requested` (1/2/4/8...) is
+            // the bit to test. Clamp DOWN to the highest available <= requested
+            // (1_BIT is always set, so this terminates at "off").
+            for (int s = requested; s >= 1; s >>= 1) {
+                if ((counts & s) != 0) {
+                    return s;
+                }
+            }
+            return VK_SAMPLE_COUNT_1_BIT;
         }
     }
 

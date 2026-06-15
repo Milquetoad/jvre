@@ -165,7 +165,7 @@ public class Renderer {
 
         // The device context, top to bottom. The pipeline needs the swapchain's
         // image format (dynamic rendering's one remaining coupling).
-        this.device = new Device(instance, surface);
+        this.device = new Device(instance, surface, options.preferGpu);
         this.swapchain = new Swapchain(device, surface, window, vsync, msaaRequested);
         // The command pool: one-shot transfer command buffers (texture/buffer
         // uploads from createImage / createVertexBuffer / font) record from it, as

@@ -57,8 +57,8 @@ public class Device {
     private final int presentFamily;
     private final long allocator;  // VmaAllocator -- device-scoped, owns the memory blocks
 
-    public Device(Instance instance, Surface surface) {
-        this.physicalDevice = pickPhysicalDevice(instance, surface);
+    public Device(Instance instance, Surface surface, String preferGpu) {
+        this.physicalDevice = pickPhysicalDevice(instance, surface, preferGpu);
 
         QueueFamilyIndices indices = findQueueFamilies(physicalDevice, surface);
         this.graphicsFamily = indices.graphicsFamily;
@@ -181,7 +181,7 @@ public class Device {
     // selection
     // ------------------------------------------------------------------
 
-    private VkPhysicalDevice pickPhysicalDevice(Instance instance, Surface surface) {
+    private VkPhysicalDevice pickPhysicalDevice(Instance instance, Surface surface, String preferGpu) {
         try (MemoryStack stack = stackPush()) {
             IntBuffer deviceCount = stack.ints(0);
             vkEnumeratePhysicalDevices(instance.handle(), deviceCount, null);
@@ -204,7 +204,7 @@ public class Device {
                         || !checkApiAndFeatureSupport(candidate, stack)) {
                     continue;
                 }
-                int score = rateDevice(candidate, stack);
+                int score = rateDevice(candidate, stack, preferGpu);
                 if (score > bestScore) {
                     bestScore = score;
                     best = candidate;
@@ -213,6 +213,17 @@ public class Device {
             if (best == null) {
                 throw new RuntimeException("No suitable GPU found (need graphics + present "
                         + "+ swapchain + Vulkan 1.3 with dynamicRendering/synchronization2)");
+            }
+
+            // If an override was requested but the winner doesn't match it, no
+            // suitable device did -- say so (the user asked for a GPU we couldn't honor).
+            if (preferGpu != null) {
+                VkPhysicalDeviceProperties chosen = VkPhysicalDeviceProperties.malloc(stack);
+                vkGetPhysicalDeviceProperties(best, chosen);
+                if (!chosen.deviceNameString().toLowerCase().contains(preferGpu.toLowerCase())) {
+                    System.out.println("Note: preferred GPU '" + preferGpu
+                            + "' not found among suitable devices; using the best-scored.");
+                }
             }
 
             VkPhysicalDeviceProperties props = VkPhysicalDeviceProperties.malloc(stack);
@@ -238,11 +249,17 @@ public class Device {
      * integrated; maxImageDimension2D is a gentle tiebreak. This is the seam for
      * the future flexible-selection work (explicit override + runtime switching).
      */
-    private int rateDevice(VkPhysicalDevice device, MemoryStack stack) {
+    private int rateDevice(VkPhysicalDevice device, MemoryStack stack, String preferGpu) {
         VkPhysicalDeviceProperties props = VkPhysicalDeviceProperties.malloc(stack);
         vkGetPhysicalDeviceProperties(device, props);
 
         int score = 0;
+        // Explicit override wins big: a name-substring match dwarfs the type/limit
+        // terms, so a requested GPU beats the default discrete-vs-integrated policy.
+        if (preferGpu != null
+                && props.deviceNameString().toLowerCase().contains(preferGpu.toLowerCase())) {
+            score += 1_000_000;
+        }
         if (props.deviceType() == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
             score += 1000;  // strongly prefer the dedicated GPU (e.g. the RTX 4090)
         }

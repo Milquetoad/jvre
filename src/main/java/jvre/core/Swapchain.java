@@ -63,7 +63,7 @@ public class Swapchain {
     private long msaaColorAllocation;  // VmaAllocation
     private long msaaColorView;
 
-    public Swapchain(Device device, Surface surface, Window window) {
+    public Swapchain(Device device, Surface surface, Window window, boolean vsync) {
         this.device = device;
 
         try (MemoryStack stack = stackPush()) {
@@ -84,7 +84,7 @@ public class Swapchain {
 
             // ---- Choose from what's available ----
             VkSurfaceFormatKHR surfaceFormat = chooseSurfaceFormat(formats);
-            int presentMode = choosePresentMode(presentModes);
+            int presentMode = choosePresentMode(presentModes, vsync);
             VkExtent2D extent = chooseExtent(caps, window, stack);
 
             // Request one MORE than the minimum so we're not stuck waiting on the
@@ -415,11 +415,17 @@ public class Swapchain {
         return available.get(0);  // any format beats failing
     }
 
-    /** Prefer MAILBOX (low-latency triple buffering); fall back to FIFO (always supported). */
-    private int choosePresentMode(IntBuffer available) {
-        for (int i = 0; i < available.capacity(); i++) {
-            if (available.get(i) == VK_PRESENT_MODE_MAILBOX_KHR) {
-                return VK_PRESENT_MODE_MAILBOX_KHR;
+    /**
+     * Vsync ON -> FIFO (the spec-guaranteed, refresh-synced, no-tearing mode).
+     * Vsync OFF -> prefer MAILBOX (low-latency triple buffering, uncapped), else
+     * fall back to FIFO. The caller picks via {@link RendererOptions#vsync}.
+     */
+    private int choosePresentMode(IntBuffer available, boolean vsync) {
+        if (!vsync) {
+            for (int i = 0; i < available.capacity(); i++) {
+                if (available.get(i) == VK_PRESENT_MODE_MAILBOX_KHR) {
+                    return VK_PRESENT_MODE_MAILBOX_KHR;
+                }
             }
         }
         return VK_PRESENT_MODE_FIFO_KHR;  // guaranteed by the spec

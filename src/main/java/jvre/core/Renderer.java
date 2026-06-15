@@ -114,6 +114,9 @@ public class Renderer {
     private final float clearR;
     private final float clearG;
     private final float clearB;
+    // Present-mode preference (creation-time): true = vsync/FIFO, false = uncapped.
+    // Stored so swapchain recreation (resize) keeps the same choice.
+    private final boolean vsync;
 
     // How many frames the CPU may be preparing AHEAD of the GPU. With 1, CPU and
     // GPU take turns idling (CPU waits for the frame to finish before recording
@@ -148,18 +151,18 @@ public class Renderer {
     private long lastFrameNanos = startNanos;
     private float deltaSeconds = 0f;
 
-    public Renderer(Instance instance, Surface surface, Window window,
-                    float clearR, float clearG, float clearB) {
+    public Renderer(Instance instance, Surface surface, Window window, RendererOptions options) {
         this.surface = surface;
         this.window = window;
-        this.clearR = clearR;
-        this.clearG = clearG;
-        this.clearB = clearB;
+        this.clearR = options.clearR;
+        this.clearG = options.clearG;
+        this.clearB = options.clearB;
+        this.vsync = options.vsync;
 
         // The device context, top to bottom. The pipeline needs the swapchain's
         // image format (dynamic rendering's one remaining coupling).
         this.device = new Device(instance, surface);
-        this.swapchain = new Swapchain(device, surface, window);
+        this.swapchain = new Swapchain(device, surface, window, vsync);
         // The command pool: one-shot transfer command buffers (texture/buffer
         // uploads from createImage / createVertexBuffer / font) record from it, as
         // do the per-frame command buffers. No built-in geometry anymore -- the
@@ -986,7 +989,7 @@ public class Renderer {
         // now: since command buffers are re-recorded every frame, they pick up
         // the new images/extent automatically -- nothing to rebuild there. The
         // pool and per-frame sync objects survive untouched.
-        swapchain = new Swapchain(device, surface, window);
+        swapchain = new Swapchain(device, surface, window, vsync);
         createRenderFinishedSemaphores();
 
         // Pipelines bake the attachment FORMAT (not the extent -- viewport is

@@ -14,6 +14,7 @@ import jvre.core.Pipeline;
 import jvre.core.PipelineSpec;
 import jvre.core.Renderer;
 import jvre.core.Renderer2D;
+import jvre.core.RendererOptions;
 import jvre.core.ShaderCompiler;
 import jvre.core.ShaderEffect;
 import jvre.core.Stage;
@@ -53,6 +54,14 @@ public class Main {
 
     // Flip to false to build a "release" run with no validation overhead.
     private static final boolean ENABLE_VALIDATION = true;
+
+    // Present mode: true = vsync (FIFO, capped to the refresh rate); false =
+    // uncapped (MAILBOX where available). Toggle + watch the console FPS line.
+    private static final boolean VSYNC = true;
+
+    // FPS counter (proves the vsync knob): frames since the last 1s report.
+    private long fpsLastNanos = System.nanoTime();
+    private int fpsFrames = 0;
 
     private Window window;
     private Instance instance;
@@ -127,7 +136,10 @@ public class Main {
         window = new Window(WIDTH, HEIGHT, TITLE);
         instance = new Instance("jvre demo", ENABLE_VALIDATION);
         surface = new Surface(instance, window);
-        renderer = new Renderer(instance, surface, window, CLEAR_R, CLEAR_G, CLEAR_B);
+        renderer = new Renderer(instance, surface, window, RendererOptions.builder()
+                .clearColor(CLEAR_R, CLEAR_G, CLEAR_B)
+                .vsync(VSYNC)
+                .build());
 
         if (EFFECT != null) {
             // This is the API Vision sketch, nearly verbatim: the user's whole
@@ -256,6 +268,16 @@ public class Main {
                 drawShapes();
             }
             renderer.drawFrame();
+
+            // FPS report once a second -- vsync ON caps near the refresh rate;
+            // OFF runs uncapped (the present-mode knob, made observable).
+            fpsFrames++;
+            long n = System.nanoTime();
+            if (n - fpsLastNanos >= 1_000_000_000L) {
+                System.out.println("FPS: " + fpsFrames + (VSYNC ? " (vsync)" : " (uncapped)"));
+                fpsFrames = 0;
+                fpsLastNanos = n;
+            }
         }
         // Let the GPU finish in-flight work before cleanup frees anything.
         renderer.waitIdle();

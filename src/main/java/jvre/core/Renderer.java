@@ -366,7 +366,7 @@ public class Renderer {
      */
     public Pipeline createPipeline(PipelineSpec spec) {
         return Pipeline.fromSpec(device, swapchain.imageFormat(), swapchain.depthFormat(),
-                swapchain.sampleCount(), spec);
+                swapchain.sampleCount(), spec, MAX_FRAMES_IN_FLIGHT);
     }
 
     /**
@@ -944,7 +944,7 @@ public class Renderer {
                 // (under any L2 UI), then the L2 shapes on top -- both may run in
                 // one frame. The cube demo is the fallback when neither is set.
                 if (sceneRenderer != null) {
-                    sceneRenderer.render(new FrameRenderer(cmd));
+                    sceneRenderer.render(new FrameRenderer(cmd, currentFrame));
                 }
                 if (shapeBatchActive()) {
                 // ---- L2 Renderer2D shapes ----

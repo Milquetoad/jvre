@@ -2,6 +2,7 @@ package jvre;
 
 import jvre.core.AttribFormat;
 import jvre.core.Buffer;
+import jvre.core.Camera;
 import jvre.core.Color;
 import jvre.core.Diagnostics;
 import jvre.core.Input;
@@ -14,11 +15,13 @@ import jvre.core.Renderer;
 import jvre.core.Renderer2D;
 import jvre.core.ShaderCompiler;
 import jvre.core.ShaderEffect;
+import jvre.core.Stage;
 import jvre.core.Surface;
 import jvre.core.Texture;
 import jvre.core.VertexLayout;
 import jvre.core.Window;
 
+import org.joml.Matrix4f;
 import org.lwjgl.system.Configuration;
 
 /**
@@ -60,24 +63,29 @@ public class Main {
     private final StringBuilder typed = new StringBuilder();   // the demo text field's contents
     private Texture demoImage;    // a generated texture drawn via g.image(), when DEMO_2D
     private Texture demoImage2;   // a SECOND texture -- proves multi-texture batching (flush-on-switch)
-    private Pipeline triPipeline; // a USER-DEFINED pipeline (the L1 escape hatch)
-    private Buffer triBuffer;     // its vertex geometry (an indexed quad)
-    private Buffer triIndices;    // its UINT16 indices
+    private Pipeline cubePipeline; // a USER-DEFINED pipeline (the L1 escape hatch)
+    private Buffer cubeVerts;      // its vertex geometry (an indexed cube)
+    private Buffer cubeIndices;    // its UINT16 indices
+    private final Camera camera = new Camera();  // computes the cube's view + projection
 
     // A user's own shaders for the custom pipeline -- compiled at runtime via
-    // ShaderCompiler (no build-time step), exactly as a jvre consumer would.
-    private static final String TRI_VERT = """
+    // ShaderCompiler (no build-time step), exactly as a jvre consumer would. The
+    // vertex shader reads a UBO (mat4 MVP @ binding 0); the fragment shader a push
+    // constant (a brightness pulse).
+    private static final String CUBE_VERT = """
             #version 450
-            layout(location = 0) in vec2 inPos;
+            layout(location = 0) in vec3 inPos;
             layout(location = 1) in vec3 inColor;
+            layout(set = 0, binding = 0) uniform U { mat4 mvp; } u;
             layout(location = 0) out vec3 vColor;
-            void main() { gl_Position = vec4(inPos, 0.0, 1.0); vColor = inColor; }
+            void main() { gl_Position = u.mvp * vec4(inPos, 1.0); vColor = inColor; }
             """;
-    private static final String TRI_FRAG = """
+    private static final String CUBE_FRAG = """
             #version 450
             layout(location = 0) in vec3 vColor;
+            layout(push_constant) uniform Push { float pulse; } pc;
             layout(location = 0) out vec4 outColor;
-            void main() { outColor = vec4(vColor, 1.0); }
+            void main() { outColor = vec4(vColor * pc.pulse, 1.0); }
             """;
 
     public static void main(String[] args) {
@@ -133,34 +141,54 @@ public class Main {
             renderer.font();
         }
 
-        // The L1 escape hatch: a USER-DEFINED pipeline drawing a custom triangle
-        // with the user's own shaders + vertex layout, recorded through the scene
-        // seam. It renders UNDER the L2 shapes -- custom geometry and L2 mixed in
-        // one frame, the whole point of the escape hatch.
-        byte[] triVs = ShaderCompiler.compileVertex(TRI_VERT, "tri.vert");
-        byte[] triFs = ShaderCompiler.compileFragment(TRI_FRAG, "tri.frag");
-        VertexLayout triLayout = VertexLayout.builder(5 * Float.BYTES)
-                .attribute(0, AttribFormat.VEC2, 0)               // position (clip space)
-                .attribute(1, AttribFormat.VEC3, 2 * Float.BYTES) // color
+        // The L1 escape hatch: a USER-DEFINED pipeline drawing a spinning 3D cube
+        // with the user's own shaders + vertex layout, a UBO (MVP from a Camera), a
+        // push constant (brightness pulse), and depth testing -- recorded through
+        // the scene seam, UNDER the L2 content (3D world + 2D UI, one frame).
+        byte[] cubeVs = ShaderCompiler.compileVertex(CUBE_VERT, "cube.vert");
+        byte[] cubeFs = ShaderCompiler.compileFragment(CUBE_FRAG, "cube.frag");
+        VertexLayout cubeLayout = VertexLayout.builder(6 * Float.BYTES)
+                .attribute(0, AttribFormat.VEC3, 0)               // position
+                .attribute(1, AttribFormat.VEC3, 3 * Float.BYTES) // color
                 .build();
-        triPipeline = renderer.createPipeline(PipelineSpec.builder()
-                .vertexShader(triVs).fragmentShader(triFs)
-                .vertexLayout(triLayout).label("demo-triangle").build());
-        triBuffer = renderer.createVertexBuffer(new float[] {
-                //  x      y       r   g   b   (clip space; scales with the window)
-                0.55f, 0.58f,   1f, 0f, 0f,   // 0 top-left
-                0.92f, 0.58f,   0f, 1f, 0f,   // 1 top-right
-                0.92f, 0.92f,   0f, 0f, 1f,   // 2 bottom-right
-                0.55f, 0.92f,   1f, 1f, 0f,   // 3 bottom-left
+        cubePipeline = renderer.createPipeline(PipelineSpec.builder()
+                .vertexShader(cubeVs).fragmentShader(cubeFs)
+                .vertexLayout(cubeLayout)
+                .depthTest(true).depthWrite(true)                 // solid via depth (cull NONE: winding-safe)
+                .uniformBuffer(16 * Float.BYTES, Stage.VERTEX)    // mat4 MVP
+                .pushConstants(Float.BYTES, Stage.FRAGMENT)       // float pulse
+                .label("demo-cube").build());
+        cubeVerts = renderer.createVertexBuffer(new float[] {
+                //  x   y   z      r  g  b   (corner color from position)
+                -1, -1, -1,   0, 0, 0,
+                 1, -1, -1,   1, 0, 0,
+                 1,  1, -1,   1, 1, 0,
+                -1,  1, -1,   0, 1, 0,
+                -1, -1,  1,   0, 0, 1,
+                 1, -1,  1,   1, 0, 1,
+                 1,  1,  1,   1, 1, 1,
+                -1,  1,  1,   0, 1, 1,
         });
-        // 4 unique corners + 6 indices = two triangles (shared diagonal) -- the
-        // indexed draw path.
-        triIndices = renderer.createIndexBuffer(new short[] { 0, 1, 2, 2, 3, 0 });
+        cubeIndices = renderer.createIndexBuffer(new short[] {
+                0, 1, 2,  2, 3, 0,    4, 5, 6,  6, 7, 4,    0, 3, 7,  7, 4, 0,
+                1, 2, 6,  6, 5, 1,    0, 1, 5,  5, 4, 0,    3, 2, 6,  6, 7, 3,
+        });
         renderer.setSceneRenderer(frame -> {
-            frame.bind(triPipeline);
-            frame.bindVertexBuffer(triBuffer);
-            frame.bindIndexBuffer(triIndices);
-            frame.drawIndexed(6);
+            float t = renderer.time();
+            float aspect = g.width() / (float) g.height();
+            camera.perspective(45f, aspect, 0.1f, 100f).lookAt(0, 0, 4,  0, 0, 0,  0, 1, 0);
+            Matrix4f model = new Matrix4f()
+                    .translate(1.4f, -1.2f, 0f)          // lower-right of the view
+                    .rotateX(t * 0.6f).rotateY(t)        // tumble so all faces show
+                    .scale(0.5f);
+            float[] mvp = new Matrix4f(camera.viewProjection()).mul(model).get(new float[16]);
+            float pulse = 0.65f + 0.35f * (float) Math.sin(t * 3.0);
+            frame.bind(cubePipeline);
+            frame.uniform(mvp);                          // write this frame's UBO
+            frame.pushConstants(new float[] { pulse });
+            frame.bindVertexBuffer(cubeVerts);
+            frame.bindIndexBuffer(cubeIndices);
+            frame.drawIndexed(36);
         });
     }
 
@@ -233,7 +261,7 @@ public class Main {
         g.image(demoImage, 40, 330, 90, 90);
         g.image(demoImage2, 150, 330, 90, 90);
         g.text("jvre", 280, 330, 52, Color.rgb(20, 20, 20));
-        g.text("L2: shapes, images, text.\nL1: the RGB quad (custom pipeline, indexed).",
+        g.text("L2: shapes, images, text.\nL1: the spinning cube (custom pipeline: UBO + push + camera).",
                 280, 388, 17, Color.rgb(70, 70, 70));
 
         // A nested TRANSFORM group (rotated rounded-rect + label, drawn as a unit).
@@ -288,14 +316,14 @@ public class Main {
             demoImage2.close();
         }
         // Caller-owned custom pipeline + its geometry (close before the renderer).
-        if (triIndices != null) {
-            triIndices.close();
+        if (cubeIndices != null) {
+            cubeIndices.close();
         }
-        if (triBuffer != null) {
-            triBuffer.close();
+        if (cubeVerts != null) {
+            cubeVerts.close();
         }
-        if (triPipeline != null) {
-            triPipeline.close();
+        if (cubePipeline != null) {
+            cubePipeline.close();
         }
         // Reverse order of creation: the renderer (the whole device context)
         // goes first, then the instance-level objects, then the window.

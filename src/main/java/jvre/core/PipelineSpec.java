@@ -28,6 +28,10 @@ public final class PipelineSpec {
     final boolean depthWrite;
     final boolean blend;
     final String label;
+    final int uniformBufferSize;   // 0 = no UBO; else a UBO at binding 0
+    final Stage uniformStage;
+    final int pushSize;            // 0 = no push constants
+    final Stage pushStage;
 
     private PipelineSpec(Builder b) {
         this.vertexSpirv = b.vertexSpirv;
@@ -38,6 +42,10 @@ public final class PipelineSpec {
         this.depthWrite = b.depthWrite;
         this.blend = b.blend;
         this.label = b.label;
+        this.uniformBufferSize = b.uniformBufferSize;
+        this.uniformStage = b.uniformStage;
+        this.pushSize = b.pushSize;
+        this.pushStage = b.pushStage;
     }
 
     public static Builder builder() {
@@ -53,6 +61,10 @@ public final class PipelineSpec {
         private boolean depthWrite = false;
         private boolean blend = true;
         private String label = "custom";
+        private int uniformBufferSize = 0;
+        private Stage uniformStage = Stage.VERTEX;
+        private int pushSize = 0;
+        private Stage pushStage = Stage.FRAGMENT;
 
         /** Vertex-shader SPIR-V (e.g. {@code ShaderCompiler.compileVertex(src, name)}). */
         public Builder vertexShader(byte[] spirv) {
@@ -91,6 +103,23 @@ public final class PipelineSpec {
         /** Straight alpha blending (src over dst). On by default. */
         public Builder blend(boolean on) {
             this.blend = on;
+            return this;
+        }
+
+        /** Declare a uniform buffer at binding 0 of {@code sizeBytes}, visible to
+         *  {@code stage}. jvre manages a per-frame UBO + descriptor set; fill it
+         *  each frame with {@code FrameRenderer.uniform(...)}. (v1: one UBO.) */
+        public Builder uniformBuffer(int sizeBytes, Stage stage) {
+            this.uniformBufferSize = sizeBytes;
+            this.uniformStage = stage;
+            return this;
+        }
+
+        /** Declare a push-constant range of {@code sizeBytes} visible to {@code
+         *  stage}; set it each frame with {@code FrameRenderer.pushConstants(...)}. */
+        public Builder pushConstants(int sizeBytes, Stage stage) {
+            this.pushSize = sizeBytes;
+            this.pushStage = stage;
             return this;
         }
 

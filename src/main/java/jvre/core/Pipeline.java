@@ -1,8 +1,13 @@
 package jvre.core;
 
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.vulkan.VkDescriptorBufferInfo;
+import org.lwjgl.vulkan.VkDescriptorPoolCreateInfo;
+import org.lwjgl.vulkan.VkDescriptorPoolSize;
+import org.lwjgl.vulkan.VkDescriptorSetAllocateInfo;
 import org.lwjgl.vulkan.VkDescriptorSetLayoutBinding;
 import org.lwjgl.vulkan.VkDescriptorSetLayoutCreateInfo;
+import org.lwjgl.vulkan.VkWriteDescriptorSet;
 import org.lwjgl.vulkan.VkGraphicsPipelineCreateInfo;
 import org.lwjgl.vulkan.VkPipelineColorBlendAttachmentState;
 import org.lwjgl.vulkan.VkPipelineColorBlendStateCreateInfo;
@@ -59,6 +64,16 @@ public class Pipeline {
     private final long layout;               // VkPipelineLayout (set layout + push range)
     private final long handle;               // VkPipeline
 
+    // CUSTOM-pipeline managed resources (the L1 escape hatch's bound uniforms).
+    // When the spec declared a UBO, jvre owns a per-frame-in-flight UBO buffer +
+    // descriptor set here (written once to point at the buffer); the user fills
+    // the buffer each frame via FrameRenderer. Null for the built-in kinds and for
+    // CUSTOM pipelines that declared no UBO.
+    private Buffer[] uniformBuffers;         // [frame in flight]
+    private long[] uniformSets;              // [frame in flight]
+    private long uniformPool = VK_NULL_HANDLE;
+    private int pushStageFlags = 0;          // the push-constant stage (CUSTOM)
+
     /**
      * Which of jvre's three pipeline shapes this is. The kinds differ only in a
      * handful of fixed-function choices -- vertex layout, cull, depth, blend,
@@ -99,9 +114,13 @@ public class Pipeline {
      * kinds. v1: no descriptors / push constants.
      */
     public static Pipeline fromSpec(Device device, int colorFormat, int depthFormat,
-                                    int sampleCount, PipelineSpec spec) {
-        return new Pipeline(device, colorFormat, depthFormat, sampleCount,
+                                    int sampleCount, PipelineSpec spec, int framesInFlight) {
+        Pipeline p = new Pipeline(device, colorFormat, depthFormat, sampleCount,
                 spec.vertexSpirv, spec.fragmentSpirv, Kind.CUSTOM, spec.label, spec);
+        if (spec.uniformBufferSize > 0) {
+            p.allocateUniformResources(framesInFlight, spec.uniformBufferSize);
+        }
+        return p;
     }
 
     /**
@@ -392,11 +411,29 @@ public class Pipeline {
             // are instances of this shape, pointing at real buffers/images.
             // Identically-defined layouts are compatible, so sets survive a
             // pipeline rebuild (the resize format-change path).
-            if (kind == Kind.FULLSCREEN_EFFECT || kind == Kind.CUSTOM) {
-                // The effect's whole interface is the push-constant block; a v1
-                // CUSTOM pipeline binds no resources yet (UBOs/textures are the
-                // next beat). Either way, no descriptor set layout to create.
+            if (kind == Kind.FULLSCREEN_EFFECT
+                    || (kind == Kind.CUSTOM && spec.uniformBufferSize == 0)) {
+                // The effect's whole interface is the push block; a CUSTOM pipeline
+                // with no declared UBO binds no resources. Either way, no layout.
                 descriptorSetLayout = VK_NULL_HANDLE;
+            } else if (kind == Kind.CUSTOM) {
+                // User-defined: one UBO at binding 0 @ the declared stage.
+                VkDescriptorSetLayoutBinding.Buffer bindings =
+                        VkDescriptorSetLayoutBinding.calloc(1, stack);
+                bindings.get(0).binding(0);
+                bindings.get(0).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+                bindings.get(0).descriptorCount(1);
+                bindings.get(0).stageFlags(spec.uniformStage.vk);
+
+                VkDescriptorSetLayoutCreateInfo setLayoutInfo =
+                        VkDescriptorSetLayoutCreateInfo.calloc(stack);
+                setLayoutInfo.sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
+                setLayoutInfo.pBindings(bindings);
+
+                LongBuffer pSetLayout = stack.longs(VK_NULL_HANDLE);
+                Vk.check(vkCreateDescriptorSetLayout(device.handle(), setLayoutInfo, null, pSetLayout),
+                        "Failed to create the custom pipeline descriptor set layout");
+                descriptorSetLayout = pSetLayout.get(0);
             } else if (kind == Kind.SHAPES_2D) {
                 // L2 shapes bind ONE resource: the texture that image (mode 2)
                 // and text (mode 3) sample. binding 0 = a COMBINED_IMAGE_SAMPLER
@@ -461,13 +498,16 @@ public class Pipeline {
                 case SCENE -> Float.BYTES;
                 case FULLSCREEN_EFFECT -> 5 * Float.BYTES;
                 case SHAPES_2D -> 2 * Float.BYTES;
-                case CUSTOM -> 0;   // v1 CUSTOM has no push constants
+                case CUSTOM -> spec.pushSize;   // 0 = none
             };
             VkPushConstantRange.Buffer pushRange = null;
             if (pushSize > 0) {
+                int stageFlags = kind == Kind.CUSTOM ? spec.pushStage.vk
+                        : kind == Kind.SHAPES_2D ? VK_SHADER_STAGE_VERTEX_BIT
+                        : VK_SHADER_STAGE_FRAGMENT_BIT;
+                this.pushStageFlags = stageFlags;
                 pushRange = VkPushConstantRange.calloc(1, stack);
-                pushRange.stageFlags(kind == Kind.SHAPES_2D
-                        ? VK_SHADER_STAGE_VERTEX_BIT : VK_SHADER_STAGE_FRAGMENT_BIT);
+                pushRange.stageFlags(stageFlags);
                 pushRange.offset(0);
                 pushRange.size(pushSize);
             }
@@ -545,7 +585,94 @@ public class Pipeline {
         return descriptorSetLayout;
     }
 
+    // ---- CUSTOM-pipeline managed uniforms (read by FrameRenderer) ----
+
+    /** True if this (CUSTOM) pipeline declared a UBO -- so a descriptor set exists to bind. */
+    boolean hasUniforms() {
+        return uniformSets != null;
+    }
+
+    /** This frame's UBO descriptor set (binding 0). */
+    long uniformSet(int frame) {
+        return uniformSets[frame];
+    }
+
+    /** Write this frame's UBO buffer (host-visible; fence-guarded by the caller). */
+    void uploadUniform(int frame, float[] data) {
+        uniformBuffers[frame].uploadFloats(data);
+    }
+
+    /** The push-constant stage flags (0 if none declared). */
+    int pushStageFlags() {
+        return pushStageFlags;
+    }
+
+    /**
+     * Allocate the per-frame UBO buffers + descriptor sets for a CUSTOM pipeline
+     * that declared a uniform buffer. One host-visible UBO + one set per frame in
+     * flight; each set is written ONCE to point at its buffer (the user rewrites
+     * the buffer's CONTENTS per frame). Self-owned -- freed in {@link #close}.
+     */
+    private void allocateUniformResources(int frames, int uboSize) {
+        uniformBuffers = new Buffer[frames];
+        for (int i = 0; i < frames; i++) {
+            uniformBuffers[i] = new Buffer(device, uboSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
+        }
+        try (MemoryStack stack = stackPush()) {
+            VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(1, stack);
+            poolSizes.get(0).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+            poolSizes.get(0).descriptorCount(frames);
+
+            VkDescriptorPoolCreateInfo poolInfo = VkDescriptorPoolCreateInfo.calloc(stack);
+            poolInfo.sType(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO);
+            poolInfo.pPoolSizes(poolSizes);
+            poolInfo.maxSets(frames);
+            LongBuffer pPool = stack.longs(VK_NULL_HANDLE);
+            Vk.check(vkCreateDescriptorPool(device.handle(), poolInfo, null, pPool),
+                    "Failed to create the custom pipeline descriptor pool");
+            uniformPool = pPool.get(0);
+
+            LongBuffer layouts = stack.mallocLong(frames);
+            for (int i = 0; i < frames; i++) {
+                layouts.put(descriptorSetLayout);
+            }
+            layouts.flip();
+            VkDescriptorSetAllocateInfo allocInfo = VkDescriptorSetAllocateInfo.calloc(stack);
+            allocInfo.sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO);
+            allocInfo.descriptorPool(uniformPool);
+            allocInfo.pSetLayouts(layouts);
+            LongBuffer pSets = stack.mallocLong(frames);
+            Vk.check(vkAllocateDescriptorSets(device.handle(), allocInfo, pSets),
+                    "Failed to allocate custom pipeline descriptor sets");
+
+            uniformSets = new long[frames];
+            for (int i = 0; i < frames; i++) {
+                uniformSets[i] = pSets.get(i);
+                VkDescriptorBufferInfo.Buffer bufInfo = VkDescriptorBufferInfo.calloc(1, stack);
+                bufInfo.buffer(uniformBuffers[i].handle());
+                bufInfo.offset(0);
+                bufInfo.range(VK_WHOLE_SIZE);
+                VkWriteDescriptorSet.Buffer w = VkWriteDescriptorSet.calloc(1, stack);
+                w.get(0).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+                w.get(0).dstSet(uniformSets[i]);
+                w.get(0).dstBinding(0);
+                w.get(0).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+                w.get(0).descriptorCount(1);
+                w.get(0).pBufferInfo(bufInfo);
+                vkUpdateDescriptorSets(device.handle(), w, null);
+            }
+        }
+    }
+
     public void close() {
+        if (uniformBuffers != null) {
+            for (Buffer b : uniformBuffers) {
+                b.close();
+            }
+        }
+        if (uniformPool != VK_NULL_HANDLE) {   // frees its descriptor sets too
+            vkDestroyDescriptorPool(device.handle(), uniformPool, null);
+        }
         vkDestroyPipeline(device.handle(), handle, null);
         vkDestroyPipelineLayout(device.handle(), layout, null);
         if (descriptorSetLayout != VK_NULL_HANDLE) {  // fullscreen pipelines have none

@@ -415,6 +415,48 @@ public final class Renderer2D {
         }
     }
 
+    /** The on-screen width, in pixels, of {@code s} rendered at {@code size} in the
+     *  built-in font (the widest line if multi-line). For laying out text -- centring
+     *  a label, sizing a button to fit -- without a trial draw. */
+    public float textWidth(String s, float size) {
+        return textWidth(owner.font(), s, size);
+    }
+
+    /** {@link #textWidth(String, float)} for an explicit {@code font}. */
+    public float textWidth(Font font, String s, float size) {
+        if (font == null) {
+            throw new IllegalArgumentException("textWidth: null font");
+        }
+        // Mirror the advance walk in text() (no quads emitted): sum each glyph's
+        // advance, tracking the widest line across '\n' breaks.
+        float scale = font.scaleFor(size);
+        float widest = 0f;
+        float line = 0f;
+        for (int i = 0; i < s.length(); i++) {
+            char ch = s.charAt(i);
+            if (ch == '\n') {
+                widest = Math.max(widest, line);
+                line = 0f;
+                continue;
+            }
+            Font.Glyph gl = font.glyph(ch);
+            if (gl == null) {
+                Font.Glyph space = font.glyph(' ');
+                line += (space != null ? space.advance : size * 0.3f) * scale;
+                continue;
+            }
+            line += gl.advance * scale;
+        }
+        return Math.max(widest, line);
+    }
+
+    /** Baseline-to-baseline line height, in pixels, at {@code size} in the built-in
+     *  font -- the vertical step for stacking lines or rows. */
+    public float lineHeight(float size) {
+        Font font = owner.font();
+        return font.lineHeight() * font.scaleFor(size);
+    }
+
     /** Append one SDF-text vertex (mode 3, carrying an atlas UV; SDF box fields unused). */
     private void textVertex(float px, float py, float[] c, float u, float v) {
         emit(px, py, c, 0f, 0f, 0f, 0f, 0f, u, v, MODE_TEXT);

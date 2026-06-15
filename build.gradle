@@ -171,8 +171,24 @@ tasks.register('compileShaders', JavaExec) {
             new File(shaderOutDir.get().asFile, 'shaders').absolutePath
 }
 
-// The build tool is not part of the library -- keep it out of the published jar.
-tasks.named('jar') { exclude 'jvre/tools/**' }
+// The build tool and the demo example apps are not part of the library --
+// keep them out of the published jar (jvre.demo is a worked example built ON the
+// library, deliberately not part of its API; see the GUI demo / roadmap 3b).
+tasks.named('jar') {
+    exclude 'jvre/tools/**'
+    exclude 'jvre/demo/**'
+}
+
+// Run the immediate-mode GUI demo (jvre.demo.GuiDemo) -- a sibling of `run`
+// (which launches the main jvre.Main showcase). Mirrors run's classpath wiring.
+tasks.register('runGuiDemo', JavaExec) {
+    description = 'Runs the immediate-mode GUI demo (jvre.demo.GuiDemo)'
+    group = 'application'
+    dependsOn 'classes', 'compileShaders', 'processResources'
+    mainClass = 'jvre.demo.GuiDemo'
+    classpath = sourceSets.main.runtimeClasspath + configurations.nativesRuntime
+    standardInput = System.in
+}
 
 // Treat the generated .spv files as ordinary resources, built before them.
 sourceSets.main.resources.srcDir(shaderOutDir)
@@ -185,6 +201,7 @@ tasks.named('sourcesJar') {
     dependsOn 'compileShaders'
     exclude 'shaders/**'        // generated .spv binaries don't belong in a sources jar
     exclude 'jvre/tools/**'     // the build tool isn't part of the library
+    exclude 'jvre/demo/**'      // the demo example apps aren't part of the library
 }
 
 // Make `gradle run` flush native crash logs etc. nicely; harmless defaults.

@@ -41,6 +41,7 @@ Status (2026-06-12): **v1 surface settled** (principles, primitives, style, outl
 |---|---|
 | `image(img, x, y[, w, h])` | textures (images + samplers + descriptors) |
 | `text(s, x, y[, size], color)` | font atlas (textures + batching) — the big one |
+| `textWidth(s, size)` / `lineHeight(size)` | measure text without drawing — added 2026-06-15 (the GUI demo needed it: centre a label, size a button) |
 
 `Color`: an immutable value type (`Color.rgb(r,g,b)`, `Color.rgba(...)`, common constants), linear-vs-sRGB handled internally — the user thinks in normal 0-255 / hex colors.
 

@@ -164,9 +164,9 @@ class Renderer2DTest {
     }
 
     @Test
-    void biggerEllipsesGetMoreSegments() {
-        // Ellipses are still tessellated fans (no closed-form SDF), so they still
-        // scale their segment count with size.
+    void fillEllipseIsAnSdfQuad() {
+        // Ellipses are now an SDF shape (approximate ellipse distance), so each is
+        // ONE bounding quad = 6 vertices regardless of size -- no segment scaling.
         Renderer2D g = new Renderer2D();
         g.begin();
         g.fillEllipse(0, 0, 10, 10, Color.WHITE);
@@ -174,7 +174,19 @@ class Renderer2DTest {
         g.fillEllipse(0, 0, 500, 500, Color.WHITE);
         int both = g.vertexCount();
         g.end();
-        assertTrue((both - small) > small, "a 500px ellipse needs more segments than a 10px one");
+        assertEquals(6, small, "a small ellipse is one 6-vertex quad");
+        assertEquals(12, both, "a huge ellipse is also just one 6-vertex quad");
+
+        // The ellipse-fill quad carries mode 4, with half = the radii (offsets
+        // 8, 9) and no corner radius (offset 10).
+        float[] v = g.vertexData();
+        int s = Renderer2D.FLOATS_PER_VERTEX;
+        for (int i = 6; i < both; i++) {   // the second (500px) ellipse
+            assertEquals(500f, v[i * s + 8], 1e-4f);
+            assertEquals(500f, v[i * s + 9], 1e-4f);
+            assertEquals(0f, v[i * s + 10], 1e-4f);
+            assertEquals(4f, v[i * s + 13], 1e-4f);   // mode 4 = ellipse fill
+        }
     }
 
     @Test
@@ -200,10 +212,13 @@ class Renderer2DTest {
             maxX = Math.max(maxX, Math.abs(v[i * stride]));
             maxY = Math.max(maxY, Math.abs(v[i * stride + 1]));
         }
-        // Tolerance covers the tessellation undershoot (sampled angles don't
-        // land exactly on the axes) while still proving rx and ry are distinct.
-        assertEquals(100f, maxX, 0.5f, "x extent = rx");
-        assertEquals(20f, maxY, 0.5f, "y extent = ry");
+        // The bounding quad reaches each radius plus the ~1.5px AA pad, and the
+        // half-extents (offsets 8, 9) carry rx and ry exactly -- both proving the
+        // two radii are distinct.
+        assertEquals(101.5f, maxX, 1e-4f, "x extent = rx + pad");
+        assertEquals(21.5f, maxY, 1e-4f, "y extent = ry + pad");
+        assertEquals(100f, v[8], 1e-4f, "half x = rx");
+        assertEquals(20f, v[9], 1e-4f, "half y = ry");
     }
 
     @Test
@@ -255,25 +270,31 @@ class Renderer2DTest {
     }
 
     @Test
-    void strokeCircleIsARingBetweenTwoRadii() {
+    void strokeCircleIsAnSdfRingQuad() {
         Renderer2D g = new Renderer2D();
         g.begin();
-        g.strokeCircle(0, 0, 50, 10, Color.WHITE);   // ring from radius 45 to 55
+        g.strokeCircle(0, 0, 50, 10, Color.WHITE);   // ring centered on r=50, ht=5
         g.end();
 
-        int verts = g.vertexCount();
-        assertTrue(verts % 6 == 0, "each ring slice is a quad = 6 verts: " + verts);
+        // One SDF ring quad = 6 vertices, regardless of size.
+        assertEquals(6, g.vertexCount());
 
         float[] v = g.vertexData();
-        int stride = Renderer2D.FLOATS_PER_VERTEX;
-        float minD = Float.MAX_VALUE, maxD = -Float.MAX_VALUE;
-        for (int i = 0; i < verts; i++) {
-            double d = Math.hypot(v[i * stride], v[i * stride + 1]);
-            minD = (float) Math.min(minD, d);
-            maxD = (float) Math.max(maxD, d);
+        int s = Renderer2D.FLOATS_PER_VERTEX;
+        for (int i = 0; i < g.vertexCount(); i++) {
+            // half (offsets 8, 9) = the centerline radii; cornerRadius (offset 10)
+            // = the half-thickness; mode (offset 13) = 5 (ellipse ring).
+            assertEquals(50f, v[i * s + 8], 1e-4f);
+            assertEquals(50f, v[i * s + 9], 1e-4f);
+            assertEquals(5f, v[i * s + 10], 1e-4f);
+            assertEquals(5f, v[i * s + 13], 1e-4f);
         }
-        assertEquals(45f, minD, 1e-3f, "inner rim = r - thickness/2");
-        assertEquals(55f, maxD, 1e-3f, "outer rim = r + thickness/2");
+        // The bounding quad clears the outer rim (r + ht = 55) plus the ~1.5px pad.
+        float maxD = 0;
+        for (int i = 0; i < g.vertexCount(); i++) {
+            maxD = Math.max(maxD, Math.abs(v[i * s]));
+        }
+        assertEquals(56.5f, maxD, 1e-4f, "quad reaches r + ht + pad");
     }
 
     @Test

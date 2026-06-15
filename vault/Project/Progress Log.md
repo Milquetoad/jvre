@@ -2,6 +2,14 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-15 — Phase 3a: SDF curves -- ellipses + rings go analytic 🟡✅
+- **The jaggies are gone.** `fillEllipse`/`strokeCircle`/`strokeEllipse` moved off tessellation onto the SDF path -- crisp at any size, under any transform, **independent of MSAA** (the user spotted them aliasing at MSAA 1). Each is now **ONE 6-vertex bounding quad** instead of a radius-scaled fan/ring.
+- **The shader (`shape2d.frag`)** gained two helpers: `ellipseSDF` (Inigo Quilez's gradient-corrected approximate ellipse distance -- EXACT for circles, accurate enough for a 1px AA ramp; there is no closed-form ellipse distance) and `coverageFromSdf` (the shared ~1-screen-pixel ramp using `length(dFdx, dFdy)`, which mode 1 now reuses too). Two new modes: **4** = ellipse FILL, **5** = ellipse RING (`abs(d) - halfThickness`, an annulus around the centerline; the half-thickness rides in the corner-radius slot).
+- **`Renderer2D`**: generalized `sdfBox` -> `sdfQuad(cx, cy, padX, padY, halfX, halfY, cornerRadius, mode, c)` (every SDF mode funnels through it now); `fillEllipse` emits mode 4 (half = radii, pad = radius + 1.5px), `strokeEllipse` emits mode 5 (half = centerline radii, cornerRadius = half-thickness, pad clears the outer rim + 1.5px). `strokeCircle` rides along for free -- rx==ry is the EXACT-annulus case. Retired the `circleSegments` tessellation helper (now unused).
+- **`strokeCircle` is now a true annulus** (exact SDF), not a clamped-inner-rim tessellation -- the inner-rim clamp is gone; once the half-thickness reaches the radius the annulus naturally fills to the centre.
+- **Tests** rewritten to the SDF contract (6-vert quads, modes 4/5, half/cornerRadius fields, pad extents). **Verified on the 4090**: the yellow ellipse, the circle ring, and a new demo ellipse ring all smooth-edged at MSAA 1.
+- **Next**: remaining Phase 3a polish is **pull-based** (kerning, MSDF, the combined `Style` fill+stroke, custom-font loading, sampler config, blend modes) -- ships when a consumer needs it. Otherwise the GUI demo (3b) or the power axis (4). See [[Roadmap]].
+
 ## 2026-06-15 — Phase 2b: capability knobs (vsync + MSAA + GPU override) 🎛️✅
 - **`RendererOptions`** -- a creation-time config object (replacing the positional clear-color) that gathers the long-standing hardcoded knobs. `new Renderer(instance, surface, window, RendererOptions.builder()...build())`. All baked at construction (not runtime-toggleable, per the L2 spec).
 - **2b-i present-mode/vsync**: `.vsync(on)` -- ON (default) = FIFO (capped, no tearing); OFF = MAILBOX where available (uncapped). Threaded into `Swapchain.choosePresentMode`. Verified via a console FPS line (capped near refresh vs uncapped).

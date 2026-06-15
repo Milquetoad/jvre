@@ -18,6 +18,11 @@
 //     vUv and threshold it with a smoothstep whose width tracks the on-screen
 //     scale (fwidth), for a crisp anti-aliased edge at any text size. Colored by
 //     vColor.
+//   - mode 4 ELLIPSE FILL -- an approximate ellipse signed distance (half = the
+//     radii), AA'd like mode 1. Crisp at any size, MSAA-independent.
+//   - mode 5 ELLIPSE RING (stroke) -- abs(ellipse distance) - halfThickness (the
+//     half-thickness rides in cornerRadius); an annulus around the centerline
+//     ellipse. Circles are the rx==ry case (exact).
 
 layout(location = 0) in vec4 vColor;
 layout(location = 1) in vec2 vLocal;
@@ -32,6 +37,25 @@ layout(location = 5) in float vMode;
 layout(set = 0, binding = 0) uniform sampler2D uTex;
 
 layout(location = 0) out vec4 outColor;
+
+// Approximate signed distance to an ellipse with radii ab (Inigo Quilez's
+// gradient-corrected form). EXACT for circles (ab.x == ab.y); near the edge it's
+// accurate enough for a ~1px AA ramp. Negative inside.
+float ellipseSDF(vec2 p, vec2 ab) {
+    ab = max(ab, vec2(1e-4));
+    float k0 = length(p / ab);
+    float k1 = length(p / (ab * ab));
+    if (k1 < 1e-8) return -min(ab.x, ab.y);   // at the center: deep inside
+    return k0 * (k0 - 1.0) / k1;
+}
+
+// Coverage from a signed distance (px, negative inside): a ~1 SCREEN-pixel ramp
+// using the field's screen-space gradient, so the edge stays crisp under any
+// transform/zoom. Shared by every SDF mode.
+float coverageFromSdf(float d) {
+    float w = max(length(vec2(dFdx(d), dFdy(d))), 1e-6);
+    return clamp(0.5 - d / w, 0.0, 1.0);
+}
 
 void main() {
     if (vMode > 1.5 && vMode < 2.5) {
@@ -61,12 +85,15 @@ void main() {
         // round it.
         vec2 q = abs(vLocal) - vHalf + vCornerRadius;
         float d = min(max(q.x, q.y), 0.0) + length(max(q, vec2(0.0))) - vCornerRadius;
-        // Anti-alias over ~1 SCREEN pixel using the distance field's screen-space
-        // gradient: w = |grad d| is ~1 at identity (a true distance field) and
-        // scales with any transform, so a rotated/scaled SDF shape keeps a clean
-        // ~1px edge. (At identity this reduces to the old clamp(0.5 - d).)
-        float w = max(length(vec2(dFdx(d), dFdy(d))), 1e-6);
-        coverage = clamp(0.5 - d / w, 0.0, 1.0);
+        coverage = coverageFromSdf(d);
+    } else if (vMode > 3.5 && vMode < 4.5) {
+        // mode 4: ellipse FILL -- half = the radii, vLocal = pixel offset from centre.
+        coverage = coverageFromSdf(ellipseSDF(vLocal, vHalf));
+    } else if (vMode > 4.5) {
+        // mode 5: ellipse RING (stroke) -- annulus around the centerline ellipse;
+        // vCornerRadius carries the half-thickness.
+        float d = abs(ellipseSDF(vLocal, vHalf)) - vCornerRadius;
+        coverage = coverageFromSdf(d);
     }
     outColor = vec4(vColor.rgb, vColor.a * coverage);
 }

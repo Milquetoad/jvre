@@ -35,7 +35,7 @@ public final class FrameRenderer {
     public void bind(Pipeline pipeline) {
         bound = pipeline;
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
-        if (pipeline.hasUniforms()) {
+        if (pipeline.hasDescriptorSet()) {
             try (MemoryStack stack = stackPush()) {
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                         pipeline.layout(), 0, stack.longs(pipeline.uniformSet(frame)), null);
@@ -61,6 +61,13 @@ public final class FrameRenderer {
     public void uniform(float[] data) {
         requireBound("uniform");
         bound.uploadUniform(frame, data);
+    }
+
+    /** Set the bound pipeline's texture for this frame (it declared one via {@link
+     *  PipelineSpec#builder texture}). */
+    public void texture(Texture tex) {
+        requireBound("texture");
+        bound.uploadTexture(frame, tex);
     }
 
     /** Set the bound pipeline's push constants for this draw (it declared a range). */

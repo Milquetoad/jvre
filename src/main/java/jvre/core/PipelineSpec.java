@@ -32,6 +32,8 @@ public final class PipelineSpec {
     final Stage uniformStage;
     final int pushSize;            // 0 = no push constants
     final Stage pushStage;
+    final boolean hasTexture;      // a combined image sampler at binding 1
+    final Stage textureStage;
 
     private PipelineSpec(Builder b) {
         this.vertexSpirv = b.vertexSpirv;
@@ -46,6 +48,8 @@ public final class PipelineSpec {
         this.uniformStage = b.uniformStage;
         this.pushSize = b.pushSize;
         this.pushStage = b.pushStage;
+        this.hasTexture = b.hasTexture;
+        this.textureStage = b.textureStage;
     }
 
     public static Builder builder() {
@@ -65,6 +69,8 @@ public final class PipelineSpec {
         private Stage uniformStage = Stage.VERTEX;
         private int pushSize = 0;
         private Stage pushStage = Stage.FRAGMENT;
+        private boolean hasTexture = false;
+        private Stage textureStage = Stage.FRAGMENT;
 
         /** Vertex-shader SPIR-V (e.g. {@code ShaderCompiler.compileVertex(src, name)}). */
         public Builder vertexShader(byte[] spirv) {
@@ -120,6 +126,14 @@ public final class PipelineSpec {
         public Builder pushConstants(int sizeBytes, Stage stage) {
             this.pushSize = sizeBytes;
             this.pushStage = stage;
+            return this;
+        }
+
+        /** Declare a texture (combined image sampler) at binding 1, visible to
+         *  {@code stage}; supply it each frame with {@code FrameRenderer.texture(...)}. */
+        public Builder texture(Stage stage) {
+            this.hasTexture = true;
+            this.textureStage = stage;
             return this;
         }
 

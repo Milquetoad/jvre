@@ -316,11 +316,12 @@ public class Main {
         g.fillTriangle(500, 160, 600, 160, 550, 75, Color.rgb(200, 80, 220));
         g.fillQuad(640, 80, 760, 92, 750, 160, 630, 150, Color.rgb(40, 200, 220));
 
-        // Row 2 -- STROKES: rect, circle ring, thick line, mitered triangle outline.
+        // Row 2 -- STROKES: rect, circle ring, ellipse ring, thick line, mitered triangle outline.
         g.strokeRect(40, 210, 120, 80, 6, Color.rgb(20, 20, 20));
         g.strokeCircle(250, 250, 45, 6, Color.rgb(20, 20, 20));
+        g.strokeEllipse(390, 250, 70, 40, 6, Color.rgb(20, 20, 20));
         g.line(330, 295, 470, 205, 6, Color.rgb(255, 140, 0));
-        g.strokeTriangle(500, 290, 600, 290, 550, 205, 6, Color.rgb(20, 20, 20));
+        g.strokeTriangle(560, 290, 660, 290, 610, 205, 6, Color.rgb(20, 20, 20));
 
         // Row 3 -- IMAGES (two textures = two draw runs) + TEXT (SDF glyphs).
         g.image(demoImage, 40, 330, 90, 90);

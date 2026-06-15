@@ -235,37 +235,21 @@ public final class Renderer2D {
     /**
      * Fill an ellipse: centre {@code (cx, cy)} + radii {@code rx, ry}, in pixels.
      *
-     * Tessellated into a triangle FAN -- one slice {@code (centre, rim_i,
-     * rim_i+1)} per segment -- emitted as a flat triangle list (the arena has no
-     * index buffer). The segment count scales with the LARGER radius so a big
-     * ellipse stays smooth and a tiny one stays cheap. This hard-tessellated edge
-     * is what the planned SDF edge-AA will later soften (smoothstepping alpha
-     * over ~1px of signed distance), which is why curves get their own shader
-     * path eventually.
+     * An SDF shape, like {@link #fillCircle}: ONE bounding quad whose fragment
+     * shader computes an approximate ellipse signed distance (Inigo Quilez's
+     * gradient-corrected form -- exact for circles, accurate enough for a 1px
+     * edge) and ramps alpha across ~1 screen pixel. So the rim stays crisp at any
+     * size and under any transform, independent of MSAA, with six vertices
+     * instead of a radius-scaled fan -- the same win the circle/rounded-rect get.
      */
     public void fillEllipse(float cx, float cy, float rx, float ry, Color color) {
         requireInFrame("fillEllipse");
         if (rx < 0f || ry < 0f) {
             throw new IllegalArgumentException("fillEllipse: negative radius (" + rx + ", " + ry + ")");
         }
-        float[] c = color.linearRGBA();
-        int segments = circleSegments(Math.max(rx, ry));
-        float step = (float) (2.0 * Math.PI / segments);
-
-        // Walk the rim once; each step makes a triangle from the centre to the
-        // current and next rim points. Start at angle 0 (the +x point).
-        float prevX = cx + rx;
-        float prevY = cy;
-        for (int i = 1; i <= segments; i++) {
-            float a = i * step;
-            float nextX = cx + rx * (float) Math.cos(a);
-            float nextY = cy + ry * (float) Math.sin(a);
-            vertex(cx, cy, c);
-            vertex(prevX, prevY, c);
-            vertex(nextX, nextY, c);
-            prevX = nextX;
-            prevY = nextY;
-        }
+        // half = the radii; no corner radius; pad ~1.5px past each radius for the
+        // edge ramp. The fragment computes the ellipse SDF from the local coord.
+        sdfQuad(cx, cy, rx + 1.5f, ry + 1.5f, rx, ry, 0f, MODE_ELLIPSE, color.linearRGBA());
     }
 
     /**
@@ -557,13 +541,17 @@ public final class Renderer2D {
     }
 
     /**
-     * Stroke an ellipse: a RING between an outer and an inner rim, the stroke
-     * centered on the radii (outer = r + thickness/2, inner = r - thickness/2).
-     * Unlike the polygon strokes there is no join question -- the curve is
-     * smooth, so each tessellation segment is just a quad spanning outer-to-inner
-     * across that slice, and consecutive quads share an edge with no corner gap.
-     * (The inner rim is clamped at 0, so a thickness wider than the diameter
-     * degenerates cleanly to a filled disc rather than inverting.)
+     * Stroke an ellipse: a RING centered on the radii (outer = r + thickness/2,
+     * inner = r - thickness/2). An SDF shape (like {@link #fillEllipse}): ONE
+     * bounding quad whose fragment shader takes the ellipse distance, folds it to
+     * {@code abs(d) - halfThickness} (the annulus), and ramps alpha across ~1px --
+     * crisp at any size, MSAA-independent. {@code strokeCircle} is the rx==ry case,
+     * where the ellipse distance is EXACT, giving a true annulus.
+     *
+     * The centerline radii ride in {@code half} and the half-thickness in the
+     * corner-radius slot; the quad is padded to the OUTER rim (r + ht) plus ~1.5px
+     * for the ramp. (No inner-rim clamp is needed -- once the half-thickness
+     * reaches the radius the annulus naturally fills to the centre.)
      */
     public void strokeEllipse(float cx, float cy, float rx, float ry, float thickness, Color color) {
         requireInFrame("strokeEllipse");
@@ -574,31 +562,9 @@ public final class Renderer2D {
             throw new IllegalArgumentException("strokeEllipse: negative thickness (" + thickness + ")");
         }
         float ht = thickness * 0.5f;
-        float orx = rx + ht, ory = ry + ht;                   // outer radii
-        float irx = Math.max(0f, rx - ht), iry = Math.max(0f, ry - ht);  // inner radii (clamped)
-        float[] c = color.linearRGBA();
-        int segments = circleSegments(Math.max(orx, ory));
-        float step = (float) (2.0 * Math.PI / segments);
-
-        float poX = cx + orx, poY = cy;   // previous OUTER rim point (angle 0)
-        float piX = cx + irx, piY = cy;   // previous INNER rim point
-        for (int i = 1; i <= segments; i++) {
-            float a = i * step;
-            float ca = (float) Math.cos(a);
-            float sa = (float) Math.sin(a);
-            float noX = cx + orx * ca, noY = cy + ory * sa;   // next outer
-            float niX = cx + irx * ca, niY = cy + iry * sa;   // next inner
-            // The slice's quad (prevOuter, nextOuter, nextInner, prevInner) as
-            // two triangles.
-            vertex(poX, poY, c);
-            vertex(noX, noY, c);
-            vertex(niX, niY, c);
-            vertex(poX, poY, c);
-            vertex(niX, niY, c);
-            vertex(piX, piY, c);
-            poX = noX; poY = noY;
-            piX = niX; piY = niY;
-        }
+        // half = the CENTERLINE radii; cornerRadius = the half-thickness; pad must
+        // clear the outer rim (radius + ht) plus the ~1.5px edge ramp.
+        sdfQuad(cx, cy, rx + ht + 1.5f, ry + ht + 1.5f, rx, ry, ht, MODE_RING, color.linearRGBA());
     }
 
     /**
@@ -695,23 +661,6 @@ public final class Renderer2D {
         }
     }
 
-    /**
-     * How many segments to tessellate a circle of radius {@code r} into. Derived
-     * from a target chord error (~0.3px): the angle whose chord deviates from the
-     * arc by that much is {@code 2*acos(1 - e/r)}, and a full turn divided by it
-     * is the count. Clamped to a sane band so tiny circles still look round and
-     * huge ones don't explode the vertex count.
-     */
-    private static int circleSegments(float r) {
-        if (r <= 0.5f) {
-            return 6;
-        }
-        double maxError = 0.3;  // pixels
-        double theta = 2.0 * Math.acos(Math.max(-1.0, 1.0 - maxError / r));
-        int segments = (int) Math.ceil(2.0 * Math.PI / theta);
-        return Math.max(8, Math.min(segments, 512));
-    }
-
     // ------------------------------------------------------------------
     // package-private: what the Renderer reads to draw the batch
     // ------------------------------------------------------------------
@@ -753,10 +702,12 @@ public final class Renderer2D {
     // ------------------------------------------------------------------
 
     // Mode selectors -- mirror the fragment shader's per-vertex switch.
-    private static final float MODE_FLAT  = 0f;  // full coverage, flat color
-    private static final float MODE_SDF   = 1f;  // SDF rounded box (local/half/cornerRadius)
-    private static final float MODE_IMAGE = 2f;  // textured image (samples the bound texture at uv)
-    private static final float MODE_TEXT  = 3f;  // SDF text (samples the glyph atlas distance at uv)
+    private static final float MODE_FLAT    = 0f;  // full coverage, flat color
+    private static final float MODE_SDF     = 1f;  // SDF rounded box (local/half/cornerRadius)
+    private static final float MODE_IMAGE   = 2f;  // textured image (samples the bound texture at uv)
+    private static final float MODE_TEXT    = 3f;  // SDF text (samples the glyph atlas distance at uv)
+    private static final float MODE_ELLIPSE = 4f;  // SDF ellipse fill (half = the radii)
+    private static final float MODE_RING    = 5f;  // SDF ellipse ring/stroke (half = centerline radii, cornerRadius = halfThickness)
 
     /** Append a FLAT-shape vertex: full coverage, flat color (SDF/uv fields unused). */
     private void vertex(float px, float py, float[] c) {
@@ -803,22 +754,30 @@ public final class Renderer2D {
     }
 
     /**
-     * Emit a rounded-box SDF shape's bounding quad. Both {@link #fillCircle} and
-     * {@link #fillRoundedRect} funnel through here -- a circle is the square box
-     * with maximal corner radius. The quad is padded ~1px past the shape so the
-     * soft edge has room to ramp; each corner carries its pixel offset from the
-     * centre (the SDF local coord), the half-extents, and the corner radius.
+     * Emit an SDF shape's bounding quad: two triangles spanning {@code padX/padY}
+     * past the centre {@code (cx, cy)}, with each corner carrying its pixel offset
+     * from the centre (the SDF local coord), the half-extents, and the corner
+     * radius. Every SDF mode funnels through here -- the rounded box (circle +
+     * rounded-rect, mode 1), the ellipse fill (mode 4), and the ellipse ring
+     * (mode 5) -- differing only in {@code mode} and how the fragment shader reads
+     * {@code half}/{@code cornerRadius}. The pad must clear the shape's furthest
+     * extent plus ~1px so the soft edge has room to ramp.
      */
+    private void sdfQuad(float cx, float cy, float padX, float padY,
+                         float halfX, float halfY, float cornerRadius,
+                         float mode, float[] c) {
+        emit(cx - padX, cy - padY, c, -padX, -padY, halfX, halfY, cornerRadius, 0f, 0f, mode);
+        emit(cx + padX, cy - padY, c,  padX, -padY, halfX, halfY, cornerRadius, 0f, 0f, mode);
+        emit(cx + padX, cy + padY, c,  padX,  padY, halfX, halfY, cornerRadius, 0f, 0f, mode);
+        emit(cx - padX, cy - padY, c, -padX, -padY, halfX, halfY, cornerRadius, 0f, 0f, mode);
+        emit(cx + padX, cy + padY, c,  padX,  padY, halfX, halfY, cornerRadius, 0f, 0f, mode);
+        emit(cx - padX, cy + padY, c, -padX,  padY, halfX, halfY, cornerRadius, 0f, 0f, mode);
+    }
+
+    /** A rounded-box SDF quad (mode 1), padded ~1.5px past the half-extents. */
     private void sdfBox(float cx, float cy, float halfX, float halfY,
                         float cornerRadius, float[] c) {
-        float px = halfX + 1.5f;
-        float py = halfY + 1.5f;
-        emit(cx - px, cy - py, c, -px, -py, halfX, halfY, cornerRadius, 0f, 0f, MODE_SDF);
-        emit(cx + px, cy - py, c,  px, -py, halfX, halfY, cornerRadius, 0f, 0f, MODE_SDF);
-        emit(cx + px, cy + py, c,  px,  py, halfX, halfY, cornerRadius, 0f, 0f, MODE_SDF);
-        emit(cx - px, cy - py, c, -px, -py, halfX, halfY, cornerRadius, 0f, 0f, MODE_SDF);
-        emit(cx + px, cy + py, c,  px,  py, halfX, halfY, cornerRadius, 0f, 0f, MODE_SDF);
-        emit(cx - px, cy + py, c, -px,  py, halfX, halfY, cornerRadius, 0f, 0f, MODE_SDF);
+        sdfQuad(cx, cy, halfX + 1.5f, halfY + 1.5f, halfX, halfY, cornerRadius, MODE_SDF, c);
     }
 
     private void ensureCapacity(int more) {

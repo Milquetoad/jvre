@@ -2,6 +2,17 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-15 — Phase 2a beat 1: user-defined pipelines (the L1 escape hatch) 🔧✅
+- **jvre's flexibility half goes real.** Beyond the fullscreen-only `ShaderEffect`, a user can now render **their own geometry with their own shaders + vertex layout**, mixed with L2 in one frame -- the North Star's "drop to Vulkan without leaving the engine." **Verified on the 4090**: an RGB custom-pipeline triangle renders under the L2 scene; everything crisp.
+- **The thin, GUARDED seam (design A, chosen over a structured Mesh/Material):**
+  - `PipelineSpec` (+ `VertexLayout`, `AttribFormat`, `Cull`) describes a pipeline in jvre's vocabulary -- no raw Vulkan enums.
+  - `renderer.createPipeline(spec)` bakes it, **jvre injecting the swapchain formats + sample count it owns** (the "guarded" half -- the user never passes formats). `renderer.createVertexBuffer(float[])` for geometry.
+  - `SceneRenderer` + `FrameRenderer`: a content seam (sibling of `renderer2D()`/`setEffect`). The user records `frame.bind(pipeline)/bindVertexBuffer/draw` against a jvre-owned facade -- **full draw control, zero raw `VkCommandBuffer`** in user code. jvre still owns the frame (swapchain/sync/viewport).
+- **Additive + DRY:** a new `Pipeline.Kind.CUSTOM` funnels through the SAME bake as the 3 built-ins (only `CUSTOM` clauses added; existing pipelines untouched). The record seam became additive -- scene + L2 shapes both run in a frame; the cube is the fallback when neither is set.
+- **Beat-1 boundaries:** no descriptors/UBO/push yet (so no per-draw uniforms/textures) -- those + the **Camera** + porting the **full cube** are beat 2 (the real dogfood). Known: a user pipeline bakes the swapchain format, so a format change on resize would need a rebuild hook (later).
+- **Demo decluttered + window-scaled:** the whole L2 scene is authored in a reference space and wrapped in one uniform scale transform sized to the window -- resize enlarges everything, undistorted (dogfoods the transform stack). Interactive bits convert mouse px -> reference space (/s). Dropped redundant elements (judgment calls confirmed).
+- **GPU-verified** (pipeline/draw coupling), like the other rendering paths. See [[L1 Escape Hatch]].
+
 ## 2026-06-15 — Release: jvre is publicly installable -- JitPack + v0.1.0 (R3) 🚀✅
 - **The first public consumption path.** `jitpack.yml` (JDK 21 + `publishToMavenLocal`) lets JitPack build jvre from a git tag in its SDK-less env -- possible now that the build is self-contained (shaderc, not glslc). A tagged **`v0.1.0`** GitHub Release is the marker; from it, anyone can `implementation 'com.github.Milquetoad:jvre:v0.1.0'`.
 - **README "Using jvre as a library"** section: the JitPack repo + coordinate, and the per-OS LWJGL **natives** the consumer adds themselves (the "consumer picks" reality made concrete -- the LWJGL libs arrive transitively via jvre's POM, only the natives are theirs). Also fixed two stale README bits: the Vulkan SDK is now *optional* (build needs no glslc), and natives are *auto-detected* (no build.gradle edit).

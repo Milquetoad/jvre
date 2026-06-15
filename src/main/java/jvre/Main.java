@@ -1,16 +1,22 @@
 package jvre;
 
+import jvre.core.AttribFormat;
+import jvre.core.Buffer;
 import jvre.core.Color;
 import jvre.core.Diagnostics;
 import jvre.core.Input;
 import jvre.core.Instance;
 import jvre.core.Key;
 import jvre.core.MouseButton;
+import jvre.core.Pipeline;
+import jvre.core.PipelineSpec;
 import jvre.core.Renderer;
 import jvre.core.Renderer2D;
+import jvre.core.ShaderCompiler;
 import jvre.core.ShaderEffect;
 import jvre.core.Surface;
 import jvre.core.Texture;
+import jvre.core.VertexLayout;
 import jvre.core.Window;
 
 import org.lwjgl.system.Configuration;
@@ -54,6 +60,24 @@ public class Main {
     private final StringBuilder typed = new StringBuilder();   // the demo text field's contents
     private Texture demoImage;    // a generated texture drawn via g.image(), when DEMO_2D
     private Texture demoImage2;   // a SECOND texture -- proves multi-texture batching (flush-on-switch)
+    private Pipeline triPipeline; // a USER-DEFINED pipeline (the L1 escape hatch)
+    private Buffer triBuffer;     // its vertex geometry
+
+    // A user's own shaders for the custom pipeline -- compiled at runtime via
+    // ShaderCompiler (no build-time step), exactly as a jvre consumer would.
+    private static final String TRI_VERT = """
+            #version 450
+            layout(location = 0) in vec2 inPos;
+            layout(location = 1) in vec3 inColor;
+            layout(location = 0) out vec3 vColor;
+            void main() { gl_Position = vec4(inPos, 0.0, 1.0); vColor = inColor; }
+            """;
+    private static final String TRI_FRAG = """
+            #version 450
+            layout(location = 0) in vec3 vColor;
+            layout(location = 0) out vec4 outColor;
+            void main() { outColor = vec4(vColor, 1.0); }
+            """;
 
     public static void main(String[] args) {
         // See the MemoryStack gotcha note: this machine's GPUs expose enough
@@ -107,6 +131,31 @@ public class Main {
             // first text() call mid-loop -- avoids a one-time hitch in frame 1.
             renderer.font();
         }
+
+        // The L1 escape hatch: a USER-DEFINED pipeline drawing a custom triangle
+        // with the user's own shaders + vertex layout, recorded through the scene
+        // seam. It renders UNDER the L2 shapes -- custom geometry and L2 mixed in
+        // one frame, the whole point of the escape hatch.
+        byte[] triVs = ShaderCompiler.compileVertex(TRI_VERT, "tri.vert");
+        byte[] triFs = ShaderCompiler.compileFragment(TRI_FRAG, "tri.frag");
+        VertexLayout triLayout = VertexLayout.builder(5 * Float.BYTES)
+                .attribute(0, AttribFormat.VEC2, 0)               // position (clip space)
+                .attribute(1, AttribFormat.VEC3, 2 * Float.BYTES) // color
+                .build();
+        triPipeline = renderer.createPipeline(PipelineSpec.builder()
+                .vertexShader(triVs).fragmentShader(triFs)
+                .vertexLayout(triLayout).label("demo-triangle").build());
+        triBuffer = renderer.createVertexBuffer(new float[] {
+                //  x      y       r   g   b   (clip space; scales with the window)
+                0.55f, 0.58f,   1f, 0f, 0f,
+                0.92f, 0.58f,   0f, 1f, 0f,
+                0.73f, 0.92f,   0f, 0f, 1f,
+        });
+        renderer.setSceneRenderer(frame -> {
+            frame.bind(triPipeline);
+            frame.bindVertexBuffer(triBuffer);
+            frame.draw(3);
+        });
     }
 
     /**
@@ -147,88 +196,60 @@ public class Main {
     }
 
     /**
-     * The L2 demo: a few rectangles in pixel coordinates (top-left origin),
-     * including a translucent red one that overlaps the blue rectangle AND the
-     * orange clear -- so one glance confirms solid fills, alpha blending, and the
-     * pixel coordinate system all work.
+     * The demo scene -- a tidy, row-organized tour of the engine. Everything is
+     * authored in a fixed REFERENCE space (the initial {@code WIDTH x HEIGHT}) and
+     * wrapped in ONE uniform scale transform sized to the live window, so resizing
+     * the window enlarges the whole scene (undistorted) for closer inspection.
+     * (The custom L1 triangle is in clip space, so it already scales with the
+     * window on its own.) Interactive bits convert the mouse from real pixels back
+     * into reference space (divide by the scale).
      */
     private void drawShapes() {
         g.begin();
-        g.fillRect(100, 100, 220, 160, Color.rgb(40, 120, 220));       // solid blue, anchored top-left
-        g.fillRect(250, 200, 220, 160, Color.rgba(220, 60, 60, 128));  // translucent red, overlapping
-        // A filled circle (centre + radius), tessellated. Translucent so its
-        // round edge shows against the rectangles it overlaps.
-        g.fillCircle(360, 300, 110, Color.rgba(80, 220, 130, 160));     // translucent green circle (SDF)
-        g.fillCircle(720, 90, 14, Color.rgb(255, 255, 255));            // a small SDF circle -- crisp at any size
-        g.fillRoundedRect(540, 500, 200, 80, 24, Color.rgb(120, 90, 230));  // a rounded-rect "button" (SDF)
-        g.fillEllipse(180, 470, 130, 55, Color.rgb(245, 200, 40));      // a wide yellow ellipse
-        g.fillTriangle(520, 60, 760, 60, 640, 230, Color.rgb(200, 80, 220));  // purple triangle
-        g.fillQuad(560, 250, 700, 270, 720, 360, 540, 340, Color.rgb(40, 200, 220));  // cyan quad
-        // Strokes (CPU-triangulated, no GPU line width): a thin dark line across
-        // the top, and a thick diagonal -- different thicknesses, any angle.
-        g.line(40, 40, 760, 40, 3, Color.rgb(20, 20, 20));             // thin near-black rule
-        g.line(80, 540, 320, 410, 14, Color.rgb(255, 140, 0));         // thick orange diagonal
-        // A TRANSLUCENT stroked frame -- if the corners were double-covered they'd
-        // blend brighter; the non-overlapping 8-triangle frame keeps them uniform.
-        g.strokeRect(430, 420, 150, 110, 12, Color.rgba(255, 255, 255, 140));
-        // Stroked curves: a ring (circle outline) and a wide elliptical outline.
-        g.strokeCircle(670, 180, 70, 9, Color.rgb(255, 255, 255));      // white ring
-        g.strokeEllipse(360, 300, 150, 40, 6, Color.rgb(20, 20, 20));   // dark outline round the green circle
-        // Polygon outlines -- the corners are MITER joins. Thick, to make the
-        // mitered corners obvious (sharp, gap-free, no double-blend).
-        g.strokeTriangle(360, 70, 470, 70, 415, 165, 10, Color.rgb(20, 20, 20));   // dark triangle outline
-        g.strokeQuad(120, 380, 250, 360, 280, 470, 90, 450, 8, Color.rgb(255, 255, 255));  // white quad outline
-        // Anchored to the BOTTOM-RIGHT via the live framebuffer size -- relative
-        // layout as plain arithmetic (no coordinate mode). Resize the window and
-        // this square tracks the corner while the others stay pinned top-left.
-        g.fillRect(g.width() - 170, g.height() - 170, 130, 130, Color.WHITE);
-        // Textured IMAGES -- the 64x64 generated textures scaled up to 120x120,
-        // so NEAREST sampling shows crisp texels. Drawn after the shapes, so they
-        // sit on top (one paint order across flat, SDF, and textured alike). TWO
-        // distinct textures in one frame -> two draw runs (flush-on-switch).
-        g.image(demoImage, 40, 120, 120, 120);
-        g.image(demoImage2, 40, 250, 120, 120);
-        // TEXT (SDF glyphs, the built-in DejaVu Sans). Different sizes from one
-        // baked atlas -- crisp at each -- proving the SDF scales for free. The
-        // multi-line string exercises '\n'.
-        g.text("jvre", 470, 110, 72, Color.rgb(20, 20, 20));
-        g.text("the L2 'just draw' altitude:\nshapes, images, and text.", 300, 540, 22,
-                Color.rgb(30, 30, 30));
-        // Transform stack: a rotated + scaled rounded-rect with a text label drawn
-        // in the SAME nested transform (one group). The SDF rounded-rect stays
-        // crisp under rotation/scale (screen-space AA); push/pop scope it so the
-        // rest of the frame is unaffected.
+        float s = Math.min(g.width() / (float) WIDTH, g.height() / (float) HEIGHT);
         g.push();
-        g.translate(650, 440);
-        g.rotate((float) Math.toRadians(-18));
-        g.scale(1.3f);
-        g.fillRoundedRect(-55, -22, 110, 44, 12, Color.rgba(70, 160, 210, 220));
-        g.text("rotated", -46, -13, 24, Color.WHITE);
+        g.scale(s);
+
+        // Row 1 -- FILLS: rounded-rect, circle, ellipse, triangle, quad.
+        g.fillRoundedRect(40, 80, 120, 80, 16, Color.rgb(40, 120, 220));
+        g.fillCircle(250, 120, 45, Color.rgb(80, 200, 130));
+        g.fillEllipse(390, 120, 70, 40, Color.rgb(245, 200, 40));
+        g.fillTriangle(500, 160, 600, 160, 550, 75, Color.rgb(200, 80, 220));
+        g.fillQuad(640, 80, 760, 92, 750, 160, 630, 150, Color.rgb(40, 200, 220));
+
+        // Row 2 -- STROKES: rect, circle ring, thick line, mitered triangle outline.
+        g.strokeRect(40, 210, 120, 80, 6, Color.rgb(20, 20, 20));
+        g.strokeCircle(250, 250, 45, 6, Color.rgb(20, 20, 20));
+        g.line(330, 295, 470, 205, 6, Color.rgb(255, 140, 0));
+        g.strokeTriangle(500, 290, 600, 290, 550, 205, 6, Color.rgb(20, 20, 20));
+
+        // Row 3 -- IMAGES (two textures = two draw runs) + TEXT (SDF glyphs).
+        g.image(demoImage, 40, 330, 90, 90);
+        g.image(demoImage2, 150, 330, 90, 90);
+        g.text("jvre", 280, 330, 52, Color.rgb(20, 20, 20));
+        g.text("L2: shapes, images, text.\nL1: the RGB triangle (custom pipeline).",
+                280, 388, 17, Color.rgb(70, 70, 70));
+
+        // A nested TRANSFORM group (rotated rounded-rect + label, drawn as a unit).
+        g.push();
+        g.translate(660, 250);
+        g.rotate((float) Math.toRadians(-15));
+        g.fillRoundedRect(-60, -28, 120, 56, 12, Color.rgba(70, 160, 210, 220));
+        g.text("rotated", -50, -16, 22, Color.WHITE);
         g.pop();
-        // ANIMATION via the time/delta source. A dot slides with the absolute
-        // clock time(); a small square spins by INTEGRATING dt() (so its speed is
-        // frame-rate independent). One glance confirms both accessors are live.
+
+        // Row 4 -- ANIMATION: a dot slides via time(), a square spins via dt().
         float t = renderer.time();
-        g.fillCircle(400f + (float) Math.sin(t * 2.0) * 150f, 22, 11, Color.rgb(255, 220, 40));
+        g.fillCircle(80 + (float) Math.sin(t * 2.0) * 30f, 500, 11, Color.rgb(255, 220, 40));
         spin += renderer.dt() * 1.5f;
         g.push();
-        g.translate(755, 565);
+        g.translate(180, 500);
         g.rotate(spin);
-        g.fillRect(-12, -12, 24, 24, Color.rgb(120, 90, 230));
+        g.fillRect(-13, -13, 26, 26, Color.rgb(120, 90, 230));
         g.pop();
-        // INTERACTIVE: a rounded box that follows the cursor (framebuffer pixels,
-        // so it sits exactly under the pointer), turns red while the left button
-        // is held, and resizes with the scroll wheel. One glance confirms
-        // position + button + scroll all flow through the input seam.
+
+        // INPUT: a text field (typed text; Backspace deletes, Escape clears) ...
         Input in = window.input();
-        cursorSize = Math.max(12f, Math.min(240f, cursorSize + in.scrollY() * 6f));
-        Color box = in.mouseDown(MouseButton.LEFT)
-                ? Color.rgb(235, 70, 70) : Color.rgba(60, 200, 120, 200);
-        float half = cursorSize * 0.5f;
-        g.fillRoundedRect(in.mouseX() - half, in.mouseY() - half, cursorSize, cursorSize, 10, box);
-        // INTERACTIVE TEXT FIELD: typed characters flow in via typedChars()
-        // (layout/shift handled, character keys auto-repeat); BACKSPACE deletes,
-        // ESCAPE clears. One glance confirms keyboard text + key edges.
         typed.append(in.typedChars());
         if (in.keyPressed(Key.BACKSPACE) && typed.length() > 0) {
             typed.deleteCharAt(typed.length() - 1);
@@ -236,7 +257,18 @@ public class Main {
         if (in.keyPressed(Key.ESCAPE)) {
             typed.setLength(0);
         }
-        g.text("type something: " + typed + "_", 40, 86, 22, Color.rgb(20, 20, 20));
+        g.text("type: " + typed + "_", 280, 470, 20, Color.rgb(20, 20, 20));
+
+        // ... and a box tracking the cursor (red while held, scroll resizes it).
+        // The mouse is in real pixels; divide by s to place it in our scaled space.
+        cursorSize = Math.max(12f, Math.min(160f, cursorSize + in.scrollY() * 6f));
+        Color box = in.mouseDown(MouseButton.LEFT)
+                ? Color.rgb(235, 70, 70) : Color.rgba(60, 200, 120, 200);
+        float half = cursorSize * 0.5f;
+        g.fillRoundedRect(in.mouseX() / s - half, in.mouseY() / s - half,
+                cursorSize, cursorSize, 10, box);
+
+        g.pop();
         g.end();
     }
 
@@ -248,6 +280,13 @@ public class Main {
         }
         if (demoImage2 != null) {
             demoImage2.close();
+        }
+        // Caller-owned custom pipeline + its geometry (close before the renderer).
+        if (triBuffer != null) {
+            triBuffer.close();
+        }
+        if (triPipeline != null) {
+            triPipeline.close();
         }
         // Reverse order of creation: the renderer (the whole device context)
         // goes first, then the instance-level objects, then the window.

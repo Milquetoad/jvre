@@ -175,6 +175,11 @@ public class Renderer {
     // The built-in font (DejaVu Sans), baked to an SDF atlas on first text use.
     private Font defaultFont;
 
+    // The L1 custom-geometry content seam (the escape hatch). When set, it draws
+    // each frame alongside any L2 shapes; the cube demo is the fallback when
+    // neither is active. User-owned pipelines/buffers -- jvre just invokes this.
+    private SceneRenderer sceneRenderer;
+
     // Uniform buffers, one PER FRAME IN FLIGHT (same reasoning as the sync
     // objects: frame N+1's CPU write must not stomp frame N's in-flight GPU
     // read; the slot's fence guards the handoff). Host-visible on purpose --
@@ -349,6 +354,37 @@ public class Renderer {
             defaultFont = Font.load(device, commandPool, "/fonts/DejaVuSans.ttf", 48f);
         }
         return defaultFont;
+    }
+
+    /**
+     * Build a USER-DEFINED pipeline (the L1 escape hatch) from a {@link
+     * PipelineSpec}. jvre injects the swapchain color/depth formats + sample count
+     * it owns, so the user never passes Vulkan formats. The caller OWNS the
+     * returned Pipeline and must {@code close()} it before the Renderer. (Note: it
+     * bakes the current swapchain format; a format change on resize -- rare --
+     * would require rebuilding it. A rebuild hook is a later refinement.)
+     */
+    public Pipeline createPipeline(PipelineSpec spec) {
+        return Pipeline.fromSpec(device, swapchain.imageFormat(), swapchain.depthFormat(),
+                swapchain.sampleCount(), spec);
+    }
+
+    /**
+     * Create a device-local vertex buffer from interleaved float data, for a
+     * custom pipeline's geometry. Caller-owned: {@code close()} it before the
+     * Renderer.
+     */
+    public Buffer createVertexBuffer(float[] vertices) {
+        return Buffer.deviceLocal(device, commandPool, vertices, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    }
+
+    /**
+     * Install the per-frame custom-geometry callback (the L1 scene seam). It runs
+     * each frame inside the active render pass, receiving a {@link FrameRenderer}
+     * to record bind/draw against. Pass {@code null} to remove it.
+     */
+    public void setSceneRenderer(SceneRenderer sceneRenderer) {
+        this.sceneRenderer = sceneRenderer;
     }
 
     private void buildShapePipeline() {
@@ -894,7 +930,14 @@ public class Renderer {
                 // Not indexed, no instances: literally "run the vertex shader
                 // three times".
                 vkCmdDraw(cmd, 3, 1, 0, 0);
-            } else if (shapeBatchActive()) {
+            } else {
+                // Content seam (non-effect): the L1 custom-geometry scene first
+                // (under any L2 UI), then the L2 shapes on top -- both may run in
+                // one frame. The cube demo is the fallback when neither is set.
+                if (sceneRenderer != null) {
+                    sceneRenderer.render(new FrameRenderer(cmd));
+                }
+                if (shapeBatchActive()) {
                 // ---- L2 Renderer2D shapes ----
                 // One vertex buffer (this frame's arena), no index buffer, no
                 // descriptors. The 8-byte VERTEX push carries uResolution so the
@@ -921,8 +964,9 @@ public class Renderer {
                             shapePipeline.layout(), 0, stack.longs(currentRunSets[r]), null);
                     vkCmdDraw(cmd, vcount, 1, first, 0);
                 }
-            } else {
-                // ---- The cube demo ----
+                }
+                if (sceneRenderer == null && !shapeBatchActive()) {
+                // ---- The cube demo (fallback) ----
                 // Bind the pipeline: ONE call swaps in the shaders + all the
                 // baked fixed-function state.
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
@@ -957,6 +1001,7 @@ public class Renderer {
                 // to every index -- handy for packing many meshes in one buffer),
                 // first instance 0.
                 vkCmdDrawIndexed(cmd, CUBE_INDICES.length, 1, 0, 0, 0);
+                }
             }
 
             vkCmdEndRendering(cmd);

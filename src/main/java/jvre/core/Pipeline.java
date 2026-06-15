@@ -74,7 +74,9 @@ public class Pipeline {
         /** ShaderEffect: no vertex input (fullscreen triangle), no depth/resources, 20-byte frag push. */
         FULLSCREEN_EFFECT,
         /** L2 shapes: [x y | r g b a] verts, no cull/depth, blend on, no resources, 8-byte vertex push. */
-        SHAPES_2D
+        SHAPES_2D,
+        /** User-defined (the L1 escape hatch): vertex layout + fixed-function from a {@link PipelineSpec}. */
+        CUSTOM
     }
 
     /**
@@ -86,7 +88,20 @@ public class Pipeline {
                     String vertResource, String fragResource) {
         this(device, colorFormat, depthFormat, sampleCount,
                 readResource(vertResource), readResource(fragResource),
-                Kind.SCENE, vertResource + " + " + fragResource);
+                Kind.SCENE, vertResource + " + " + fragResource, null);
+    }
+
+    /**
+     * Build a USER-DEFINED pipeline (the L1 escape hatch) from a {@link
+     * PipelineSpec}. The caller supplies shaders + vertex layout + fixed-function
+     * choices; the swapchain formats + sample count are passed in by {@link
+     * Renderer#createPipeline}. Funnels through the same bake as the built-in
+     * kinds. v1: no descriptors / push constants.
+     */
+    public static Pipeline fromSpec(Device device, int colorFormat, int depthFormat,
+                                    int sampleCount, PipelineSpec spec) {
+        return new Pipeline(device, colorFormat, depthFormat, sampleCount,
+                spec.vertexSpirv, spec.fragmentSpirv, Kind.CUSTOM, spec.label, spec);
     }
 
     /**
@@ -108,7 +123,7 @@ public class Pipeline {
                                             int sampleCount, byte[] vertSpirv, byte[] fragSpirv,
                                             String label) {
         return new Pipeline(device, colorFormat, depthFormat, sampleCount,
-                vertSpirv, fragSpirv, Kind.FULLSCREEN_EFFECT, label);
+                vertSpirv, fragSpirv, Kind.FULLSCREEN_EFFECT, label, null);
     }
 
     /**
@@ -124,11 +139,12 @@ public class Pipeline {
                                     int sampleCount, String vertResource, String fragResource) {
         return new Pipeline(device, colorFormat, depthFormat, sampleCount,
                 readResource(vertResource), readResource(fragResource),
-                Kind.SHAPES_2D, vertResource + " + " + fragResource);
+                Kind.SHAPES_2D, vertResource + " + " + fragResource, null);
     }
 
     private Pipeline(Device device, int colorFormat, int depthFormat, int sampleCount,
-                     byte[] vertSpirv, byte[] fragSpirv, Kind kind, String label) {
+                     byte[] vertSpirv, byte[] fragSpirv, Kind kind, String label,
+                     PipelineSpec spec) {
         this.device = device;
 
         try (MemoryStack stack = stackPush()) {
@@ -223,6 +239,26 @@ public class Pipeline {
 
                 vertexInput.pVertexBindingDescriptions(binding);
                 vertexInput.pVertexAttributeDescriptions(attributes);
+            } else if (kind == Kind.CUSTOM) {
+                // User-defined: one binding (binding 0) with the user's stride +
+                // attributes, translated from the VertexLayout.
+                VertexLayout layout = spec.vertexLayout;
+                VkVertexInputBindingDescription.Buffer binding =
+                        VkVertexInputBindingDescription.calloc(1, stack);
+                binding.binding(0);
+                binding.stride(layout.stride());
+                binding.inputRate(VK_VERTEX_INPUT_RATE_VERTEX);
+
+                java.util.List<VertexLayout.Attribute> attrs = layout.attributes();
+                VkVertexInputAttributeDescription.Buffer attributes =
+                        VkVertexInputAttributeDescription.calloc(attrs.size(), stack);
+                for (int i = 0; i < attrs.size(); i++) {
+                    VertexLayout.Attribute a = attrs.get(i);
+                    attributes.get(i).location(a.location).binding(0)
+                            .format(a.format.vk).offset(a.offset);
+                }
+                vertexInput.pVertexBindingDescriptions(binding);
+                vertexInput.pVertexAttributeDescriptions(attributes);
             }
             // (FULLSCREEN_EFFECT: left EMPTY -- zero bindings, zero attributes.
             // The vertex shader reads only gl_VertexIndex; "no vertex buffer" is
@@ -268,7 +304,8 @@ public class Pipeline {
             rasterizer.polygonMode(VK_POLYGON_MODE_FILL);   // fill, not wireframe
             // Only the 3D scene culls. The flat passes (effect, 2D shapes) draw
             // known-facing geometry, so culling buys nothing and risks everything.
-            rasterizer.cullMode(kind == Kind.SCENE ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE);
+            rasterizer.cullMode(kind == Kind.SCENE ? VK_CULL_MODE_BACK_BIT
+                    : kind == Kind.CUSTOM ? spec.cull.vk : VK_CULL_MODE_NONE);
             rasterizer.frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE);  // two mirrors cancel
             rasterizer.lineWidth(1.0f);  // required even when not drawing lines
 
@@ -295,8 +332,8 @@ public class Pipeline {
             // Only the 3D scene tests/writes depth; the flat passes have nothing
             // to occlude. (The attachment FORMAT below is declared regardless --
             // the render pass instance always carries a depth attachment.)
-            depthStencil.depthTestEnable(kind == Kind.SCENE);
-            depthStencil.depthWriteEnable(kind == Kind.SCENE);
+            depthStencil.depthTestEnable(kind == Kind.SCENE || (kind == Kind.CUSTOM && spec.depthTest));
+            depthStencil.depthWriteEnable(kind == Kind.SCENE || (kind == Kind.CUSTOM && spec.depthWrite));
             depthStencil.depthCompareOp(VK_COMPARE_OP_LESS);
             depthStencil.depthBoundsTestEnable(false);
             depthStencil.stencilTestEnable(false);
@@ -319,7 +356,7 @@ public class Pipeline {
                     VkPipelineColorBlendAttachmentState.calloc(1, stack);
             // Scene + 2D shapes alpha-blend (translucency); only the fullscreen
             // effect writes every pixel opaquely (REPLACE -- factors below ignored).
-            blendAttachment.blendEnable(kind != Kind.FULLSCREEN_EFFECT);
+            blendAttachment.blendEnable(kind == Kind.CUSTOM ? spec.blend : kind != Kind.FULLSCREEN_EFFECT);
             blendAttachment.srcColorBlendFactor(VK_BLEND_FACTOR_SRC_ALPHA);
             blendAttachment.dstColorBlendFactor(VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA);
             blendAttachment.colorBlendOp(VK_BLEND_OP_ADD);
@@ -355,9 +392,10 @@ public class Pipeline {
             // are instances of this shape, pointing at real buffers/images.
             // Identically-defined layouts are compatible, so sets survive a
             // pipeline rebuild (the resize format-change path).
-            if (kind == Kind.FULLSCREEN_EFFECT) {
-                // The effect's whole interface is the push-constant block -- it
-                // binds no resources, so there is no layout to create.
+            if (kind == Kind.FULLSCREEN_EFFECT || kind == Kind.CUSTOM) {
+                // The effect's whole interface is the push-constant block; a v1
+                // CUSTOM pipeline binds no resources yet (UBOs/textures are the
+                // next beat). Either way, no descriptor set layout to create.
                 descriptorSetLayout = VK_NULL_HANDLE;
             } else if (kind == Kind.SHAPES_2D) {
                 // L2 shapes bind ONE resource: the texture that image (mode 2)
@@ -419,22 +457,29 @@ public class Pipeline {
             //   FULLSCREEN_EFFECT -> 20 bytes @ fragment (uResolution/uMouse/uTime)
             //   SHAPES_2D         -> 8 bytes  @ vertex   (uResolution, for px->NDC)
             // (Spec floor for push space is 128 bytes; all three are well under.)
-            VkPushConstantRange.Buffer pushRange = VkPushConstantRange.calloc(1, stack);
-            pushRange.stageFlags(kind == Kind.SHAPES_2D
-                    ? VK_SHADER_STAGE_VERTEX_BIT : VK_SHADER_STAGE_FRAGMENT_BIT);
-            pushRange.offset(0);
-            pushRange.size(switch (kind) {
+            int pushSize = switch (kind) {
                 case SCENE -> Float.BYTES;
                 case FULLSCREEN_EFFECT -> 5 * Float.BYTES;
                 case SHAPES_2D -> 2 * Float.BYTES;
-            });
+                case CUSTOM -> 0;   // v1 CUSTOM has no push constants
+            };
+            VkPushConstantRange.Buffer pushRange = null;
+            if (pushSize > 0) {
+                pushRange = VkPushConstantRange.calloc(1, stack);
+                pushRange.stageFlags(kind == Kind.SHAPES_2D
+                        ? VK_SHADER_STAGE_VERTEX_BIT : VK_SHADER_STAGE_FRAGMENT_BIT);
+                pushRange.offset(0);
+                pushRange.size(pushSize);
+            }
 
             VkPipelineLayoutCreateInfo layoutInfo = VkPipelineLayoutCreateInfo.calloc(stack);
             layoutInfo.sType(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
             if (descriptorSetLayout != VK_NULL_HANDLE) {
                 layoutInfo.pSetLayouts(stack.longs(descriptorSetLayout));
             }
-            layoutInfo.pPushConstantRanges(pushRange);
+            if (pushRange != null) {
+                layoutInfo.pPushConstantRanges(pushRange);
+            }
 
             LongBuffer pLayout = stack.longs(VK_NULL_HANDLE);
             Vk.check(vkCreatePipelineLayout(device.handle(), layoutInfo, null, pLayout),

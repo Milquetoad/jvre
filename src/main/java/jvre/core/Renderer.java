@@ -240,15 +240,28 @@ public class Renderer {
         return Texture.create(device, commandPool, rgbaPixels, width, height);
     }
 
+    /** {@link #createImage(byte[], int, int)} with an explicit sampling {@link Filter}
+     *  (default NEAREST -- crisp -- for hand-authored pixels). */
+    public Texture createImage(byte[] rgbaPixels, int width, int height, Filter filter) {
+        return Texture.create(device, commandPool, rgbaPixels, width, height, filter);
+    }
+
     /**
      * Load + decode an image FILE from the classpath ({@code resourcePath}, e.g.
      * {@code "/images/sprite.png"}) into a drawable image -- PNG/JPEG/BMP/TGA/...
      * via stb_image. The convenience over {@link #createImage}: you don't decode
-     * the bytes yourself. Same ownership rule -- {@code close()} it before the
-     * Renderer.
+     * the bytes yourself. Sampling defaults to {@link Filter#LINEAR} (smooth
+     * scaling for a decoded asset). Same ownership rule -- {@code close()} it
+     * before the Renderer.
      */
     public Texture loadImage(String resourcePath) {
         return Texture.load(device, commandPool, resourcePath);
+    }
+
+    /** {@link #loadImage(String)} with an explicit sampling {@link Filter}
+     *  (e.g. {@link Filter#NEAREST} for pixel art). */
+    public Texture loadImage(String resourcePath, Filter filter) {
+        return Texture.load(device, commandPool, resourcePath, filter);
     }
 
     /**

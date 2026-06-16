@@ -76,6 +76,11 @@ Textures is where the [[Game-Engine Capabilities (planned)|mechanism/policy seam
 - **UV sub-rectangle** (the seam that makes sprite-sheet animation possible from above) -- the UV *machinery* exists, but UVs are currently the whole texture [0,1]. Addressing part of an atlas is a thin change on top.
 - **Alpha blending** (transparency seam) -- **done** (beat 6, section above): src-over-dst alpha; half the checker cells made transparent to prove it. Straight alpha for now; premultiplied is the filtered-sprite knob.
 
+## Sampler filter: NEAREST vs LINEAR (and what it can't do)
+The sampler's `magFilter`/`minFilter` decide how a texture is read when drawn off-1:1. jvre exposes this as the `Filter` enum (2026-06-16): NEAREST = the single closest texel (crisp, hard blocks -- pixel art / exact hand-authored pixels), LINEAR = bilinear blend of the 4 nearest (smooth -- decoded photo/illustration). Defaults follow intent (`createImage`->NEAREST, `loadImage`->LINEAR).
+
+**Key insight -- filtering changes the artifact, not the information.** A filter never invents detail: a low-res source enlarged stays low-res. LINEAR vs NEAREST only differs at *texel boundaries* (smooth blur vs hard squares); across a flat color region they're identical. So "it still looks low-res after switching to LINEAR" is expected when the source is small -- the fix for sharpness is a higher-res asset (or drawing at native size), not a filter. (Genuine detail-from-nothing is super-resolution, a different thing entirely.) **Mipmaps + anisotropy** -- the *minification* (downscaling) quality knobs -- are a separate later refinement; the filter alone covers magnification.
+
 ## Next
 
 **3D + depth** (the substrate is already 3D-capable -- a `z` + a perspective matrix + a depth buffer; see [[Game-Engine Capabilities (planned)]]), then **MSAA** (needs the own-`VkImage` machinery this milestone just built, plus a multisampled depth buffer). The VMA milestone looms larger now -- every image is another single allocation the best-practices layer flags.

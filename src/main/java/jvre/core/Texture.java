@@ -87,10 +87,17 @@ public class Texture {
      */
     public static Texture create(Device device, long commandPool,
                                  byte[] pixels, int width, int height) {
-        // R8G8B8A8_SRGB (4 bytes/texel, GPU linearizes on sample) + NEAREST (the
-        // pixel-art default). The sprite/image path.
+        // NEAREST: the default for hand-authored exact pixels (crisp, no blur).
+        return create(device, commandPool, pixels, width, height, Filter.NEAREST);
+    }
+
+    /** {@link #create(Device, long, byte[], int, int)} with an explicit sampling
+     *  {@link Filter} (NEAREST for crisp pixels, LINEAR for smooth scaling). */
+    public static Texture create(Device device, long commandPool,
+                                 byte[] pixels, int width, int height, Filter filter) {
+        // R8G8B8A8_SRGB (4 bytes/texel, GPU linearizes on sample). The sprite/image path.
         return upload(device, commandPool, pixels, width, height,
-                VK_FORMAT_R8G8B8A8_SRGB, 4, VK_FILTER_NEAREST);
+                VK_FORMAT_R8G8B8A8_SRGB, 4, filter.vk);
     }
 
     /**
@@ -103,10 +110,16 @@ public class Texture {
      * pixels by hand.
      *
      * <p>The decoded pixels are treated as sRGB color (the format is
-     * R8G8B8A8_SRGB, NEAREST-filtered) -- consistent with {@link #create}. (A
-     * choice of filter / mips is a later sampler-config refinement.)
+     * R8G8B8A8_SRGB). Sampling defaults to {@link Filter#LINEAR} (smooth scaling --
+     * the right default for a decoded image asset); pass an explicit filter to
+     * override. (Mipmaps are a later refinement.)
      */
     public static Texture load(Device device, long commandPool, String resourcePath) {
+        return load(device, commandPool, resourcePath, Filter.LINEAR);
+    }
+
+    /** {@link #load(Device, long, String)} with an explicit sampling {@link Filter}. */
+    public static Texture load(Device device, long commandPool, String resourcePath, Filter filter) {
         ByteBuffer fileBytes = readResource(resourcePath);   // native buffer -- memFree below
         try (MemoryStack stack = stackPush()) {
             IntBuffer w = stack.mallocInt(1);
@@ -126,7 +139,7 @@ public class Texture {
                 // (tested) create() path. One copy at load time -- negligible.
                 byte[] pixels = new byte[width * height * 4];
                 decoded.get(pixels);
-                return create(device, commandPool, pixels, width, height);
+                return create(device, commandPool, pixels, width, height, filter);
             } finally {
                 // get() advanced decoded's position to the end. stb_image_free frees
                 // the pointer AT THE BUFFER'S CURRENT POSITION (LWJGL uses the

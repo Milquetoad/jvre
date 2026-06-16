@@ -184,6 +184,28 @@ public class Texture {
                 VK_FORMAT_R8_UNORM, 1, VK_FILTER_LINEAR);
     }
 
+    /**
+     * Build a sampleable color image we RENDER INTO rather than upload pixels into
+     * -- the {@link RenderTarget}'s presentable/sampled surface. The difference
+     * from {@link #create} is all in the usage and the (absent) data path:
+     *   - usage = COLOR_ATTACHMENT (be rendered into) | SAMPLED (be read back as a
+     *     texture later). That dual usage IS render-to-texture -- the same image is
+     *     a draw destination in one pass and a sampler2D source in the next.
+     *   - no pixels, no staging upload: the image is born UNDEFINED and gets its
+     *     contents from a render pass, not a buffer copy. The render loop owns its
+     *     layout journey (UNDEFINED -> COLOR_ATTACHMENT -> SHADER_READ_ONLY).
+     * It still gets a view + sampler so it is, structurally, an ordinary Texture --
+     * which is the whole point: a target drops into {@code g.image(...)} and
+     * custom-pipeline texture slots unchanged. Single-sample (it is the RESOLVE
+     * destination when the target is multisampled, or the direct target when not).
+     */
+    static Texture renderTarget(Device device, int width, int height, int format, Filter filter) {
+        Texture texture = new Texture(device, width, height, format,
+                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+        texture.createViewAndSampler(filter.vk);
+        return texture;
+    }
+
     /** The shared staging upload: stage the pixels, create the image in {@code
      *  format}, copy + transition, then build the view + a sampler of {@code
      *  filter}. {@code bytesPerTexel} sizes the staging buffer for the format. */

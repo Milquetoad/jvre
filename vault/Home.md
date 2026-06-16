@@ -69,6 +69,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - [[Diagnostics and the Crash Log]] — the Ring 2 guard: an environment fingerprint tee'd to a per-OS log so a fault on foreign hardware is diagnosable from one file
 - [[L2 Feature Set - Renderer2D]] — the formal "just draw" surface: principles, primitives, the no-modes decision (draft)
 - [[Game-Engine Capabilities (planned)]] — what L1 must expose so a game engine can be built on jvre: the mechanism/policy rule, the Tier-2 target, text/camera/3D scope, the 3 Renderer-shape constraints
+- [[Render to Texture and Offscreen Targets]] — render into an image instead of the swapchain (Phase-4 4a): the gateway capability; a `RenderTarget` that is-a Texture; the target-agnostic loop; L1 `drawToTarget` + L2 `createCanvas`; the aliasing + resolution lessons
 - [[Device Selection and Cross-Platform (planned)]] — flexible GPU choice + OS-agnostic (post-MVP)
 
 ### Foundations (Java ↔ native)
@@ -160,5 +161,6 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - ✅ 🖱️ **Immediate-mode GUI demo** (`jvre.demo`, built ON L2 -- a worked example, not a feature; the hot/active-ID lesson).
 - ✅ 📖 **Docs + API audit** — user guides in `docs/` (+ the [[Public API surface]] contract); the public `jvre.core` surface tightened for the 1.0 freeze.
 - ✅ 🏁 **jvre 1.0.0 RELEASED on Maven Central** (`io.github.milquetoad:jvre:1.0.0`) — GPG-signed, cross-platform CI, the project's stated finish line. **Beyond 1.0:** built out toward fully-fledged ([[Roadmap]] Phases 3-4).
+- ✅ 🎯 [[Render to Texture and Offscreen Targets]] — **render into an image, sample it back** (Phase-4 4a): a `RenderTarget` that is-a Texture; the target-agnostic render loop; L1 `drawToTarget` + L2 `createCanvas` (the `createGraphics` analog) + the `ShapeBatch` refactor (verified on the 4090, validation silent).
 
 #jvre #moc

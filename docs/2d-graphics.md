@@ -257,3 +257,6 @@ renderer.drawFrame();
   3D, drop to the L1 escape hatch (`renderer.createPipeline(...)` + a scene
   renderer) and the `Camera` helper. You can mix custom 3D *under* a 2D overlay in
   the same frame.
+- **[Render to texture](render-to-texture.md)** — draw the *same* 2D API into an
+  offscreen image instead of the screen with `renderer.createCanvas(target)` (the
+  `createGraphics` analog), then stamp it back with `g.image(target.texture(), …)`.

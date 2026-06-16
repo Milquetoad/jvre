@@ -48,6 +48,12 @@ public final class Renderer2D {
     // design -- no coordinate modes (the mechanism/policy boundary).
     private final Renderer owner;
 
+    // When this surface draws into an OFFSCREEN canvas (Renderer.createCanvas), the
+    // size basis is the TARGET, not the swapchain -- so width()/height() (what the
+    // user composes layout from) report the target's dimensions. Null = the main
+    // surface (sizes from the live framebuffer).
+    private final RenderTarget canvas;
+
     // Draw RUNS -- the flush-on-texture-switch batching. The vertex arena stays
     // one buffer in paint order; runs slice it into contiguous ranges that each
     // need a different texture bound. runFirst[i] = the first vertex of run i;
@@ -72,17 +78,22 @@ public final class Renderer2D {
     private final Matrix3x2f transform = new Matrix3x2f();
     private final Deque<Matrix3x2f> transformStack = new ArrayDeque<>();
 
-    Renderer2D() { this.owner = null; }              // CPU-only (tests)
-    Renderer2D(Renderer owner) { this.owner = owner; }  // the Renderer vends this one
-
-    /** Current framebuffer width in pixels -- the basis for relative layout. */
-    public int width() {
-        return owner.framebufferWidth();
+    Renderer2D() { this.owner = null; this.canvas = null; }       // CPU-only (tests)
+    Renderer2D(Renderer owner) { this.owner = owner; this.canvas = null; }  // the main surface
+    Renderer2D(Renderer owner, RenderTarget canvas) {             // an offscreen canvas
+        this.owner = owner;
+        this.canvas = canvas;
     }
 
-    /** Current framebuffer height in pixels. */
+    /** Width in pixels of what this surface draws into -- the swapchain for the main
+     *  surface, the target for a canvas -- the basis for relative layout. */
+    public int width() {
+        return canvas != null ? canvas.width() : owner.framebufferWidth();
+    }
+
+    /** Height in pixels of what this surface draws into (see {@link #width()}). */
     public int height() {
-        return owner.framebufferHeight();
+        return canvas != null ? canvas.height() : owner.framebufferHeight();
     }
 
     /**

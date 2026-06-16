@@ -23,6 +23,9 @@ directory is for people who want to *use* jvre.
 - **[Custom pipelines](custom-pipelines.md)** — the low-level escape hatch: your
   own geometry, vertex layout, shaders, uniforms, and textures, mixed with the 2D
   surface in one frame; plus the `Camera` helper for 3D.
+- **[Render to texture](render-to-texture.md)** — render into an offscreen image
+  (`RenderTarget`) and sample it back: from L1 geometry (`drawToTarget`) or an L2
+  canvas (`createCanvas`). For post-processing, minimaps, compositing.
 
 ## Reference
 
@@ -53,9 +56,10 @@ Window      the OS window + input (GLFW)
   Instance      the Vulkan instance (+ optional validation layers)
     Surface       the window<->Vulkan bridge
       Renderer      owns the GPU device, swapchain, and the frame loop
-        renderer2D()    -> Renderer2D   (the 2D surface)
-        setEffect(...)  -> a full-screen ShaderEffect
-        createPipeline()-> a custom L1 pipeline
+        renderer2D()        -> Renderer2D   (the 2D surface)
+        setEffect(...)      -> a full-screen ShaderEffect
+        createPipeline()    -> a custom L1 pipeline
+        createRenderTarget()-> an offscreen RenderTarget (render-to-texture)
 ```
 
 You create `Window` → `Instance` → `Surface` → `Renderer`, draw each frame between

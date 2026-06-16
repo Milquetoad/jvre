@@ -28,6 +28,8 @@ import org.lwjgl.vulkan.VkWriteDescriptorSet;
 import java.nio.DoubleBuffer;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.KHRSwapchain.*;
@@ -81,32 +83,53 @@ public class Renderer {
     // HERE -- pipelines bake swapchain formats, and the arenas are fence-guarded
     // per-frame slots exactly like the UBOs. Created lazily on renderer2D().
     private Renderer2D renderer2D;
+    // ONE shape pipeline, shared by the main surface AND every offscreen canvas:
+    // it bakes the swapchain format/depth/samples, which a RenderTarget matches, so
+    // every shape batch -- main or canvas -- binds the same pipeline.
     private Pipeline shapePipeline;
-    private Buffer[] shapeArenas;   // [frame in flight], host-visible, grown on overflow
+    // The main surface's per-frame GPU resources (arena + descriptor pool). See
+    // ShapeBatch: one bundle per Renderer2D, because the main batch and a canvas
+    // batch are both live in one command buffer (drawn into different passes), so
+    // they cannot share an arena.
+    private ShapeBatch mainBatch;
     // Initial per-frame arena (~2730 shape vertices at 6 floats each); grows if exceeded.
     private static final long INITIAL_ARENA_BYTES = 64 * 1024;
-
-    // The shape pipeline's texture descriptors. A frame can draw several textures
-    // (one DRAW RUN each -- see Renderer2D), and a single set can't be rebound
-    // between draws in one command buffer, so we need one set PER RUN. The textbook
-    // pattern: a TRANSIENT per-frame pool, RESET and re-allocated each frame (one
-    // set per run), fence-guarded like every other per-frame resource. One pool
-    // per frame in flight; it grows if a frame ever needs more runs than it holds.
-    private long[] shapeDescriptorPools;   // [frame in flight]
-    private int[] shapePoolCapacity;       // current maxSets per pool (for growth)
-    private long[] currentRunSets;         // this frame's per-run sets (transient, rebuilt each frame)
     private static final int INITIAL_SHAPE_POOL_SETS = 16;
     // A 1x1 opaque white texture: the always-valid default bound when no image is
     // drawn (the shader's sampler is referenced statically, so SOMETHING must be
-    // bound even when no shape samples it). White also = the neutral tint.
+    // bound even when no shape samples it). White also = the neutral tint. Shared.
     private Texture defaultWhiteTexture;
     // The built-in font (DejaVu Sans), baked to an SDF atlas on first text use.
     private Font defaultFont;
+
+    // Offscreen L2 canvases (createCanvas): the Processing createGraphics analog.
+    // Each pairs a Renderer2D with its own ShapeBatch and a RenderTarget; every
+    // frame its batch has content, jvre records it into the target (a target pass)
+    // before the swapchain pass, so the user can g.image(canvas.texture()) it.
+    private final List<Canvas> canvases = new ArrayList<>();
+    private record Canvas(RenderTarget target, Renderer2D r2d, ShapeBatch batch) {}
 
     // The L1 custom-geometry content seam (the escape hatch). When set, it draws
     // each frame alongside any L2 shapes; the cube demo is the fallback when
     // neither is active. User-owned pipelines/buffers -- jvre just invokes this.
     private SceneRenderer sceneRenderer;
+
+    // Per-frame queue of offscreen render-to-texture passes, recorded BEFORE the
+    // swapchain pass each frame -- so the swapchain is, in effect, just the LAST
+    // render target. Immediate mode (like the shape batch): the user re-enqueues
+    // via drawToTarget() every frame, and the queue is drained + cleared each
+    // drawFrame. A target ends its pass in SHADER_READ_ONLY, so the swapchain pass
+    // (or a later target) can sample it.
+    private final List<TargetPass> targetPasses = new ArrayList<>();
+    private record TargetPass(RenderTarget target, SceneRenderer content) {}
+
+    // What a target pass records INSIDE its render pass -- an L1 FrameRenderer
+    // callback or an L2 canvas's shape draws. recordTargetPass owns the attachments
+    // + barriers; this owns the draws. (Internal -- not the public seam.)
+    @FunctionalInterface
+    private interface PassContent {
+        void record(VkCommandBuffer cmd);
+    }
 
     // The clear color (RGBA in [0,1]); becomes real API once there is more to
     // render than a clear. The swapchain is an sRGB format, so these linear
@@ -216,18 +239,35 @@ public class Renderer {
         if (renderer2D == null) {
             renderer2D = new Renderer2D(this);
             buildShapePipeline();
-            shapeArenas = new Buffer[MAX_FRAMES_IN_FLIGHT];
-            for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-                shapeArenas[i] = new Buffer(device, INITIAL_ARENA_BYTES,
-                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
-            }
-            // The 1x1 white default + the per-frame texture descriptor sets the
-            // image/text shapes sample through.
+            // The 1x1 white default the image/text shapes' descriptor sets fall back
+            // to. Shared by every batch. Built before the first ShapeBatch (whose
+            // descriptor prep binds it for flat/SDF runs).
             defaultWhiteTexture = Texture.create(device, commandPool,
                     new byte[] { (byte) 255, (byte) 255, (byte) 255, (byte) 255 }, 1, 1);
-            createShapeDescriptors();
+            mainBatch = new ShapeBatch();
         }
         return renderer2D;
+    }
+
+    /**
+     * Create an OFFSCREEN L2 canvas (the Processing {@code createGraphics} analog):
+     * a {@link Renderer2D} that draws into {@code target} instead of the screen.
+     * Draw into it each frame ({@code begin()} / shapes / {@code end()}); jvre
+     * records its batch into {@code target} (a target pass, before the swapchain
+     * pass), so {@code target.texture()} then holds the drawn result -- sample it
+     * with {@code g.image(target.texture(), ...)}.
+     *
+     * <p>Requires the main surface ({@link #renderer2D()}) first (it builds the
+     * shared shape pipeline + white default). The returned surface is owned by the
+     * Renderer (freed with it); the {@code target} is caller-owned as usual.
+     */
+    public Renderer2D createCanvas(RenderTarget target) {
+        if (renderer2D == null) {
+            renderer2D();   // ensure the shared shape pipeline + white default exist
+        }
+        Renderer2D canvasSurface = new Renderer2D(this, target);
+        canvases.add(new Canvas(target, canvasSurface, new ShapeBatch()));
+        return canvasSurface;
     }
 
     /**
@@ -278,6 +318,26 @@ public class Renderer {
     }
 
     /**
+     * Create an OFFSCREEN render target (render-to-texture): an image you render
+     * INTO instead of the screen, then sample back as a {@link Texture} via {@code
+     * target.texture()}. jvre injects the swapchain's color/depth formats + sample
+     * count so the target renders exactly like the screen (it inherits the
+     * renderer's MSAA) and every baked pipeline accepts it. Caller-owned: {@code
+     * close()} it before the Renderer. Sampling defaults to {@link Filter#LINEAR}
+     * (smooth scaling -- the right default for a re-sampled target).
+     */
+    public RenderTarget createRenderTarget(int width, int height) {
+        return createRenderTarget(width, height, Filter.LINEAR);
+    }
+
+    /** {@link #createRenderTarget(int, int)} with an explicit sampling {@link Filter}
+     *  (e.g. {@link Filter#NEAREST} for a pixel-perfect upscale source). */
+    public RenderTarget createRenderTarget(int width, int height, Filter filter) {
+        return new RenderTarget(device, width, height, swapchain.imageFormat(),
+                swapchain.depthFormat(), swapchain.sampleCount(), filter);
+    }
+
+    /**
      * Build a USER-DEFINED pipeline (the L1 escape hatch) from a {@link
      * PipelineSpec}. jvre injects the swapchain color/depth formats + sample count
      * it owns, so the user never passes Vulkan formats. The caller OWNS the
@@ -317,6 +377,23 @@ public class Renderer {
         this.sceneRenderer = sceneRenderer;
     }
 
+    /**
+     * Render custom geometry INTO an offscreen {@link RenderTarget} this frame --
+     * the L1 render-to-texture seam. The {@code content} callback runs inside the
+     * target's own render pass (recorded before the swapchain pass), receiving a
+     * {@link FrameRenderer} to bind/draw against exactly like {@link
+     * #setSceneRenderer}. After the pass, {@code target.texture()} holds the
+     * rendered (resolved) result, ready to sample in the main frame -- via a custom
+     * pipeline's texture slot or {@code g.image(target.texture(), ...)}.
+     *
+     * <p>Immediate mode: call it every frame you want the target refreshed (the
+     * queue is cleared after each {@link #drawFrame}). Several targets may be
+     * queued; they render in call order, each available to the ones after it.
+     */
+    public void drawToTarget(RenderTarget target, SceneRenderer content) {
+        targetPasses.add(new TargetPass(target, content));
+    }
+
     private void buildShapePipeline() {
         if (shapePipeline != null) {
             shapePipeline.close();
@@ -336,32 +413,68 @@ public class Renderer {
     int framebufferHeight() { return swapchain.height(); }
 
     /**
-     * Grow this frame's arena if the batch outgrew it. Safe to destroy the old
-     * buffer: the slot's fence already signaled (waited on at the top of
-     * drawFrame), so the GPU is done reading it.
+     * Per-Renderer2D GPU resources for one shape batch: a per-frame-in-flight vertex
+     * arena and a transient per-frame descriptor pool. ONE bundle per surface -- the
+     * main one and each offscreen canvas -- because two batches are live in a single
+     * command buffer (drawn into different passes), so they can't share an arena (the
+     * second upload would clobber vertices the first draw still reads at execution
+     * time -- the same per-frame aliasing the UBOs have). All slots are fence-guarded
+     * like every per-frame resource; the shape PIPELINE and white default are shared.
      */
-    private void ensureArenaCapacity(int frame, int floatCount) {
-        long needed = (long) floatCount * Float.BYTES;
-        long have = shapeArenas[frame].size();
-        if (needed > have) {
-            shapeArenas[frame].close();
-            shapeArenas[frame] = new Buffer(device, Math.max(needed, have * 2),
-                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
+    private final class ShapeBatch {
+        final Buffer[] arenas = new Buffer[MAX_FRAMES_IN_FLIGHT];
+        final long[] descriptorPools = new long[MAX_FRAMES_IN_FLIGHT];
+        final int[] poolCapacity = new int[MAX_FRAMES_IN_FLIGHT];
+        long[] currentRunSets;   // this frame's per-run sets (rebuilt each record)
+
+        ShapeBatch() {
+            for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+                arenas[i] = new Buffer(device, INITIAL_ARENA_BYTES,
+                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
+                poolCapacity[i] = INITIAL_SHAPE_POOL_SETS;
+                descriptorPools[i] = createShapePool(INITIAL_SHAPE_POOL_SETS);
+            }
+        }
+
+        void close() {
+            for (Buffer a : arenas) {
+                if (a != null) {
+                    a.close();
+                }
+            }
+            for (long p : descriptorPools) {
+                if (p != VK_NULL_HANDLE) {
+                    vkDestroyDescriptorPool(device.handle(), p, null);
+                }
+            }
         }
     }
 
     /**
-     * Create the per-frame transient descriptor pools the shape runs allocate
-     * from. One pool per frame in flight (so resetting one never touches a pool
-     * the GPU is still reading from another in-flight frame). Created once;
-     * survives a pipeline rebuild (identically-defined layouts are compatible).
+     * Upload {@code r2d}'s accumulated vertices into {@code batch}'s arena for this
+     * frame (growing it first if needed) and (re)build its per-run descriptor sets.
+     * Fence-guarded: drawFrame waited this slot's fence, so the GPU is done with the
+     * slot's prior arena + sets. Called once per active batch per frame.
      */
-    private void createShapeDescriptors() {
-        shapeDescriptorPools = new long[MAX_FRAMES_IN_FLIGHT];
-        shapePoolCapacity = new int[MAX_FRAMES_IN_FLIGHT];
-        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-            shapePoolCapacity[i] = INITIAL_SHAPE_POOL_SETS;
-            shapeDescriptorPools[i] = createShapePool(INITIAL_SHAPE_POOL_SETS);
+    private void uploadAndPrepareBatch(ShapeBatch batch, Renderer2D r2d, int frame) {
+        int floats = r2d.floatCount();
+        ensureArenaCapacity(batch, frame, floats);
+        batch.arenas[frame].uploadFloats(r2d.vertexData(), floats);
+        prepareShapeDescriptors(batch, r2d, frame);
+    }
+
+    /**
+     * Grow this frame's arena if the batch outgrew it. Safe to destroy the old
+     * buffer: the slot's fence already signaled (waited on at the top of
+     * drawFrame), so the GPU is done reading it.
+     */
+    private void ensureArenaCapacity(ShapeBatch batch, int frame, int floatCount) {
+        long needed = (long) floatCount * Float.BYTES;
+        long have = batch.arenas[frame].size();
+        if (needed > have) {
+            batch.arenas[frame].close();
+            batch.arenas[frame] = new Buffer(device, Math.max(needed, have * 2),
+                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
         }
     }
 
@@ -389,25 +502,25 @@ public class Renderer {
      * slot's fence was waited on in drawFrame, so the GPU is done with last time's
      * sets), then allocate + write one set per run, each pointing at its run's
      * texture (or the white default for a null/flat run). The handles land in
-     * {@link #currentRunSets} for recordCommandBuffer to bind per draw. Grows the
+     * {@code batch.currentRunSets} for recordShapeDraws to bind per draw. Grows the
      * pool first if this frame has more runs than it currently holds.
      */
-    private void prepareShapeDescriptors(int frame) {
-        int runs = renderer2D.runCount();
-        if (runs > shapePoolCapacity[frame]) {
-            int cap = shapePoolCapacity[frame];
+    private void prepareShapeDescriptors(ShapeBatch batch, Renderer2D r2d, int frame) {
+        int runs = r2d.runCount();
+        if (runs > batch.poolCapacity[frame]) {
+            int cap = batch.poolCapacity[frame];
             while (cap < runs) {
                 cap *= 2;
             }
-            vkDestroyDescriptorPool(device.handle(), shapeDescriptorPools[frame], null);
-            shapeDescriptorPools[frame] = createShapePool(cap);
-            shapePoolCapacity[frame] = cap;
+            vkDestroyDescriptorPool(device.handle(), batch.descriptorPools[frame], null);
+            batch.descriptorPools[frame] = createShapePool(cap);
+            batch.poolCapacity[frame] = cap;
         } else {
-            vkResetDescriptorPool(device.handle(), shapeDescriptorPools[frame], 0);
+            vkResetDescriptorPool(device.handle(), batch.descriptorPools[frame], 0);
         }
 
-        if (currentRunSets == null || currentRunSets.length < runs) {
-            currentRunSets = new long[runs];
+        if (batch.currentRunSets == null || batch.currentRunSets.length < runs) {
+            batch.currentRunSets = new long[runs];
         }
 
         try (MemoryStack stack = stackPush()) {
@@ -420,7 +533,7 @@ public class Renderer {
 
             VkDescriptorSetAllocateInfo allocInfo = VkDescriptorSetAllocateInfo.calloc(stack);
             allocInfo.sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO);
-            allocInfo.descriptorPool(shapeDescriptorPools[frame]);
+            allocInfo.descriptorPool(batch.descriptorPools[frame]);
             allocInfo.pSetLayouts(layouts);
 
             LongBuffer pSets = stack.mallocLong(runs);
@@ -430,8 +543,8 @@ public class Renderer {
             // Point each run's set at its texture (binding 0).
             for (int r = 0; r < runs; r++) {
                 long set = pSets.get(r);
-                currentRunSets[r] = set;
-                Texture tex = renderer2D.runTexture(r);
+                batch.currentRunSets[r] = set;
+                Texture tex = r2d.runTexture(r);
                 if (tex == null) {
                     tex = defaultWhiteTexture;
                 }
@@ -450,6 +563,38 @@ public class Renderer {
                 writes.get(0).pImageInfo(imageInfo);
 
                 vkUpdateDescriptorSets(device.handle(), writes, null);
+            }
+        }
+    }
+
+    /**
+     * Record {@code batch}'s shape draws into {@code cmd}: bind the shared shape
+     * pipeline + the batch's arena, push the resolution ({@code width}x{@code height}
+     * -- the swapchain's for the main surface, the target's for a canvas) for the
+     * pixels->NDC mapping, then one draw per run (binding the run's texture). Runs
+     * into whatever render pass is currently active -- the swapchain pass OR a
+     * target pass (so the same machinery draws the main surface and every canvas).
+     */
+    private void recordShapeDraws(VkCommandBuffer cmd, ShapeBatch batch, Renderer2D r2d,
+                                  int width, int height) {
+        try (MemoryStack stack = stackPush()) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shapePipeline.handle());
+            vkCmdBindVertexBuffers(cmd, 0,
+                    stack.longs(batch.arenas[currentFrame].handle()), stack.longs(0));
+            vkCmdPushConstants(cmd, shapePipeline.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0,
+                    stack.floats(width, height));
+            int runs = r2d.runCount();
+            int total = r2d.vertexCount();
+            for (int r = 0; r < runs; r++) {
+                int first = r2d.runFirstVertex(r);
+                int last = (r + 1 < runs) ? r2d.runFirstVertex(r + 1) : total;
+                int vcount = last - first;
+                if (vcount <= 0) {
+                    continue;
+                }
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        shapePipeline.layout(), 0, stack.longs(batch.currentRunSets[r]), null);
+                vkCmdDraw(cmd, vcount, 1, first, 0);
             }
         }
     }
@@ -510,6 +655,172 @@ public class Renderer {
             }
         }
         System.out.println("Allocated " + MAX_FRAMES_IN_FLIGHT + " per-frame command buffers.");
+    }
+
+    /**
+     * Record ONE offscreen render-to-texture pass into {@code cmd}: prepare the
+     * target's attachments, render the user's content into them, then transition
+     * the result to SHADER_READ_ONLY so a later pass can sample it.
+     *
+     * This is the swapchain pass with two differences: the FINAL barrier ends in
+     * SHADER_READ_ONLY (not PRESENT_SRC), and there is no acquired-image semaphore
+     * to gate against -- the target's color image is OURS, shared across both
+     * frames in flight, so (exactly like the depth buffer) the entry barrier must
+     * wait on the PREVIOUS frame's use of it: both its color WRITE and its shader
+     * READ (last frame sampled it). The first frame has no prior use -- harmless.
+     */
+    private void recordTargetPass(VkCommandBuffer cmd, RenderTarget target, PassContent content) {
+        try (MemoryStack stack = stackPush()) {
+            boolean msaa = target.sampleCount() != VK_SAMPLE_COUNT_1_BIT;
+            int w = target.width();
+            int h = target.height();
+
+            // One reusable COLOR-aspect barrier (retargeted), + its dependency bundle.
+            VkImageMemoryBarrier2.Buffer barrier = VkImageMemoryBarrier2.calloc(1, stack);
+            barrier.sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2);
+            barrier.srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+            barrier.dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+            barrier.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT);
+            barrier.subresourceRange().baseMipLevel(0);
+            barrier.subresourceRange().levelCount(1);
+            barrier.subresourceRange().baseArrayLayer(0);
+            barrier.subresourceRange().layerCount(1);
+
+            VkDependencyInfo depInfo = VkDependencyInfo.calloc(stack);
+            depInfo.sType(VK_STRUCTURE_TYPE_DEPENDENCY_INFO);
+            depInfo.pImageMemoryBarriers(barrier);
+
+            // ---- Barrier: the sampleable color image -> COLOR_ATTACHMENT ----
+            // Discard prior contents (we clear). Wait on the previous frame's use:
+            // its color/resolve WRITE (COLOR_ATTACHMENT_OUTPUT) AND its sample READ
+            // (FRAGMENT_SHADER) -- a WAW + WAR against this shared, cross-frame image.
+            barrier.image(target.colorImage());
+            barrier.oldLayout(VK_IMAGE_LAYOUT_UNDEFINED);
+            barrier.newLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            barrier.srcStageMask(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT
+                    | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
+            barrier.srcAccessMask(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT
+                    | VK_ACCESS_2_SHADER_READ_BIT);
+            barrier.dstStageMask(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
+            barrier.dstAccessMask(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+            vkCmdPipelineBarrier2(cmd, depInfo);
+
+            // ---- Barrier: the MSAA color target -> COLOR_ATTACHMENT (MSAA only) ----
+            // Same UNDEFINED->COLOR (only image + src masks change). It is never
+            // sampled (we sample the resolve), so only the prior color WRITE matters.
+            if (msaa) {
+                barrier.image(target.msaaColorImage());
+                barrier.srcStageMask(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
+                barrier.srcAccessMask(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+                vkCmdPipelineBarrier2(cmd, depInfo);
+            }
+
+            // ---- Barrier: the depth image -> DEPTH (its own aspect + stages) ----
+            // Identical to the swapchain depth barrier: a shared cross-frame image,
+            // so wait on the prior frame's depth writes (the WAW lesson).
+            VkImageMemoryBarrier2.Buffer depthBarrier = VkImageMemoryBarrier2.calloc(1, stack);
+            depthBarrier.sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2);
+            depthBarrier.image(target.depthImage());
+            depthBarrier.srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+            depthBarrier.dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+            depthBarrier.oldLayout(VK_IMAGE_LAYOUT_UNDEFINED);
+            depthBarrier.newLayout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+            depthBarrier.srcStageMask(VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT
+                    | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT);
+            depthBarrier.srcAccessMask(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+            depthBarrier.dstStageMask(VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT
+                    | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT);
+            depthBarrier.dstAccessMask(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+                    | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
+            depthBarrier.subresourceRange().aspectMask(VK_IMAGE_ASPECT_DEPTH_BIT);
+            depthBarrier.subresourceRange().baseMipLevel(0);
+            depthBarrier.subresourceRange().levelCount(1);
+            depthBarrier.subresourceRange().baseArrayLayer(0);
+            depthBarrier.subresourceRange().layerCount(1);
+
+            VkDependencyInfo depthDep = VkDependencyInfo.calloc(stack);
+            depthDep.sType(VK_STRUCTURE_TYPE_DEPENDENCY_INFO);
+            depthDep.pImageMemoryBarriers(depthBarrier);
+            vkCmdPipelineBarrier2(cmd, depthDep);
+
+            // ---- Begin rendering into the target (transparent clear) ----
+            // Clear to transparent black so unwritten regions composite cleanly
+            // when the result is later alpha-blended over the main frame.
+            VkClearValue.Buffer clearValue = VkClearValue.calloc(1, stack);
+            clearValue.get(0).color().float32(stack.floats(0f, 0f, 0f, 0f));
+            VkClearValue depthClear = VkClearValue.calloc(stack);
+            depthClear.depthStencil().depth(1.0f).stencil(0);
+
+            // MSAA: render into the multisampled image, resolve (AVERAGE) into the
+            // single-sample sampleable image. Off: render straight into it.
+            VkRenderingAttachmentInfo.Buffer colorAttachment =
+                    VkRenderingAttachmentInfo.calloc(1, stack);
+            colorAttachment.sType(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO);
+            colorAttachment.imageLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            if (msaa) {
+                colorAttachment.imageView(target.msaaColorView());
+                colorAttachment.resolveMode(VK_RESOLVE_MODE_AVERAGE_BIT);
+                colorAttachment.resolveImageView(target.colorView());
+                colorAttachment.resolveImageLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                colorAttachment.storeOp(VK_ATTACHMENT_STORE_OP_DONT_CARE);
+            } else {
+                colorAttachment.imageView(target.colorView());
+                colorAttachment.resolveMode(VK_RESOLVE_MODE_NONE);
+                colorAttachment.storeOp(VK_ATTACHMENT_STORE_OP_STORE);
+            }
+            colorAttachment.loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR);
+            colorAttachment.clearValue(clearValue.get(0));
+
+            VkRenderingAttachmentInfo depthAttachment =
+                    VkRenderingAttachmentInfo.calloc(stack);
+            depthAttachment.sType(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO);
+            depthAttachment.imageView(target.depthView());
+            depthAttachment.imageLayout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+            depthAttachment.loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR);
+            depthAttachment.storeOp(VK_ATTACHMENT_STORE_OP_DONT_CARE);
+            depthAttachment.clearValue(depthClear);
+
+            VkRenderingInfo renderingInfo = VkRenderingInfo.calloc(stack);
+            renderingInfo.sType(VK_STRUCTURE_TYPE_RENDERING_INFO);
+            renderingInfo.renderArea().offset().x(0).y(0);
+            renderingInfo.renderArea().extent().width(w).height(h);
+            renderingInfo.layerCount(1);
+            renderingInfo.pColorAttachments(colorAttachment);
+            renderingInfo.pDepthAttachment(depthAttachment);
+
+            vkCmdBeginRendering(cmd, renderingInfo);
+
+            // Dynamic viewport/scissor sized to the TARGET (not the swapchain).
+            VkViewport.Buffer viewport = VkViewport.calloc(1, stack);
+            viewport.x(0.0f).y(0.0f);
+            viewport.width(w).height(h);
+            viewport.minDepth(0.0f).maxDepth(1.0f);
+            vkCmdSetViewport(cmd, 0, viewport);
+
+            VkRect2D.Buffer scissor = VkRect2D.calloc(1, stack);
+            scissor.offset().x(0).y(0);
+            scissor.extent().width(w).height(h);
+            vkCmdSetScissor(cmd, 0, scissor);
+
+            // The pass content -- an L1 FrameRenderer callback (drawToTarget) or an
+            // L2 canvas's shape draws (createCanvas). Both record into this pass.
+            content.record(cmd);
+
+            vkCmdEndRendering(cmd);
+
+            // ---- Hand-off: the result -> SHADER_READ_ONLY (sampleable now) ----
+            // Make the color/resolve write (COLOR_ATTACHMENT_OUTPUT) available to a
+            // later pass's sampling (FRAGMENT_SHADER). THIS is the barrier that
+            // makes "render this pass, sample the next" safe.
+            barrier.image(target.colorImage());
+            barrier.oldLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            barrier.newLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            barrier.srcStageMask(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
+            barrier.srcAccessMask(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+            barrier.dstStageMask(VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
+            barrier.dstAccessMask(VK_ACCESS_2_SHADER_READ_BIT);
+            vkCmdPipelineBarrier2(cmd, depInfo);
+        }
     }
 
     /**
@@ -612,6 +923,25 @@ public class Renderer {
 
             Vk.check(vkBeginCommandBuffer(cmd, beginInfo),
                     "Failed to begin the command buffer");
+
+            // ---- Offscreen render-to-texture passes, FIRST ----
+            // Each renders into its own image and ends in SHADER_READ_ONLY, so the
+            // swapchain pass below (or a later target) can sample it. The swapchain
+            // is, in effect, just the final render target. Two kinds:
+            //   - L2 canvases (createCanvas): record the canvas's shape batch (only
+            //     those with content this frame -- prepared in drawFrame).
+            //   - L1 target passes (drawToTarget): run the user's FrameRenderer.
+            for (Canvas canvas : canvases) {
+                if (canvas.r2d().floatCount() > 0) {
+                    recordTargetPass(cmd, canvas.target(),
+                            cc -> recordShapeDraws(cc, canvas.batch(), canvas.r2d(),
+                                    canvas.target().width(), canvas.target().height()));
+                }
+            }
+            for (TargetPass pass : targetPasses) {
+                recordTargetPass(cmd, pass.target(),
+                        cc -> pass.content().render(new FrameRenderer(cc, currentFrame)));
+            }
 
             // ---- Barrier 1: make the swapchain image resolvable (UNDEFINED -> COLOR) ----
             // It now receives the RESOLVE write (still a color-attachment write at
@@ -729,32 +1059,11 @@ public class Renderer {
                     sceneRenderer.render(new FrameRenderer(cmd, currentFrame));
                 }
                 if (shapeBatchActive()) {
-                // ---- L2 Renderer2D shapes ----
-                // One vertex buffer (this frame's arena), no index buffer, no
-                // descriptors. The 8-byte VERTEX push carries uResolution so the
-                // shape vertex shader maps pixels -> NDC.
-                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shapePipeline.handle());
-                vkCmdBindVertexBuffers(cmd, 0,
-                        stack.longs(shapeArenas[currentFrame].handle()), stack.longs(0));
-                vkCmdPushConstants(cmd, shapePipeline.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0,
-                        stack.floats(swapchain.width(), swapchain.height()));
-                // One draw per RUN, in paint order: bind the run's texture (flat/
-                // SDF shapes ignore it but it must be validly bound), then draw the
-                // run's vertex slice. The arena is one buffer; firstVertex offsets
-                // into it. Same-texture runs already merged in Renderer2D.
-                int runs = renderer2D.runCount();
-                int total = renderer2D.vertexCount();
-                for (int r = 0; r < runs; r++) {
-                    int first = renderer2D.runFirstVertex(r);
-                    int last = (r + 1 < runs) ? renderer2D.runFirstVertex(r + 1) : total;
-                    int vcount = last - first;
-                    if (vcount <= 0) {
-                        continue;
-                    }
-                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            shapePipeline.layout(), 0, stack.longs(currentRunSets[r]), null);
-                    vkCmdDraw(cmd, vcount, 1, first, 0);
-                }
+                    // ---- L2 Renderer2D shapes (the main surface) ----
+                    // The same per-run draw the canvases use, into the swapchain pass
+                    // with the swapchain's resolution for the pixels->NDC push.
+                    recordShapeDraws(cmd, mainBatch, renderer2D,
+                            swapchain.width(), swapchain.height());
                 }
                 // (No built-in fallback geometry: when no effect/scene/shapes are
                 // set, the frame is just the clear. Users draw via the scene seam.)
@@ -879,7 +1188,9 @@ public class Renderer {
             if (acquired == VK_ERROR_OUT_OF_DATE_KHR) {
                 // No submit happens, so we also do NOT advance currentFrame --
                 // this slot's semaphore went unused and its fence stays signaled;
-                // the retry next frame reuses both safely.
+                // the retry next frame reuses both safely. Drop this frame's queued
+                // target passes; the user re-enqueues them next frame (immediate mode).
+                targetPasses.clear();
                 recreateSwapchain();
                 return;
             }
@@ -904,14 +1215,17 @@ public class Renderer {
             if (effectPipeline != null) {
                 // The effect's whole input is the push block -- nothing to upload.
             } else if (shapeBatchActive()) {
-                // L2 shapes: upload this frame's accumulated vertices into the
-                // slot's arena (growing it first if the batch outgrew it).
-                int floats = renderer2D.floatCount();
-                ensureArenaCapacity(currentFrame, floats);
-                shapeArenas[currentFrame].uploadFloats(renderer2D.vertexData(), floats);
-                // Build this frame's per-run texture descriptor sets (one per draw
-                // run -- the run that flush-on-texture-switch produced).
-                prepareShapeDescriptors(currentFrame);
+                // L2 shapes (main surface): upload this frame's vertices + build the
+                // per-run descriptor sets into the main batch.
+                uploadAndPrepareBatch(mainBatch, renderer2D, currentFrame);
+            }
+            // Offscreen L2 canvases: upload + prepare every canvas that drew this
+            // frame, independent of the main-surface content (they render into their
+            // own targets, recorded before the swapchain pass).
+            for (Canvas canvas : canvases) {
+                if (canvas.r2d().floatCount() > 0) {
+                    uploadAndPrepareBatch(canvas.batch(), canvas.r2d(), currentFrame);
+                }
             }
             // A custom SceneRenderer writes its own UBO during recording
             // (frame.uniform), not here -- nothing to upload for it.
@@ -921,6 +1235,9 @@ public class Renderer {
             VkCommandBuffer cmd = commandBuffers[currentFrame];
             Vk.check(vkResetCommandBuffer(cmd, 0), "Failed to reset the command buffer");
             recordCommandBuffer(cmd, imageIndex, time);
+            // The target passes are now recorded into the command buffer; clear the
+            // queue so the next frame starts empty (immediate mode -- re-enqueued).
+            targetPasses.clear();
 
             // 3. Submit that image's command buffer, via synchronization2's
             //    vkQueueSubmit2. Every participant gets its own little info struct,
@@ -1105,20 +1422,14 @@ public class Renderer {
         if (shapePipeline != null) {
             shapePipeline.close();
         }
-        if (shapeArenas != null) {
-            for (Buffer arena : shapeArenas) {
-                if (arena != null) {
-                    arena.close();
-                }
-            }
+        // The shape batches (each frees its per-frame arenas + descriptor pools):
+        // the main surface plus every offscreen canvas. The canvases' RenderTargets
+        // are caller-owned -- the user closes those, not us.
+        if (mainBatch != null) {
+            mainBatch.close();
         }
-        // The shape texture descriptors (each pool frees its sets) + the default.
-        if (shapeDescriptorPools != null) {
-            for (long pool : shapeDescriptorPools) {
-                if (pool != VK_NULL_HANDLE) {
-                    vkDestroyDescriptorPool(device.handle(), pool, null);
-                }
-            }
+        for (Canvas canvas : canvases) {
+            canvas.batch().close();
         }
         if (defaultWhiteTexture != null) {
             defaultWhiteTexture.close();

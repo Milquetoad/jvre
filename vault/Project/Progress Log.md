@@ -2,6 +2,15 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-16 — R4 publishing plumbing: GPG signing + Central bundle + JBang doc 📦✅
+- **The Maven Central upload mechanics (jvre's half).** Owner verified the `io.github.milquetoad` namespace + set up a GPG key; this wires the build to produce a Central-ready bundle.
+- **`signing` plugin** -- GPG-signs the publication. **Opt-in via `-PsignArtifacts`** so normal builds + CI + the unsigned dry-run never touch the key (`required = false`); the release build turns it on and uses the local gpg (`useGpgCmd()`, key chosen by `signing.gnupg.keyName`).
+- **Local staging repo + `centralBundle` task**: `publishMavenPublicationToCentralStagingRepository` writes the full Maven layout into `build/staging-deploy/`, and `centralBundle` (a `Zip`) packages it as `build/central-bundle-<version>.zip` for the Central Portal "Publish Component" upload (maven-metadata excluded). Chose the **manual-bundle** path over a 3rd-party publish plugin: transparent, version-proof, and teaches exactly what Central requires.
+- **Dry-run verified (unsigned):** the bundle has the correct layout `io/github/milquetoad/jvre/0.1.0/...` with jar + sources + javadoc + pom + module, each with md5/sha1/sha256/sha512. Signing adds the `.asc` per file (`-PsignArtifacts`). `build` stays green (signing never triggers for CI).
+- **Docs:** `docs/getting-started.md` gained a **JBang quickstart** -- run a single `.java` file (no Gradle/Maven project) that resolves jvre from JitPack via `//REPOS` + `//DEPS` (+ natives). Works TODAY; the answer to "play around without a build tool".
+- **Owner's remaining R4 steps** (their secrets/account): put `signing.gnupg.keyName` + the Central Portal token in `~/.gradle/gradle.properties`, run `gradlew centralBundle -PsignArtifacts`, upload the bundle (Portal UI or Publisher API). **Plus the version decision: 1.0.0 now, or a 0.2.0 Central shakedown first.**
+- **Next**: run the signed upload (owner) -> validate on Central -> then bump/declare 1.0.0. See [[Roadmap]].
+
 ## 2026-06-16 — API surface audit: tighten the public contract for 1.0 🔒✅
 - **Pruned the public `jvre.core` surface from 29 types to 26**, before the 1.0 freeze, so the semver compatibility promise covers only what's intended. Empirically grounded: external code (Main/demo/tests) only ever *imports* the API types and only ever calls `close()` on the handle types -- everything else was internal that had leaked `public`.
 - **Hidden (now package-private classes):** `Vk` (error-check helper), `Commands` (one-shot command buffer), `Swapchain` (renderer-managed device-context component -- offscreen/render-to-texture will get a *deliberate* public API later, not raw Swapchain).

@@ -94,6 +94,8 @@ public class Main {
     private Texture cubeTexture;   // its checker texture
     private final Camera camera = new Camera();  // computes the cube's view + projection
     private jvre.core.RenderTarget cubeTarget;   // offscreen target the cube renders into (DEMO_RTT)
+    private jvre.core.RenderTarget canvasTarget; // offscreen L2 canvas target (DEMO_RTT)
+    private Renderer2D gc;                        // a Renderer2D drawing into canvasTarget
 
     // A user's own shaders for the custom pipeline -- compiled at runtime via
     // ShaderCompiler (no build-time step), exactly as a jvre consumer would. The
@@ -229,6 +231,10 @@ public class Main {
             // on a maximized 4K window, so it stays crisp (the "match target
             // resolution to its display footprint" principle, with headroom).
             cubeTarget = renderer.createRenderTarget(1024, 1024);
+            // The L2 createGraphics analog: an offscreen canvas we draw SHAPES into
+            // (gc), composited back as a sprite. Same RTT plumbing, L2 content.
+            canvasTarget = renderer.createRenderTarget(512, 512);
+            gc = renderer.createCanvas(canvasTarget);
         } else {
             // The original dogfood: the cube renders directly in the main pass,
             // offset to the lower-right, under the 2D UI.
@@ -259,6 +265,34 @@ public class Main {
         frame.bindVertexBuffer(cubeVerts);
         frame.bindIndexBuffer(cubeIndices);
         frame.drawIndexed(36);
+    }
+
+    /**
+     * Draw L2 shapes into the offscreen canvas (the createGraphics analog). Exactly
+     * the same Renderer2D API as the main surface -- begin / shapes / end -- but
+     * {@code gc.width()/height()} report the TARGET's size, and the result lands in
+     * {@code canvasTarget.texture()} for drawShapes to composite. A self-contained
+     * little animated scene to prove "draw shapes anywhere, sample the image."
+     */
+    private void drawCanvas() {
+        gc.begin();
+        float t = renderer.time();
+        int w = gc.width();
+        int h = gc.height();
+        // A translucent panel so the sprite reads as a framed mini-scene.
+        gc.fillRoundedRect(0, 0, w, h, 36, Color.rgba(28, 32, 46, 235));
+        // A circle sliding left/right + a square spinning at the centre.
+        float cx = w * 0.5f + (float) Math.sin(t * 1.7) * (w * 0.28f);
+        gc.fillCircle(cx, h * 0.40f, h * 0.10f, Color.rgb(90, 200, 255));
+        gc.push();
+        gc.translate(w * 0.5f, h * 0.40f);
+        gc.rotate(t);
+        float sq = h * 0.13f;
+        gc.fillRect(-sq, -sq, sq * 2, sq * 2, Color.rgba(255, 180, 60, 200));
+        gc.pop();
+        gc.text("L2 canvas", w * 0.10f, h * 0.66f, h * 0.12f, Color.WHITE);
+        gc.text("drawn offscreen", w * 0.10f, h * 0.80f, h * 0.07f, Color.rgb(170, 180, 200));
+        gc.end();
     }
 
     /**
@@ -309,6 +343,9 @@ public class Main {
             // enqueued every frame, like the shape batch.
             if (cubeTarget != null) {
                 renderer.drawToTarget(cubeTarget, frame -> renderCube(frame, 1f, 0f, 0f));
+            }
+            if (gc != null) {
+                drawCanvas();   // draw L2 shapes into the offscreen canvas this frame
             }
             if (g != null) {
                 drawShapes();
@@ -365,11 +402,14 @@ public class Main {
         g.text("L2: shapes, images, text.\nL1: the textured cube (custom pipeline: UBO + texture + push + camera).",
                 280, 388, 17, Color.rgb(70, 70, 70));
 
-        // RENDER-TO-TEXTURE: the offscreen target (the cube was rendered into it
-        // this frame) sampled back as a sprite -- an entire 3D pass used as an image.
+        // RENDER-TO-TEXTURE showcase (right column): two offscreen passes rendered
+        // this frame, each sampled back as a sprite. Top = an entire 3D pass (the
+        // cube) used as an image (L1); bottom = L2 shapes drawn into a canvas (the
+        // createGraphics analog). Both are just textures here.
         if (cubeTarget != null) {
-            g.image(cubeTarget.texture(), 610, 312, 150, 150);
-            g.text("render-to-texture", 612, 300, 13, Color.rgb(40, 40, 40));
+            g.text("render-to-texture:", 612, 286, 13, Color.rgb(40, 40, 40));
+            g.image(cubeTarget.texture(), 620, 296, 130, 130);     // L1: cube into a target
+            g.image(canvasTarget.texture(), 620, 432, 130, 130);   // L2: shapes into a canvas
         }
 
         // A nested TRANSFORM group (rotated rounded-rect + label, drawn as a unit).
@@ -423,9 +463,14 @@ public class Main {
         if (demoImage2 != null) {
             demoImage2.close();
         }
-        // Caller-owned offscreen target (frees its own images; before the renderer).
+        // Caller-owned offscreen targets (free their own images; before the
+        // renderer). The canvas's Renderer2D is renderer-owned -- only the target
+        // is ours to close.
         if (cubeTarget != null) {
             cubeTarget.close();
+        }
+        if (canvasTarget != null) {
+            canvasTarget.close();
         }
         // Caller-owned custom pipeline + its geometry (close before the renderer).
         if (cubeTexture != null) {

@@ -7,7 +7,7 @@ Everything installed for jvre, and why.
 | JDK (Temurin) | 21 | Compile/run Java; modern LTS |
 | Gradle | 8.10.2 | [[Build Tools|build tool]], via [[Gradle Wrapper]] (no global install) |
 | [[LWJGL]] | 3.3.4 | Java bindings to native Vulkan + GLFW |
-| Vulkan SDK (LunarG) | 1.4.350.0 | `glslc` (GLSL→SPIR-V) + **validation layers** |
+| Vulkan SDK (LunarG) | 1.4.350.0 | **validation layers** (dev only; OPTIONAL -- the build compiles shaders via the bundled `shaderc`, no SDK / `glslc` required) |
 
 ## Machine graphics
 - Vulkan runtime `vulkan-1.dll` present (from GPU driver).
@@ -16,7 +16,7 @@ Everything installed for jvre, and why.
 
 ## Key paths
 - Gradle dist: `%USERPROFILE%\tools\gradle-8.10.2` (used once to generate the wrapper; not needed afterwards)
-- Vulkan SDK: `C:\VulkanSDK\1.4.350.0` (`Bin\glslc.exe`)
+- Vulkan SDK: `C:\VulkanSDK\1.4.350.0` (validation layers; `Bin\glslc.exe` no longer used by the build -- shaders compile via the bundled `shaderc`)
 - `VULKAN_SDK` env var set (machine scope) — may need a fresh terminal to appear on PATH.
 
 ## Build/run

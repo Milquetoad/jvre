@@ -14,7 +14,7 @@ In a GPU app, a GUI is just more geometry — buttons = colored rects + text. Th
 > **Decision:** we're rolling our **own** immediate-mode GUI instead of using these — see [[Self-Built GUI (planned)]]. (ImGui/Nuklear kept here as reference + fallback.)
 
 ## Relevance to jvre
-- Our future **2D layer** (textured quads, lines, text) is exactly what a GUI needs → once we can draw 2D + text, we can render simple GUI ourselves (sliders/buttons/labels for algorithm visualizations).
+- jvre's **2D layer** (`Renderer2D` -- textured quads, lines, text; shipped) is exactly what a GUI needs → and indeed the bounded immediate-mode GUI **demo** (label/button/slider) was built directly on it (2026-06-15). See [[Self-Built GUI (planned)]].
 - For *developer* tooling (tweak the engine live), integrating **Dear ImGui** as a debug overlay is the conventional milestone.
 
 ## Not used: Swing / JavaFX

@@ -11,8 +11,7 @@ magic comments at the top of the file:
 
 ```java
 //JAVA 21
-//REPOS mavencentral,jitpack=https://jitpack.io
-//DEPS com.github.Milquetoad:jvre:v0.1.0
+//DEPS io.github.milquetoad:jvre:1.0.0
 //DEPS org.lwjgl:lwjgl:3.3.4:natives-windows
 //DEPS org.lwjgl:lwjgl-glfw:3.3.4:natives-windows
 //DEPS org.lwjgl:lwjgl-vma:3.3.4:natives-windows
@@ -44,28 +43,24 @@ public class play {
 ```
 
 Save it as `play.java` and run `jbang play.java`. JBang resolves jvre (and its
-transitive libraries) from JitPack and adds the platform natives — no project, no
-`build.gradle`. The `//DEPS` jvre line carries the libraries; the `natives-*`
-lines are the only extra (swap the classifier for your OS:
-`natives-linux` / `natives-macos` / `…-arm64`). Edit, rerun, done. (After the 1.0
-Maven Central release the `//REPOS` line goes away and the jvre coordinate becomes
-`io.github.milquetoad:jvre:1.0.0`.)
+transitive libraries) from Maven Central and adds the platform natives — no
+project, no `build.gradle`. The `//DEPS` jvre line carries the libraries; the
+`natives-*` lines are the only extra (swap the classifier for your OS:
+`natives-linux` / `natives-macos` / `…-arm64`). Edit, rerun, done.
 
 For anything bigger than a sketch, set up a real project:
 
 ## 1. Add the dependency
 
-jvre is published via [JitPack](https://jitpack.io) while it is pre-1.0 (Maven
-Central is planned at 1.0). In your `build.gradle`:
+jvre is published on **Maven Central**. In your `build.gradle`:
 
 ```gradle
 repositories {
     mavenCentral()
-    maven { url 'https://jitpack.io' }
 }
 
 dependencies {
-    implementation 'com.github.Milquetoad:jvre:v0.1.0'
+    implementation 'io.github.milquetoad:jvre:1.0.0'
 
     // jvre does NOT bundle platform natives -- you choose them for your OS.
     // Add the matching natives classifier for the LWJGL modules jvre uses.

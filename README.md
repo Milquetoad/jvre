@@ -9,7 +9,7 @@ A general-purpose rendering framework written **from scratch in Java on top of [
 1. **Learn graphics from first principles** — understand every layer, from the Vulkan instance up to a full render loop, with no engine hiding the details.
 2. **Ship a real, reusable framework** — a coherent, documented, cross-platform library, delivered with the polish of a professional product (the finish line is a stable 1.0 on Maven Central).
 
-> **Status: pre-1.0, under active development.** The core is feature-rich and runs cleanly (both API altitudes below are built), but the public API may still change between `0.x` releases. The road to a stable 1.0 is in the [roadmap](vault/Project/Roadmap.md).
+> **Status: 1.0 — released on Maven Central.** Both API altitudes below are built, and the [public API](docs/api-surface.md) is now a semver compatibility promise. Continued capability growth (the full fully-fledged feature set) is planned post-1.0 — see the [roadmap](vault/Project/Roadmap.md).
 
 ## Two altitudes, one engine
 
@@ -61,16 +61,15 @@ You should see a window open and console output reporting each Vulkan bootstrap 
 
 ## Using jvre as a library
 
-> Pre-1.0: the API may change between `0.x` releases. Published via [JitPack](https://jitpack.io) for now; Maven Central is planned at 1.0. For a complete runnable example and a walkthrough, see **[docs/getting-started.md](docs/getting-started.md)**.
+Published on **Maven Central**. For a complete runnable example and a walkthrough, see **[docs/getting-started.md](docs/getting-started.md)**.
 
 ```gradle
 repositories {
     mavenCentral()
-    maven { url 'https://jitpack.io' }
 }
 
 dependencies {
-    implementation 'com.github.Milquetoad:jvre:v0.1.0'
+    implementation 'io.github.milquetoad:jvre:1.0.0'
 
     // jvre does NOT bundle platform natives -- you choose them for your OS.
     // Add the natives classifier for the LWJGL modules jvre uses:
@@ -125,13 +124,14 @@ The full Vulkan substrate and both API altitudes are built and run cleanly
   + textures), index buffers, and a `Camera` helper for 3D.
 - **Interactivity & capability knobs** — a per-frame input snapshot, `time()`/`dt()`,
   and creation-time vsync / MSAA / GPU options.
-- **Delivery** — cross-platform CI (Windows + Linux), published via JitPack;
-  natives are consumer-selected (not bundled).
+- **Delivery** — cross-platform CI (Windows + Linux), GPG-signed and published to
+  Maven Central; natives are consumer-selected (not bundled).
 
-The **forward plan, the v1.0 definition, and the path to Maven Central** live in
-**[`vault/Project/Roadmap.md`](vault/Project/Roadmap.md)**; the dated build diary is
-[`vault/Project/Progress Log.md`](vault/Project/Progress%20Log.md). Reachable but
-not promised (post-1.0): compute and ray/path tracing.
+The **post-1.0 feature roadmap** (jvre is built out toward a fully-fledged
+framework) lives in **[`vault/Project/Roadmap.md`](vault/Project/Roadmap.md)**; the
+dated build diary is [`vault/Project/Progress Log.md`](vault/Project/Progress%20Log.md).
+Planned post-1.0: render-to-texture, instancing, compute, ray/path tracing, and
+the catalogued L2 refinements.
 
 ## Contributing
 

@@ -5,8 +5,8 @@ User-facing guides for **jvre**, a from-scratch Java + Vulkan rendering framewor
 design notes and the learning diary, those live in [`../vault/`](../vault/); this
 directory is for people who want to *use* jvre.
 
-> Pre-1.0: the API is still settling and may change between `0.x` releases. These
-> docs track the current `main`.
+> 1.0 is released on Maven Central; the [public API](api-surface.md) is a semver
+> compatibility promise. These docs track the current `main`.
 
 ## Start here
 

@@ -127,6 +127,28 @@ Drawing several different textures in one frame is fine — jvre batches by text
 automatically. A `Texture` is a GPU resource you own: close it when you're done
 (before the renderer), e.g. in your cleanup.
 
+### Filtering (how it scales)
+
+How a texture is sampled when drawn at a non-native size is set once, when you
+create it, via a `Filter`:
+
+- **`Filter.LINEAR`** — blend neighboring texels; **smooth** upscaling. The default
+  for `loadImage` (decoded photos/illustrations).
+- **`Filter.NEAREST`** — snap to the closest texel; **crisp**, blocky pixels. The
+  default for `createImage` (hand-authored pixels, e.g. a sharp checker or pixel
+  art).
+
+The defaults follow intent, so usually you don't pass anything. Override when you
+want the other behavior:
+
+```java
+Texture sprite = renderer.loadImage("/images/hero.png", Filter.NEAREST);  // pixel art, kept crisp
+Texture grad   = renderer.createImage(pixels, w, h, Filter.LINEAR);       // smooth a generated gradient
+```
+
+(Mipmaps and anisotropy — which improve *down*scaling — are a later refinement;
+this knob covers upscaling.)
+
 ## The transform stack
 
 Every draw call is run through the current transform. You can translate, rotate,

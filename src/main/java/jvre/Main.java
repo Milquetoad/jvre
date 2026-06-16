@@ -47,6 +47,12 @@ public class Main {
     private static final boolean DEMO_2D = true;
     private static final String EFFECT = DEMO_2D ? null : "/demo/ripple.frag";
 
+    // Render-to-texture proof (Roadmap 4a): when true, the L1 cube renders into an
+    // OFFSCREEN target each frame, and the result is sampled back into the 2D scene
+    // via g.image() -- an offscreen pass composited as a sprite. (When false, the
+    // cube renders directly in the main pass, the original dogfood.)
+    private static final boolean DEMO_RTT = DEMO_2D;
+
     // Bright orange (RGB in [0,1]) -- the renderer clears to this every frame.
     private static final float CLEAR_R = 1.0f;
     private static final float CLEAR_G = 0.4f;
@@ -87,6 +93,7 @@ public class Main {
     private Buffer cubeIndices;    // its UINT16 indices
     private Texture cubeTexture;   // its checker texture
     private final Camera camera = new Camera();  // computes the cube's view + projection
+    private jvre.core.RenderTarget cubeTarget;   // offscreen target the cube renders into (DEMO_RTT)
 
     // A user's own shaders for the custom pipeline -- compiled at runtime via
     // ShaderCompiler (no build-time step), exactly as a jvre consumer would. The
@@ -214,23 +221,44 @@ public class Main {
                  0, 1, 2,  2, 3, 0,    4, 5, 6,  6, 7, 4,    8, 9,10, 10,11, 8,
                 12,13,14, 14,15,12,   16,17,18, 18,19,16,   20,21,22, 22,23,20,
         });
-        renderer.setSceneRenderer(frame -> {
-            float t = renderer.time();
-            float aspect = g.width() / (float) g.height();
-            camera.perspective(45f, aspect, 0.1f, 100f).lookAt(0, 0, 4,  0, 0, 0,  0, 1, 0);
-            Matrix4f model = new Matrix4f()
-                    .translate(1.4f, -1.2f, 0f)          // lower-right of the view
-                    .rotateX(t * 0.6f).rotateY(t);       // tumble so all faces show
-            float[] mvp = new Matrix4f(camera.viewProjection()).mul(model).get(new float[16]);
-            float pulse = 0.85f + 0.15f * (float) Math.sin(t * 3.0);
-            frame.bind(cubePipeline);
-            frame.uniform(mvp);                          // write this frame's UBO
-            frame.texture(cubeTexture);                  // bind this frame's texture
-            frame.pushConstants(new float[] { pulse });
-            frame.bindVertexBuffer(cubeVerts);
-            frame.bindIndexBuffer(cubeIndices);
-            frame.drawIndexed(36);
-        });
+        if (DEMO_RTT) {
+            // Render-to-texture: a square offscreen target (inherits the renderer's
+            // MSAA) the cube tumbles inside, centered. Enqueued each frame in the
+            // loop; sampled back in drawShapes via g.image(cubeTarget.texture(),...).
+            // 1024^2: comfortably above the sprite's on-screen pixel footprint even
+            // on a maximized 4K window, so it stays crisp (the "match target
+            // resolution to its display footprint" principle, with headroom).
+            cubeTarget = renderer.createRenderTarget(1024, 1024);
+        } else {
+            // The original dogfood: the cube renders directly in the main pass,
+            // offset to the lower-right, under the 2D UI.
+            renderer.setSceneRenderer(frame -> renderCube(frame,
+                    g.width() / (float) g.height(), 1.4f, -1.2f));
+        }
+    }
+
+    /**
+     * Record the tumbling textured cube through the L1 {@link jvre.core.FrameRenderer}
+     * seam -- shared by the main-pass dogfood and the offscreen render-to-texture
+     * path. {@code aspect} is the target's aspect ratio (1.0 for the square offscreen
+     * target, the window's for the main pass); {@code dx}/{@code dy} offset the model
+     * in view space (0,0 = centered, which is what the offscreen target wants).
+     */
+    private void renderCube(jvre.core.FrameRenderer frame, float aspect, float dx, float dy) {
+        float t = renderer.time();
+        camera.perspective(45f, aspect, 0.1f, 100f).lookAt(0, 0, 4,  0, 0, 0,  0, 1, 0);
+        Matrix4f model = new Matrix4f()
+                .translate(dx, dy, 0f)
+                .rotateX(t * 0.6f).rotateY(t);           // tumble so all faces show
+        float[] mvp = new Matrix4f(camera.viewProjection()).mul(model).get(new float[16]);
+        float pulse = 0.85f + 0.15f * (float) Math.sin(t * 3.0);
+        frame.bind(cubePipeline);
+        frame.uniform(mvp);                          // write this frame's UBO
+        frame.texture(cubeTexture);                  // bind this frame's texture
+        frame.pushConstants(new float[] { pulse });
+        frame.bindVertexBuffer(cubeVerts);
+        frame.bindIndexBuffer(cubeIndices);
+        frame.drawIndexed(36);
     }
 
     /**
@@ -276,6 +304,12 @@ public class Main {
         System.out.println("Entering render loop. Close the window to exit.");
         while (!window.shouldClose()) {
             window.pollEvents();
+            // Offscreen pass: render the cube into its target BEFORE drawFrame
+            // records it (and the main pass that samples it). Immediate mode --
+            // enqueued every frame, like the shape batch.
+            if (cubeTarget != null) {
+                renderer.drawToTarget(cubeTarget, frame -> renderCube(frame, 1f, 0f, 0f));
+            }
             if (g != null) {
                 drawShapes();
             }
@@ -331,6 +365,13 @@ public class Main {
         g.text("L2: shapes, images, text.\nL1: the textured cube (custom pipeline: UBO + texture + push + camera).",
                 280, 388, 17, Color.rgb(70, 70, 70));
 
+        // RENDER-TO-TEXTURE: the offscreen target (the cube was rendered into it
+        // this frame) sampled back as a sprite -- an entire 3D pass used as an image.
+        if (cubeTarget != null) {
+            g.image(cubeTarget.texture(), 610, 312, 150, 150);
+            g.text("render-to-texture", 612, 300, 13, Color.rgb(40, 40, 40));
+        }
+
         // A nested TRANSFORM group (rotated rounded-rect + label, drawn as a unit).
         g.push();
         g.translate(660, 250);
@@ -381,6 +422,10 @@ public class Main {
         }
         if (demoImage2 != null) {
             demoImage2.close();
+        }
+        // Caller-owned offscreen target (frees its own images; before the renderer).
+        if (cubeTarget != null) {
+            cubeTarget.close();
         }
         // Caller-owned custom pipeline + its geometry (close before the renderer).
         if (cubeTexture != null) {

@@ -28,6 +28,8 @@ import org.lwjgl.vulkan.VkWriteDescriptorSet;
 import java.nio.DoubleBuffer;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.KHRSwapchain.*;
@@ -107,6 +109,15 @@ public class Renderer {
     // each frame alongside any L2 shapes; the cube demo is the fallback when
     // neither is active. User-owned pipelines/buffers -- jvre just invokes this.
     private SceneRenderer sceneRenderer;
+
+    // Per-frame queue of offscreen render-to-texture passes, recorded BEFORE the
+    // swapchain pass each frame -- so the swapchain is, in effect, just the LAST
+    // render target. Immediate mode (like the shape batch): the user re-enqueues
+    // via drawToTarget() every frame, and the queue is drained + cleared each
+    // drawFrame. A target ends its pass in SHADER_READ_ONLY, so the swapchain pass
+    // (or a later target) can sample it.
+    private final List<TargetPass> targetPasses = new ArrayList<>();
+    private record TargetPass(RenderTarget target, SceneRenderer content) {}
 
     // The clear color (RGBA in [0,1]); becomes real API once there is more to
     // render than a clear. The swapchain is an sRGB format, so these linear
@@ -278,6 +289,26 @@ public class Renderer {
     }
 
     /**
+     * Create an OFFSCREEN render target (render-to-texture): an image you render
+     * INTO instead of the screen, then sample back as a {@link Texture} via {@code
+     * target.texture()}. jvre injects the swapchain's color/depth formats + sample
+     * count so the target renders exactly like the screen (it inherits the
+     * renderer's MSAA) and every baked pipeline accepts it. Caller-owned: {@code
+     * close()} it before the Renderer. Sampling defaults to {@link Filter#LINEAR}
+     * (smooth scaling -- the right default for a re-sampled target).
+     */
+    public RenderTarget createRenderTarget(int width, int height) {
+        return createRenderTarget(width, height, Filter.LINEAR);
+    }
+
+    /** {@link #createRenderTarget(int, int)} with an explicit sampling {@link Filter}
+     *  (e.g. {@link Filter#NEAREST} for a pixel-perfect upscale source). */
+    public RenderTarget createRenderTarget(int width, int height, Filter filter) {
+        return new RenderTarget(device, width, height, swapchain.imageFormat(),
+                swapchain.depthFormat(), swapchain.sampleCount(), filter);
+    }
+
+    /**
      * Build a USER-DEFINED pipeline (the L1 escape hatch) from a {@link
      * PipelineSpec}. jvre injects the swapchain color/depth formats + sample count
      * it owns, so the user never passes Vulkan formats. The caller OWNS the
@@ -315,6 +346,23 @@ public class Renderer {
      */
     public void setSceneRenderer(SceneRenderer sceneRenderer) {
         this.sceneRenderer = sceneRenderer;
+    }
+
+    /**
+     * Render custom geometry INTO an offscreen {@link RenderTarget} this frame --
+     * the L1 render-to-texture seam. The {@code content} callback runs inside the
+     * target's own render pass (recorded before the swapchain pass), receiving a
+     * {@link FrameRenderer} to bind/draw against exactly like {@link
+     * #setSceneRenderer}. After the pass, {@code target.texture()} holds the
+     * rendered (resolved) result, ready to sample in the main frame -- via a custom
+     * pipeline's texture slot or {@code g.image(target.texture(), ...)}.
+     *
+     * <p>Immediate mode: call it every frame you want the target refreshed (the
+     * queue is cleared after each {@link #drawFrame}). Several targets may be
+     * queued; they render in call order, each available to the ones after it.
+     */
+    public void drawToTarget(RenderTarget target, SceneRenderer content) {
+        targetPasses.add(new TargetPass(target, content));
     }
 
     private void buildShapePipeline() {
@@ -513,6 +561,172 @@ public class Renderer {
     }
 
     /**
+     * Record ONE offscreen render-to-texture pass into {@code cmd}: prepare the
+     * target's attachments, render the user's content into them, then transition
+     * the result to SHADER_READ_ONLY so a later pass can sample it.
+     *
+     * This is the swapchain pass with two differences: the FINAL barrier ends in
+     * SHADER_READ_ONLY (not PRESENT_SRC), and there is no acquired-image semaphore
+     * to gate against -- the target's color image is OURS, shared across both
+     * frames in flight, so (exactly like the depth buffer) the entry barrier must
+     * wait on the PREVIOUS frame's use of it: both its color WRITE and its shader
+     * READ (last frame sampled it). The first frame has no prior use -- harmless.
+     */
+    private void recordTargetPass(VkCommandBuffer cmd, RenderTarget target, SceneRenderer content) {
+        try (MemoryStack stack = stackPush()) {
+            boolean msaa = target.sampleCount() != VK_SAMPLE_COUNT_1_BIT;
+            int w = target.width();
+            int h = target.height();
+
+            // One reusable COLOR-aspect barrier (retargeted), + its dependency bundle.
+            VkImageMemoryBarrier2.Buffer barrier = VkImageMemoryBarrier2.calloc(1, stack);
+            barrier.sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2);
+            barrier.srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+            barrier.dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+            barrier.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT);
+            barrier.subresourceRange().baseMipLevel(0);
+            barrier.subresourceRange().levelCount(1);
+            barrier.subresourceRange().baseArrayLayer(0);
+            barrier.subresourceRange().layerCount(1);
+
+            VkDependencyInfo depInfo = VkDependencyInfo.calloc(stack);
+            depInfo.sType(VK_STRUCTURE_TYPE_DEPENDENCY_INFO);
+            depInfo.pImageMemoryBarriers(barrier);
+
+            // ---- Barrier: the sampleable color image -> COLOR_ATTACHMENT ----
+            // Discard prior contents (we clear). Wait on the previous frame's use:
+            // its color/resolve WRITE (COLOR_ATTACHMENT_OUTPUT) AND its sample READ
+            // (FRAGMENT_SHADER) -- a WAW + WAR against this shared, cross-frame image.
+            barrier.image(target.colorImage());
+            barrier.oldLayout(VK_IMAGE_LAYOUT_UNDEFINED);
+            barrier.newLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            barrier.srcStageMask(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT
+                    | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
+            barrier.srcAccessMask(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT
+                    | VK_ACCESS_2_SHADER_READ_BIT);
+            barrier.dstStageMask(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
+            barrier.dstAccessMask(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+            vkCmdPipelineBarrier2(cmd, depInfo);
+
+            // ---- Barrier: the MSAA color target -> COLOR_ATTACHMENT (MSAA only) ----
+            // Same UNDEFINED->COLOR (only image + src masks change). It is never
+            // sampled (we sample the resolve), so only the prior color WRITE matters.
+            if (msaa) {
+                barrier.image(target.msaaColorImage());
+                barrier.srcStageMask(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
+                barrier.srcAccessMask(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+                vkCmdPipelineBarrier2(cmd, depInfo);
+            }
+
+            // ---- Barrier: the depth image -> DEPTH (its own aspect + stages) ----
+            // Identical to the swapchain depth barrier: a shared cross-frame image,
+            // so wait on the prior frame's depth writes (the WAW lesson).
+            VkImageMemoryBarrier2.Buffer depthBarrier = VkImageMemoryBarrier2.calloc(1, stack);
+            depthBarrier.sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2);
+            depthBarrier.image(target.depthImage());
+            depthBarrier.srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+            depthBarrier.dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+            depthBarrier.oldLayout(VK_IMAGE_LAYOUT_UNDEFINED);
+            depthBarrier.newLayout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+            depthBarrier.srcStageMask(VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT
+                    | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT);
+            depthBarrier.srcAccessMask(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+            depthBarrier.dstStageMask(VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT
+                    | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT);
+            depthBarrier.dstAccessMask(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+                    | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
+            depthBarrier.subresourceRange().aspectMask(VK_IMAGE_ASPECT_DEPTH_BIT);
+            depthBarrier.subresourceRange().baseMipLevel(0);
+            depthBarrier.subresourceRange().levelCount(1);
+            depthBarrier.subresourceRange().baseArrayLayer(0);
+            depthBarrier.subresourceRange().layerCount(1);
+
+            VkDependencyInfo depthDep = VkDependencyInfo.calloc(stack);
+            depthDep.sType(VK_STRUCTURE_TYPE_DEPENDENCY_INFO);
+            depthDep.pImageMemoryBarriers(depthBarrier);
+            vkCmdPipelineBarrier2(cmd, depthDep);
+
+            // ---- Begin rendering into the target (transparent clear) ----
+            // Clear to transparent black so unwritten regions composite cleanly
+            // when the result is later alpha-blended over the main frame.
+            VkClearValue.Buffer clearValue = VkClearValue.calloc(1, stack);
+            clearValue.get(0).color().float32(stack.floats(0f, 0f, 0f, 0f));
+            VkClearValue depthClear = VkClearValue.calloc(stack);
+            depthClear.depthStencil().depth(1.0f).stencil(0);
+
+            // MSAA: render into the multisampled image, resolve (AVERAGE) into the
+            // single-sample sampleable image. Off: render straight into it.
+            VkRenderingAttachmentInfo.Buffer colorAttachment =
+                    VkRenderingAttachmentInfo.calloc(1, stack);
+            colorAttachment.sType(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO);
+            colorAttachment.imageLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            if (msaa) {
+                colorAttachment.imageView(target.msaaColorView());
+                colorAttachment.resolveMode(VK_RESOLVE_MODE_AVERAGE_BIT);
+                colorAttachment.resolveImageView(target.colorView());
+                colorAttachment.resolveImageLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                colorAttachment.storeOp(VK_ATTACHMENT_STORE_OP_DONT_CARE);
+            } else {
+                colorAttachment.imageView(target.colorView());
+                colorAttachment.resolveMode(VK_RESOLVE_MODE_NONE);
+                colorAttachment.storeOp(VK_ATTACHMENT_STORE_OP_STORE);
+            }
+            colorAttachment.loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR);
+            colorAttachment.clearValue(clearValue.get(0));
+
+            VkRenderingAttachmentInfo depthAttachment =
+                    VkRenderingAttachmentInfo.calloc(stack);
+            depthAttachment.sType(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO);
+            depthAttachment.imageView(target.depthView());
+            depthAttachment.imageLayout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+            depthAttachment.loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR);
+            depthAttachment.storeOp(VK_ATTACHMENT_STORE_OP_DONT_CARE);
+            depthAttachment.clearValue(depthClear);
+
+            VkRenderingInfo renderingInfo = VkRenderingInfo.calloc(stack);
+            renderingInfo.sType(VK_STRUCTURE_TYPE_RENDERING_INFO);
+            renderingInfo.renderArea().offset().x(0).y(0);
+            renderingInfo.renderArea().extent().width(w).height(h);
+            renderingInfo.layerCount(1);
+            renderingInfo.pColorAttachments(colorAttachment);
+            renderingInfo.pDepthAttachment(depthAttachment);
+
+            vkCmdBeginRendering(cmd, renderingInfo);
+
+            // Dynamic viewport/scissor sized to the TARGET (not the swapchain).
+            VkViewport.Buffer viewport = VkViewport.calloc(1, stack);
+            viewport.x(0.0f).y(0.0f);
+            viewport.width(w).height(h);
+            viewport.minDepth(0.0f).maxDepth(1.0f);
+            vkCmdSetViewport(cmd, 0, viewport);
+
+            VkRect2D.Buffer scissor = VkRect2D.calloc(1, stack);
+            scissor.offset().x(0).y(0);
+            scissor.extent().width(w).height(h);
+            vkCmdSetScissor(cmd, 0, scissor);
+
+            // The user's content, recorded against the same FrameRenderer seam as
+            // setSceneRenderer (this frame's slot selects per-frame UBOs/sets).
+            content.render(new FrameRenderer(cmd, currentFrame));
+
+            vkCmdEndRendering(cmd);
+
+            // ---- Hand-off: the result -> SHADER_READ_ONLY (sampleable now) ----
+            // Make the color/resolve write (COLOR_ATTACHMENT_OUTPUT) available to a
+            // later pass's sampling (FRAGMENT_SHADER). THIS is the barrier that
+            // makes "render this pass, sample the next" safe.
+            barrier.image(target.colorImage());
+            barrier.oldLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            barrier.newLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            barrier.srcStageMask(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
+            barrier.srcAccessMask(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+            barrier.dstStageMask(VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
+            barrier.dstAccessMask(VK_ACCESS_2_SHADER_READ_BIT);
+            vkCmdPipelineBarrier2(cmd, depInfo);
+        }
+    }
+
+    /**
      * Record one frame's commands into {@code cmd}, targeting the acquired
      * swapchain image: barrier (UNDEFINED -> COLOR_ATTACHMENT_OPTIMAL) ->
      * begin rendering (clear into the image's VIEW) -> end rendering ->
@@ -612,6 +826,14 @@ public class Renderer {
 
             Vk.check(vkBeginCommandBuffer(cmd, beginInfo),
                     "Failed to begin the command buffer");
+
+            // ---- Offscreen render-to-texture passes, FIRST ----
+            // Each queued target renders into its own image and ends in
+            // SHADER_READ_ONLY, so the swapchain pass below (or a later target) can
+            // sample it. The swapchain is, in effect, just the final render target.
+            for (TargetPass pass : targetPasses) {
+                recordTargetPass(cmd, pass.target(), pass.content());
+            }
 
             // ---- Barrier 1: make the swapchain image resolvable (UNDEFINED -> COLOR) ----
             // It now receives the RESOLVE write (still a color-attachment write at
@@ -879,7 +1101,9 @@ public class Renderer {
             if (acquired == VK_ERROR_OUT_OF_DATE_KHR) {
                 // No submit happens, so we also do NOT advance currentFrame --
                 // this slot's semaphore went unused and its fence stays signaled;
-                // the retry next frame reuses both safely.
+                // the retry next frame reuses both safely. Drop this frame's queued
+                // target passes; the user re-enqueues them next frame (immediate mode).
+                targetPasses.clear();
                 recreateSwapchain();
                 return;
             }
@@ -921,6 +1145,9 @@ public class Renderer {
             VkCommandBuffer cmd = commandBuffers[currentFrame];
             Vk.check(vkResetCommandBuffer(cmd, 0), "Failed to reset the command buffer");
             recordCommandBuffer(cmd, imageIndex, time);
+            // The target passes are now recorded into the command buffer; clear the
+            // queue so the next frame starts empty (immediate mode -- re-enqueued).
+            targetPasses.clear();
 
             // 3. Submit that image's command buffer, via synchronization2's
             //    vkQueueSubmit2. Every participant gets its own little info struct,

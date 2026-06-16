@@ -23,7 +23,7 @@ plugins {
 // (io.github.<user>), so this can reach Maven Central at 1.0 without owning a
 // domain. 0.x = the API is still unstable (pre-1.0 churn is allowed/expected).
 group = 'io.github.milquetoad'
-version = '0.1.0'
+version = '0.2.0'   // first Maven Central debut (a 0.x shakedown before 1.0.0)
 
 repositories {
     mavenCentral()
@@ -269,13 +269,26 @@ publishing {
 
 // GPG signing of the published artifacts (Maven Central requires every file to
 // carry a .asc signature). OPT-IN via -PsignArtifacts so normal builds, CI, and
-// the unsigned dry-run never touch the key; the release build turns it on and
-// uses the local gpg (gpg4win) key. Pick the key with `signing.gnupg.keyName` in
-// ~/.gradle/gradle.properties (NEVER commit it -- this repo is public).
+// the unsigned dry-run never touch the key.
+//
+// Preferred: IN-MEMORY signing -- Gradle signs with the key directly, never
+// spawning gpg.exe (which breaks under the Gradle daemon on Windows/Gpg4win:
+// "sending fd ... to keyboxd: Input/output error"), and is the CI-ready path.
+// Export your key once: `gpg --export-secret-keys --armor <keyid> > key.asc`,
+// then in ~/.gradle/gradle.properties (NEVER in the repo -- it's public):
+//     signingKeyFile=C:/path/outside/repo/key.asc
+//     signingKeyPassword=<your passphrase>
+// Falls back to the gpg CLI (`signing.gnupg.keyName`) if no key file is given.
 signing {
     required = false   // never fail an ordinary build for lack of a key
     if (project.hasProperty('signArtifacts')) {
-        useGpgCmd()    // delegate to the gpg on PATH (passphrase via gpg-agent/pinentry)
+        def keyFile = findProperty('signingKeyFile')
+        def keyPassword = findProperty('signingKeyPassword')
+        if (keyFile != null) {
+            useInMemoryPgpKeys(file(keyFile).text, keyPassword?.toString())
+        } else {
+            useGpgCmd()   // fallback: the gpg on PATH (fragile under the daemon)
+        }
         sign publishing.publications.maven
     }
 }

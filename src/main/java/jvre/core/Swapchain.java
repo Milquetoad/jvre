@@ -35,7 +35,9 @@ import static org.lwjgl.vulkan.VK10.*;
  * Each negotiation follows the same shape: QUERY what the surface supports, then
  * PICK from it (preferred option, else a guaranteed fallback).
  */
-public class Swapchain {
+// Package-private: a renderer-managed device-context component, not public API.
+// (Offscreen / render-to-texture will get a deliberate public API later.)
+class Swapchain {
 
     private final Device device;  // kept so we can create views from / destroy ourselves on it
 

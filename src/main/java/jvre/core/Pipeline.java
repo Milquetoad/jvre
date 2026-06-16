@@ -84,7 +84,7 @@ public class Pipeline {
      * exactly the "becomes a parameter the moment a second layout exists" note
      * the cube's vertex-input comment predicted.)
      */
-    public enum Kind {
+    enum Kind {
         /** 3D scene: [x y z | r g b | u v] verts, back-face cull, depth on, UBO + sampler. */
         SCENE,
         /** ShaderEffect: no vertex input (fullscreen triangle), no depth/resources, 20-byte frag push. */
@@ -100,7 +100,7 @@ public class Pipeline {
      * from GLSL by the Gradle compileShaders task at build time), rendering
      * into color attachment(s) of the given format.
      */
-    public Pipeline(Device device, int colorFormat, int depthFormat, int sampleCount,
+    Pipeline(Device device, int colorFormat, int depthFormat, int sampleCount,
                     String vertResource, String fragResource) {
         this(device, colorFormat, depthFormat, sampleCount,
                 readResource(vertResource), readResource(fragResource),
@@ -114,7 +114,7 @@ public class Pipeline {
      * Renderer#createPipeline}. Funnels through the same bake as the built-in
      * kinds. v1: no descriptors / push constants.
      */
-    public static Pipeline fromSpec(Device device, int colorFormat, int depthFormat,
+    static Pipeline fromSpec(Device device, int colorFormat, int depthFormat,
                                     int sampleCount, PipelineSpec spec, int framesInFlight) {
         Pipeline p = new Pipeline(device, colorFormat, depthFormat, sampleCount,
                 spec.vertexSpirv, spec.fragmentSpirv, Kind.CUSTOM, spec.label, spec);
@@ -139,7 +139,7 @@ public class Pipeline {
      *     of the scene's 4 bytes of time;
      *   - no blending (the effect writes every pixel, opaquely).
      */
-    public static Pipeline fullscreenEffect(Device device, int colorFormat, int depthFormat,
+    static Pipeline fullscreenEffect(Device device, int colorFormat, int depthFormat,
                                             int sampleCount, byte[] vertSpirv, byte[] fragSpirv,
                                             String label) {
         return new Pipeline(device, colorFormat, depthFormat, sampleCount,
@@ -155,7 +155,7 @@ public class Pipeline {
      * (vec2 uResolution, for the pixels->NDC conversion the shape vertex shader
      * does).
      */
-    public static Pipeline shapes2D(Device device, int colorFormat, int depthFormat,
+    static Pipeline shapes2D(Device device, int colorFormat, int depthFormat,
                                     int sampleCount, String vertResource, String fragResource) {
         return new Pipeline(device, colorFormat, depthFormat, sampleCount,
                 readResource(vertResource), readResource(fragResource),
@@ -583,17 +583,17 @@ public class Pipeline {
     }
 
     /** The VkPipeline handle -- for vkCmdBindPipeline. */
-    public long handle() {
+    long handle() {
         return handle;
     }
 
     /** The VkPipelineLayout -- push constants and descriptor binds go against it. */
-    public long layout() {
+    long layout() {
         return layout;
     }
 
     /** The descriptor set layout -- the Renderer allocates its sets from this shape. */
-    public long descriptorSetLayout() {
+    long descriptorSetLayout() {
         return descriptorSetLayout;
     }
 

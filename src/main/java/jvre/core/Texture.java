@@ -10,9 +10,16 @@ import org.lwjgl.vulkan.VkImageMemoryBarrier2;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.IntBuffer;
 import java.nio.LongBuffer;
 
+import static org.lwjgl.stb.STBImage.*;
 import static org.lwjgl.system.MemoryStack.stackPush;
+import static org.lwjgl.system.MemoryUtil.memAlloc;
+import static org.lwjgl.system.MemoryUtil.memFree;
 import static org.lwjgl.util.vma.Vma.*;
 import static org.lwjgl.vulkan.VK10.*;
 import static org.lwjgl.vulkan.VK13.*;
@@ -84,6 +91,70 @@ public class Texture {
         // pixel-art default). The sprite/image path.
         return upload(device, commandPool, pixels, width, height,
                 VK_FORMAT_R8G8B8A8_SRGB, 4, VK_FILTER_NEAREST);
+    }
+
+    /**
+     * Load + decode an image FILE from the classpath ({@code resourcePath}, e.g.
+     * {@code "/images/sprite.png"}) into a sampleable texture. Decoding is done by
+     * stb_image (the same stb family that bakes the font atlas) -- PNG, JPEG, BMP,
+     * TGA, GIF, etc. -- forced to 4-channel R8G8B8A8, then handed to the SAME
+     * staging upload as {@link #create}. Decoding image formats is tangential to
+     * the rendering core, so jvre leans on the proven library rather than parsing
+     * pixels by hand.
+     *
+     * <p>The decoded pixels are treated as sRGB color (the format is
+     * R8G8B8A8_SRGB, NEAREST-filtered) -- consistent with {@link #create}. (A
+     * choice of filter / mips is a later sampler-config refinement.)
+     */
+    public static Texture load(Device device, long commandPool, String resourcePath) {
+        ByteBuffer fileBytes = readResource(resourcePath);   // native buffer -- memFree below
+        try (MemoryStack stack = stackPush()) {
+            IntBuffer w = stack.mallocInt(1);
+            IntBuffer h = stack.mallocInt(1);
+            IntBuffer channelsInFile = stack.mallocInt(1);
+            // desired_channels = 4: always give us RGBA regardless of the source
+            // (a JPEG with no alpha comes back opaque, a paletted PNG expanded).
+            ByteBuffer decoded = stbi_load_from_memory(fileBytes, w, h, channelsInFile, 4);
+            if (decoded == null) {
+                throw new RuntimeException("stb_image failed to decode " + resourcePath
+                        + ": " + stbi_failure_reason());
+            }
+            int width = w.get(0);
+            int height = h.get(0);
+            try {
+                // Copy the decoded native pixels into a byte[] for the shared
+                // (tested) create() path. One copy at load time -- negligible.
+                byte[] pixels = new byte[width * height * 4];
+                decoded.get(pixels);
+                return create(device, commandPool, pixels, width, height);
+            } finally {
+                // get() advanced decoded's position to the end. stb_image_free frees
+                // the pointer AT THE BUFFER'S CURRENT POSITION (LWJGL uses the
+                // position-sensitive memAddress, not the base memAddress0), so we
+                // MUST rewind to 0 first -- freeing a mid-buffer address corrupts
+                // the native heap (a hard 0xC0000374 crash).
+                decoded.rewind();
+                stbi_image_free(decoded);
+            }
+        } finally {
+            memFree(fileBytes);
+        }
+    }
+
+    /** Read a classpath resource into a native {@link ByteBuffer} (caller frees it
+     *  with {@code memFree}) -- what stb_image decodes from. */
+    private static ByteBuffer readResource(String path) {
+        try (InputStream in = Texture.class.getResourceAsStream(path)) {
+            if (in == null) {
+                throw new RuntimeException("Image resource not found on the classpath: " + path);
+            }
+            byte[] bytes = in.readAllBytes();
+            ByteBuffer buf = memAlloc(bytes.length);
+            buf.put(bytes).flip();
+            return buf;
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to read image resource: " + path, e);
+        }
     }
 
     /**

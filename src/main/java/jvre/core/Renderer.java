@@ -232,13 +232,23 @@ public class Renderer {
 
     /**
      * Create a drawable image from raw RGBA pixels (R8G8B8A8, row-major,
-     * top-to-bottom) for {@link Renderer2D#image}. The L1 image entry point:
-     * decoding image FILES (PNG/JPG, via stb_image) is a later convenience that
-     * will funnel here too. The caller OWNS the returned Texture and must
-     * {@code close()} it before the Renderer (it frees VMA memory the device owns).
+     * top-to-bottom) for {@link Renderer2D#image}. The caller OWNS the returned
+     * Texture and must {@code close()} it before the Renderer (it frees VMA memory
+     * the device owns). To load an image FILE instead, see {@link #loadImage}.
      */
     public Texture createImage(byte[] rgbaPixels, int width, int height) {
         return Texture.create(device, commandPool, rgbaPixels, width, height);
+    }
+
+    /**
+     * Load + decode an image FILE from the classpath ({@code resourcePath}, e.g.
+     * {@code "/images/sprite.png"}) into a drawable image -- PNG/JPEG/BMP/TGA/...
+     * via stb_image. The convenience over {@link #createImage}: you don't decode
+     * the bytes yourself. Same ownership rule -- {@code close()} it before the
+     * Renderer.
+     */
+    public Texture loadImage(String resourcePath) {
+        return Texture.load(device, commandPool, resourcePath);
     }
 
     /**

@@ -103,26 +103,29 @@ overload (and to `textWidth`) when you want a specific one.
 
 ## Images
 
-Upload pixels once to get a `Texture`, then draw it as many times as you like.
-Pixels are **RGBA bytes**, row-major, 4 bytes per pixel:
+Create a `Texture` once, then draw it as many times as you like. The easy way is
+to **load an image file** from the classpath (PNG, JPEG, BMP, TGA, … — decoded by
+stb_image):
 
 ```java
-// Build (or load) width*height*4 RGBA bytes.
-byte[] pixels = /* ... */;
-Texture img = renderer.createImage(pixels, width, height);
+Texture img = renderer.loadImage("/images/sprite.png");   // a resource on the classpath
 
 // Each frame:
 g.image(img, x, y);              // draw at native size, top-left at (x, y)
 g.image(img, x, y, w, h);        // scaled to fit (w, h)
 ```
 
+If you'd rather build pixels in code (procedural textures, or you already have raw
+data), `createImage` takes **RGBA bytes**, row-major, 4 bytes per pixel:
+
+```java
+byte[] pixels = /* width * height * 4 RGBA bytes */;
+Texture img = renderer.createImage(pixels, width, height);
+```
+
 Drawing several different textures in one frame is fine — jvre batches by texture
 automatically. A `Texture` is a GPU resource you own: close it when you're done
 (before the renderer), e.g. in your cleanup.
-
-> Loading PNGs/JPEGs isn't built in yet; decode to RGBA bytes with your image
-> library of choice (e.g. LWJGL's `stb_image`) and hand the bytes to
-> `createImage`.
 
 ## The transform stack
 

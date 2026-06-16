@@ -163,10 +163,11 @@ public class Main {
             // The L2 altitude: ask the renderer for its 2D surface. From here the
             // loop is begin() / draw shapes / end() -- no Vulkan in sight.
             g = renderer.renderer2D();
-            // Two small generated images. Real programs will load a PNG; for now
-            // we synthesize recognizable pixels. TWO distinct textures in one frame
-            // is what exercises the flush-on-texture-switch batching.
-            demoImage = renderer.createImage(makeDemoImage(64, false), 64, 64);
+            // Two distinct textures in one frame -- exercises the flush-on-
+            // texture-switch batching. The first is LOADED from a PNG file via
+            // stb_image (renderer.loadImage); the second is synthesized in code
+            // (renderer.createImage) -- both paths, side by side.
+            demoImage = renderer.loadImage("/demo/test-image.png");
             demoImage2 = renderer.createImage(makeDemoImage(64, true), 64, 64);
             // Bake the default font now (at startup) rather than lazily on the
             // first text() call mid-loop -- avoids a one-time hitch in frame 1.

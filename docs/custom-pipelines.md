@@ -181,3 +181,6 @@ verts.close();
   draw a UI overlay in the same frame as your custom scene.
 - For a single full-screen shader instead of geometry, the
   [shader effects](shader-effects.md) altitude is simpler.
+- Render your scene into an offscreen image instead of the screen — for
+  post-processing or compositing — with [render to texture](render-to-texture.md)
+  (`renderer.drawToTarget(target, frame -> { ... })`).

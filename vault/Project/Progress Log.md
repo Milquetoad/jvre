@@ -2,6 +2,13 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-16 — 1.0.0: jvre on Maven Central -- THE FINISH LINE 🏁🎉
+- **`0.2.0` shakedown PUBLISHED to Maven Central** (owner uploaded; validation passed) -- the whole signing -> bundle -> validate -> publish pipeline proven end-to-end on a throwaway version, exactly as planned. Then merged the proven R4 config (PR #19) to main.
+- **`1.0.0` release prepared:** version `0.2.0 -> 1.0.0` (the public API in `docs/api-surface.md` is now a **semver compatibility promise**). User-facing docs flipped from JitPack/pre-1.0 to **Maven Central**: README install snippet + status, `docs/getting-started.md` (dependency snippet + the JBang `//DEPS` now `io.github.milquetoad:jvre:1.0.0`, `//REPOS` dropped), `docs/README.md` note. Clean 1.0.0 bundle verified (only 1.0.0, 5 artifacts).
+- **This is the project's stated finish line** (decided 2026-06-14): "done learning" = jvre delivered as a professional product, shipped to Central with full polish -- two API altitudes, docs, cross-platform CI, a tightened public surface, signed artifacts. v1.0 = Roadmap phases 1-2 + the release track, all complete.
+- **Owner's final step:** `gradlew centralBundle -PsignArtifacts` -> upload `build/central-bundle-1.0.0.zip` to the Central Portal. Then tag **v1.0.0** + a GitHub Release, and merge the release PR.
+- **Beyond 1.0:** jvre is now built out toward FULLY-FLEDGED (see [[jvre-fully-fledged-not-pull-based]]): the planned post-1.0 capability backlog (render-to-texture, instancing, compute, ray tracing, the catalogued L2 refinements) -- committed work, not pull-based. A dedicated post-1.0 feature-plan pass is owed.
+
 ## 2026-06-16 — R4 publishing plumbing: GPG signing + Central bundle + JBang doc 📦✅
 - **The Maven Central upload mechanics (jvre's half).** Owner verified the `io.github.milquetoad` namespace + set up a GPG key; this wires the build to produce a Central-ready bundle.
 - **`signing` plugin** -- GPG-signs the publication. **Opt-in via `-PsignArtifacts`** so normal builds + CI + the unsigned dry-run never touch the key (`required = false`).

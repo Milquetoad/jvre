@@ -7,18 +7,33 @@
 A general-purpose rendering framework written **from scratch in Java on top of [Vulkan](https://www.vulkan.org/)** (via [LWJGL](https://www.lwjgl.org/)). The goal is twofold:
 
 1. **Learn graphics from first principles** — understand every layer, from the Vulkan instance up to a full render loop, with no engine hiding the details.
-2. **Grow into a reusable framework** — windowing, shaders, 2D and 3D rendering, and eventually the rendering backbone for a small game engine and for algorithm/CS visualizations.
+2. **Ship a real, reusable framework** — a coherent, documented, cross-platform library, delivered with the polish of a professional product (the finish line is a stable 1.0 on Maven Central).
 
-> ⚠️ **Early days.** This is a learning project under active construction. The API is not stable. See the [roadmap](#roadmap).
+> **Status: pre-1.0, under active development.** The core is feature-rich and runs cleanly (both API altitudes below are built), but the public API may still change between `0.x` releases. The road to a stable 1.0 is in the [roadmap](vault/Project/Roadmap.md).
 
-## Vision
+## Two altitudes, one engine
 
-Two parallel use-cases on one engine:
+jvre is layered so you can work at the level a task needs — and mix levels in one frame:
 
-- **High-level** — define a window and a set of things to render, and play with them *without writing shaders*.
-- **Low-level** — Shadertoy-style shader illustration for when you *do* want to write shaders.
+- **High-level "just draw" (`Renderer2D`)** — shapes, text, and images via plain method calls; build 2D scenes, UI, and visualizations **without writing shaders**.
+- **Shader effects (`ShaderEffect`)** — Shadertoy-style: one GLSL fragment shader over a fullscreen quad, compiled at runtime.
+- **Low-level escape hatch (L1)** — your own geometry, vertex layouts, shaders, uniforms, and textures (plus a `Camera` for 3D), when you want full control without leaving the engine.
 
-Longer-term: a self-built immediate-mode GUI, 3D rendering, and (reachable, not promised) compute and hardware-accelerated ray/path tracing.
+Reachable but not promised, post-1.0: compute and hardware-accelerated ray/path tracing.
+
+## Scope — what jvre is and isn't
+
+jvre is a **rendering framework**: it gets pixels on screen and gives you the layers to do it at any altitude. It is deliberately **not a game engine** (no entity/scene system, physics, or audio) and **not a GUI toolkit** (the bundled immediate-mode GUI is a *demo* of what L2 enables, not a shipped widget library). Those are *capabilities you can build on jvre*, not features it ships — keeping that boundary is what keeps the core sharp.
+
+## Documentation
+
+User guides live in **[`docs/`](docs/)**:
+
+- **[Getting started](docs/getting-started.md)** — add the dependency, then a complete runnable "hello, rectangle".
+- **[2D graphics](docs/2d-graphics.md)** — the `Renderer2D` surface in full.
+- **[Shader effects](docs/shader-effects.md)** · **[Custom pipelines](docs/custom-pipelines.md)** — the lower altitudes.
+
+The [`vault/`](vault/) directory is a separate, *internal* Obsidian knowledge base (design notes + a dated progress log) — useful if you want the reasoning behind the design.
 
 ## Requirements
 
@@ -44,9 +59,9 @@ The project ships a Gradle **wrapper**, so you don't need Gradle installed — j
 
 You should see a window open and console output reporting each Vulkan bootstrap step (instance, surface, chosen GPU, ...). Close the window to exit.
 
-## Using jvre as a library (early)
+## Using jvre as a library
 
-> ⚠️ Pre-1.0: the API is unstable and versions may break. Published via [JitPack](https://jitpack.io) for now; Maven Central is planned at 1.0.
+> Pre-1.0: the API may change between `0.x` releases. Published via [JitPack](https://jitpack.io) for now; Maven Central is planned at 1.0. For a complete runnable example and a walkthrough, see **[docs/getting-started.md](docs/getting-started.md)**.
 
 ```gradle
 repositories {
@@ -79,57 +94,44 @@ The code is OS-agnostic by design: windowing and surface creation go through GLF
 ## Project layout
 
 ```
-src/main/java/jvre/        Demo entry point (Main.java -- wiring only)
-src/main/java/jvre/core/   Engine elementaries: Window, Instance, Surface, Device, Swapchain, Buffer, Pipeline, Renderer
-src/main/glsl/             GLSL shader sources (compiled to SPIR-V at build time by glslc)
-build.gradle               Build config (LWJGL deps, JDK 21 toolchain, shader compilation)
-vault/                     Obsidian learning vault — concepts, Vulkan notes, progress log
+src/main/java/jvre/core/   The library: Window, Instance, Surface, Device, Swapchain,
+                           Renderer, Renderer2D, Pipeline, Buffer, Texture, Font, Camera, ...
+src/main/java/jvre/        Main.java -- the demo showcase (wiring + a tour of every altitude)
+src/main/java/jvre/demo/   Worked examples built ON the library (e.g. the immediate-mode GUI),
+                           excluded from the published jar -- not part of the API
+src/main/java/jvre/tools/  Build-time tooling (the shader compiler task), also not shipped
+src/main/glsl/             Built-in GLSL shaders, compiled to SPIR-V at build time via the
+                           bundled shaderc (no Vulkan SDK needed)
+docs/                      User-facing guides (getting started + the API guides)
+build.gradle               Build config (LWJGL deps, JDK 21 toolchain, shader compilation, publishing)
+vault/                     Internal Obsidian knowledge base — design notes + progress log
 ```
 
-The [`vault/`](vault/) directory is a companion **Obsidian knowledge base** maintained alongside the code: every concept we cover gets a note, and `vault/Project/Progress Log.md` is a dated diary of progress. Start at `vault/Home.md`.
+The [`vault/`](vault/) directory is a companion **Obsidian knowledge base** maintained alongside the code: every concept gets a note, and `vault/Project/Progress Log.md` is a dated diary of progress. Start at `vault/Home.md`. (For *using* jvre, see [`docs/`](docs/) instead.)
 
-## Roadmap
+## Status &amp; roadmap
 
-Path to first pixels ("clear to color"):
+The full Vulkan substrate and both API altitudes are built and run cleanly
+(validation-silent). What works today:
 
-- [x] Vulkan instance
-- [x] Validation layer + debug messenger
-- [x] Window surface
-- [x] Physical device selection (queue families, present support, scoring)
-- [x] Logical device + queues
-- [x] Swapchain
-- [x] Image views
-- [x] Render pass + framebuffers *(since replaced — see below)*
-- [x] Command pool + buffers
-- [x] Synchronization + render loop → **clear to a color** ✅
+- **Modern Vulkan core** — dynamic rendering + synchronization2 (Vulkan 1.3),
+  scored GPU selection with an override, VMA-managed memory, a resizable swapchain
+  with 2 frames in flight, and **MSAA**.
+- **L2 `Renderer2D`** — fills, strokes, text (SDF glyphs), and images, with an
+  analytic SDF render path (crisp curves at any size) and a transform stack.
+- **`ShaderEffect`** — runtime-compiled fullscreen fragment-shader effects, with a
+  contract guard.
+- **L1 escape hatch** — user-defined pipelines (your geometry + shaders + uniforms
+  + textures), index buffers, and a `Camera` helper for 3D.
+- **Interactivity & capability knobs** — a per-frame input snapshot, `time()`/`dt()`,
+  and creation-time vsync / MSAA / GPU options.
+- **Delivery** — cross-platform CI (Windows + Linux), published via JitPack;
+  natives are consumer-selected (not bundled).
 
-🟠 **Milestone reached: the window clears to a solid color.** The full Vulkan bootstrap — instance through the render loop — runs end to end with the validation layers clean.
-
-Current phase — refactor into reusable components + modernize:
-
-- [x] Stable layer extracted: `Window`, `Instance`, `Surface`
-- [x] Device context extracted: `Device` (selection + logical device + queues), `Swapchain` (+ image views)
-- [x] Migrated to **dynamic rendering** (Vulkan 1.3) — render pass + framebuffers deleted; explicit pipeline barriers drive the image layout transitions
-- [x] Migrated to **synchronization2** (Vulkan 1.3) — `vkQueueSubmit2` / `vkCmdPipelineBarrier2`; device selection verifies API version + feature support; sync-validation + best-practices layer checks enabled
-- [x] `Renderer` coordinator — owns the device context; **resizable window** with swapchain recreation (incl. minimize); **2 frames in flight** with per-frame command recording
-- [x] **First triangle** 🔺 — graphics `Pipeline` (dynamic viewport/scissor, dynamic-rendering format hookup) + GLSL shaders compiled to SPIR-V at build time (`glslc` Gradle task)
-- [x] Vertex buffers — `Buffer` elementary (`VkBuffer` + `VkDeviceMemory`, memory-type selection); geometry as data, staged into device-local memory
-- [x] Push constants 🌀 — the triangle **spins**: per-frame time + aspect pushed straight into the command buffer
-- [x] Index buffers — the quad: unique vertices + UINT16 indices, `vkCmdDrawIndexed`
-- [x] Uniform buffers + descriptor sets 🛰️ — the quad **orbits**: per-frame mat4 UBO through the layout/pool/set machinery; push constants move to the fragment stage (both tiers side by side)
-- [x] Textures — images + samplers + `COMBINED_IMAGE_SAMPLER` descriptors
-- [x] 3D + depth buffer — perspective MVP, depth test/write, back-face culling
-- [x] **MSAA** 🧊 — a tumbling, depth-tested, 4×-antialiased cube (multisampled color + depth, resolve built into dynamic rendering)
-- [x] **VMA** — VMA-managed memory (intent-over-flags); standing allocation advisories closed
-
-🧊 **Milestone reached: textures → 3D + depth → MSAA complete.**
-
-Then the two altitudes of the [layered API](#) took shape:
-
-- [x] **`ShaderEffect`** ✨ — the Shadertoy altitude: runtime-compiled (shaderc) user fragment shaders over a fullscreen triangle, named builtin uniforms, a SPIRV-Cross effect-contract guard
-- [x] **L2 `Renderer2D`** 🎨 — the "just draw" altitude (v1 surface complete): a per-frame vertex arena + shape pipeline; **fills** (rect, circle, ellipse, triangle, quad, rounded-rect), **strokes** (line, rect, circle/ellipse, triangle/quad with miter joins — CPU-triangulated, no `wideLines`), an **SDF render path** (analytic circle + rounded-box, one batch, draw order preserved), **`image`** (textured quads + multi-texture flush-on-switch batching), and **`text`** (single-channel **SDF glyphs** via stb_truetype, built-in DejaVu Sans, crisp at any size from one bake)
-
-After that: a self-built GUI, more 3D, and eventually ray/path tracing.
+The **forward plan, the v1.0 definition, and the path to Maven Central** live in
+**[`vault/Project/Roadmap.md`](vault/Project/Roadmap.md)**; the dated build diary is
+[`vault/Project/Progress Log.md`](vault/Project/Progress%20Log.md). Reachable but
+not promised (post-1.0): compute and ray/path tracing.
 
 ## Contributing
 

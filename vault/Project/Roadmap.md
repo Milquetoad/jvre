@@ -63,7 +63,9 @@ The project-management / delivery half of the learning goal. Climbs a ladder rat
 - **R3. Pre-1.0 distribution.** Tagged **GitHub Releases** + **JitPack** (zero-setup consumption from a git tag) so others can try it without Central's bureaucracy. Wire release builds into CI (extends 1c).
 - **R4. Maven Central at 1.0.** Verified namespace **`io.github.milquetoad`** (GitHub-verified, free), **GPG-signed** artifacts, the sources/javadoc jars, via the Central Portal. Done once the API is stable -- re-publishing breaking `0.x` to Central is painful and discouraged.
   - **API surface audit ✅ DONE (2026-06-16)** -- the "API declared stable" precondition: pruned `jvre.core` 29 -> 26 public types (hid `Vk`/`Commands`/`Swapchain`, trimmed `Buffer`/`Texture`/`Pipeline`/`Font` to opaque handles, kept `Device` as the raw escape). Principle: tighten now (reversible), widen later (additive). Contract written down in `docs/api-surface.md`.
-  - **Remaining R4 mechanics:** GPG key + keyserver, the Gradle `signing` + Central-publish plugin, bump version 0.x -> 1.0.0, `publishToMavenLocal` dry-run, then the immutable upload. The account/key steps are the owner's.
+  - **Namespace verified + GPG key created ✅ (owner, 2026-06-16).**
+  - **Build plumbing ✅ DONE (2026-06-16):** `signing` plugin (opt-in `-PsignArtifacts`, `useGpgCmd`), a local staging repo + `centralBundle` Zip task producing `build/central-bundle-<version>.zip` (the manual-bundle path -- transparent, no 3rd-party publish plugin). Unsigned dry-run verified the layout + checksums.
+  - **Remaining R4 (owner):** add `signing.gnupg.keyName` + the Central Portal token to `~/.gradle/gradle.properties`, run `gradlew centralBundle -PsignArtifacts`, upload the bundle (Portal UI / Publisher API), validate. **Then the version call: 1.0.0 now vs a 0.2.0 Central shakedown first.**
 - Cross-cutting: a **getting-started + API overview + examples** doc set (shares work with 1d), and an **honest scope statement** in the README.
 
 ## Phase 4 -- The power axis (longer-term)

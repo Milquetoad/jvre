@@ -16,6 +16,7 @@ plugins {
     id 'application'
     id 'java-library'   // adds the `api` configuration -> a publishable library, not just an app
     id 'maven-publish'  // produces the consumable artifact (jar + sources + javadoc + POM)
+    id 'signing'        // GPG-signs the artifacts -> required for Maven Central (R4)
 }
 
 // Maven coordinates. groupId is the GitHub-verified reverse-domain namespace
@@ -220,9 +221,21 @@ tasks.withType(Javadoc).configureEach {
 
 // The publishable artifact: jar + sources + javadoc + a complete POM. Verify
 // locally with `gradlew publishToMavenLocal` (-> ~/.m2). The natives are absent
-// from the POM by design (see the nativesRuntime config). Central upload with GPG
-// signing is the later R4 step; pre-1.0 distribution is JitPack / GitHub Releases.
+// from the POM by design (see the nativesRuntime config).
+//
+// R4 (Maven Central): publish into a LOCAL staging repo, GPG-sign the artifacts,
+// and zip them into a "bundle" the Central Portal accepts. See the `centralBundle`
+// task + the signing block below.
 publishing {
+    repositories {
+        // A local directory repo: `publishMavenPublicationToCentralStagingRepository`
+        // writes the full Maven layout (jar/sources/javadoc/pom + .asc + checksums)
+        // here, which `centralBundle` then zips for upload.
+        maven {
+            name = 'centralStaging'
+            url = layout.buildDirectory.dir('staging-deploy')
+        }
+    }
     publications {
         maven(MavenPublication) {
             from components.java
@@ -252,4 +265,33 @@ publishing {
             }
         }
     }
+}
+
+// GPG signing of the published artifacts (Maven Central requires every file to
+// carry a .asc signature). OPT-IN via -PsignArtifacts so normal builds, CI, and
+// the unsigned dry-run never touch the key; the release build turns it on and
+// uses the local gpg (gpg4win) key. Pick the key with `signing.gnupg.keyName` in
+// ~/.gradle/gradle.properties (NEVER commit it -- this repo is public).
+signing {
+    required = false   // never fail an ordinary build for lack of a key
+    if (project.hasProperty('signArtifacts')) {
+        useGpgCmd()    // delegate to the gpg on PATH (passphrase via gpg-agent/pinentry)
+        sign publishing.publications.maven
+    }
+}
+
+// Bundle the staging-repo layout into a single zip for the Central Portal
+// "Publish Component" upload (UI or the Publisher API). Run the RELEASE build as:
+//     gradlew centralBundle -PsignArtifacts
+// -> build/central-bundle-<version>.zip, containing io/github/milquetoad/jvre/...
+// with .jar/.pom/-sources/-javadoc + .asc signatures + .md5/.sha1 checksums.
+tasks.register('centralBundle', Zip) {
+    description = 'Zips the signed staging-repo artifacts into a Maven Central upload bundle (R4)'
+    group = 'publishing'
+    dependsOn 'publishMavenPublicationToCentralStagingRepository'
+    from layout.buildDirectory.dir('staging-deploy')
+    // Drop maven-metadata files -- Central wants only the versioned artifact tree.
+    exclude '**/maven-metadata.xml*'
+    archiveFileName = "central-bundle-${version}.zip"
+    destinationDirectory = layout.buildDirectory
 }

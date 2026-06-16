@@ -2,6 +2,57 @@
 
 This guide takes you from nothing to a window with a rectangle in it.
 
+## Just want to play? Run a single file with JBang
+
+If you don't want to set up a Gradle/Maven project yet, [JBang](https://www.jbang.dev)
+runs a *single `.java` file* and fetches its dependencies for you. Install JBang
+once (`winget install jbang`, or see jbang.dev), then put the dependencies in
+magic comments at the top of the file:
+
+```java
+//JAVA 21
+//REPOS mavencentral,jitpack=https://jitpack.io
+//DEPS com.github.Milquetoad:jvre:v0.1.0
+//DEPS org.lwjgl:lwjgl:3.3.4:natives-windows
+//DEPS org.lwjgl:lwjgl-glfw:3.3.4:natives-windows
+//DEPS org.lwjgl:lwjgl-vma:3.3.4:natives-windows
+//DEPS org.lwjgl:lwjgl-shaderc:3.3.4:natives-windows
+//DEPS org.lwjgl:lwjgl-spvc:3.3.4:natives-windows
+//DEPS org.lwjgl:lwjgl-stb:3.3.4:natives-windows
+
+import jvre.core.*;
+
+public class play {
+    public static void main(String[] args) {
+        org.lwjgl.system.Configuration.STACK_SIZE.set(512);
+        Window window = new Window(800, 600, "jvre via JBang");
+        Instance instance = new Instance("play", true);
+        Surface surface = new Surface(instance, window);
+        Renderer renderer = new Renderer(instance, surface, window, RendererOptions.defaults());
+        Renderer2D g = renderer.renderer2D();
+        while (!window.shouldClose()) {
+            window.pollEvents();
+            g.begin();
+            g.fillRect(300, 250, 200, 100, Color.rgb(80, 160, 240));
+            g.end();
+            renderer.drawFrame();
+        }
+        renderer.waitIdle();
+        renderer.close(); surface.close(); instance.close(); window.close();
+    }
+}
+```
+
+Save it as `play.java` and run `jbang play.java`. JBang resolves jvre (and its
+transitive libraries) from JitPack and adds the platform natives — no project, no
+`build.gradle`. The `//DEPS` jvre line carries the libraries; the `natives-*`
+lines are the only extra (swap the classifier for your OS:
+`natives-linux` / `natives-macos` / `…-arm64`). Edit, rerun, done. (After the 1.0
+Maven Central release the `//REPOS` line goes away and the jvre coordinate becomes
+`io.github.milquetoad:jvre:1.0.0`.)
+
+For anything bigger than a sketch, set up a real project:
+
 ## 1. Add the dependency
 
 jvre is published via [JitPack](https://jitpack.io) while it is pre-1.0 (Maven

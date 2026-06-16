@@ -39,7 +39,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 22. [[Swapchain Recreation]] — resize/minimize/out-of-date handling in the Renderer
 
 **5. Drawing actual geometry — the creative tier begins**
-23. [[Shaders - GLSL and SPIR-V]] — GLSL, the `glslc` build step, locations, interpolation
+23. [[Shaders - GLSL and SPIR-V]] — GLSL, the `shaderc` build step, locations, interpolation
 24. [[Graphics Pipeline]] — the big bake; dynamic state; the first triangle 🔺
 25. [[Vertex Buffers and GPU Memory]] — VkBuffer vs VkDeviceMemory, memory types, staging uploads
 26. [[Push Constants]] — per-frame data straight into the command buffer (the spin 🌀)
@@ -92,7 +92,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - [[Vulkan Struct Conventions]] — the `sType`/`pNext` pattern
 - [[Windowing - GLFW and the Surface]] — who makes the window (not Vulkan!)
 - [[GUI Options]] — ImGui / Nuklear (GLFW has no widgets)
-- [[Self-Built GUI (planned)]] — our own immediate-mode GUI (later milestone)
+- [[Self-Built GUI (planned)]] — our own immediate-mode GUI (✅ built 2026-06-15 as a bounded L2 *demo*, not a shipped feature)
 - [[Ray Tracing and Path Tracing (future)]] — yes, reachable (compute + hardware RT on the 4090)
 - [[Vulkan Instance]] ✅
 - [[Validation Layer and Debug Messenger]] ✅ — the safety net
@@ -121,7 +121,7 @@ New here? The Map of Content below is a reference index, not a path. To actually
 
 ## Status
 - ✅ Toolchain verified (smoke test passes)
-- ✅ Vulkan SDK installed (`glslc` works)
+- ✅ Vulkan SDK installed (validation layers; the build no longer needs it -- shaders compile via the bundled `shaderc`)
 - ✅ [[Vulkan Instance]] created & running
 - ✅ [[Validation Layer and Debug Messenger]] (safety net, demonstrated catching a bug)
 - ✅ Surface (`VkSurfaceKHR`) created — window connected to Vulkan
@@ -154,7 +154,11 @@ New here? The Map of Content below is a reference index, not a path. To actually
 - ✅ 🎨 [[ShaderEffect - The Shadertoy Altitude]] — **the first realized altitude**: a runtime-compiled (shaderc) user fragment shader on a fullscreen triangle; auto-filled `uResolution`/`uMouse`/`uTime`; the renderer's first content seam (verified on the 4090 — the ripple demo). jvre's FIRST unit tests arrive with it ([[Testing and CI-CD]]).
 - ✅ 🩺 [[Diagnostics and the Crash Log]] — **the Ring 2 guard**: an environment fingerprint (GPU/driver/loader/OS, the EXCLUSIVE-vs-CONCURRENT queue line, formats) tee'd to a per-OS app-data log a user can attach to a bug report; eager+flushed; frictionless manual send (verified on the 4090, fault path included).
 - ✅ 🛡️ **Ring 3 guard** — `ShaderReflection` enforces the [[ShaderEffect - The Shadertoy Altitude#The contract, now ENFORCED (Ring 3 guard) ✅|effect contract]] at creation via SPIRV-Cross (`lwjgl-spvc`): no bound resources, push block ≤ 20 bytes; fails fast in the user's terms. Also the foundation for `set()`. (The "what breaks jvre" plan — all three rings — is now fully executed.)
-- 🚧 🟦 **L2 Renderer2D underway** ([[L2 Feature Set - Renderer2D]]): beat 1 = `Color` (sRGB→linear) + the `shape2d` shaders + the CPU `begin/fillRect/end` surface (unit-tested); **beat 2 ✅ = first rectangles on screen** — `Pipeline` gained a third `Kind`, a per-frame vertex arena, a third content seam (solid + translucent fills verified on the 4090). Next: the rest of the v1 fills, strokes, SDF edge-AA, `g.width()/g.height()`.
-- ⏭️ Then: `image`/`text` (font atlas), and onward.
+- ✅ 🟦 [[L2 Feature Set - Renderer2D|L2 `Renderer2D`]] — **the "just draw" altitude, complete**: fills, strokes, the SDF render path (incl. crisp SDF curves), `image` + multi-texture batching + `loadImage` (PNG/JPEG via stb_image) + per-texture `Filter`, `text` (SDF glyphs) + measurement, the transform stack.
+- ✅ 🎮 **Interactivity** — a per-frame `Input` snapshot (mouse/keys/scroll/typed, level+edge) and `time()`/`dt()`; plus creation-time `RendererOptions` (vsync/MSAA/GPU override).
+- ✅ 🔧 **L1 escape hatch** — user-defined pipelines (`PipelineSpec`/`VertexLayout`/`FrameRenderer`/`SceneRenderer`) + `Camera`; the cube dogfooded via the public API, the hardcoded SCENE retired.
+- ✅ 🖱️ **Immediate-mode GUI demo** (`jvre.demo`, built ON L2 -- a worked example, not a feature; the hot/active-ID lesson).
+- ✅ 📖 **Docs + API audit** — user guides in `docs/` (+ the [[Public API surface]] contract); the public `jvre.core` surface tightened for the 1.0 freeze.
+- ✅ 🏁 **jvre 1.0.0 RELEASED on Maven Central** (`io.github.milquetoad:jvre:1.0.0`) — GPG-signed, cross-platform CI, the project's stated finish line. **Beyond 1.0:** built out toward fully-fledged ([[Roadmap]] Phases 3-4).
 
 #jvre #moc

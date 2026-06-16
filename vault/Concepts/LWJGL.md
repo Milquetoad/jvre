@@ -2,7 +2,7 @@
 
 **Lightweight Java Game Library** — a thin *translation layer* giving Java access to native **C** libraries: Vulkan, GLFW (windowing/input), OpenGL, OpenAL, etc. Explicitly **"not a framework"**; its Vulkan binding is nearly **1:1** with the C API.
 
-> ⚠️ LWJGL exposes **Vulkan**, *not* GLSL. GLSL is the shader language, compiled separately by `glslc` — see [[Shaders - GLSL and SPIR-V]].
+> ⚠️ LWJGL exposes **Vulkan**, *not* GLSL. GLSL is the shader language, compiled separately (jvre's build uses the bundled **shaderc**; `glslc` is the CLI equivalent) — see [[Shaders - GLSL and SPIR-V]].
 
 ## How it translates (the "how")
 Vulkan is a C library — `vulkan-1.dll` exposes C functions like `vkCreateInstance`. The JVM can't call C directly, so LWJGL bridges two gaps:

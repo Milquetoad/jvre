@@ -3,15 +3,15 @@
 Vulkan **requires** shaders — there's no fixed-function fallback, so *nothing draws* without one. But the pipeline is indirect:
 
 - The GPU consumes **SPIR-V**, a compact precompiled **binary** format — *not* GLSL source.
-- We write shaders in **GLSL** (human-readable), then compile to SPIR-V ahead of time with **`glslc`** (from the Vulkan SDK / `shaderc`).
+- We write shaders in **GLSL** (human-readable), then compile to SPIR-V ahead of time. jvre's build does this with the **bundled `shaderc`** library (no Vulkan SDK needed); `glslc` is the equivalent command-line tool that wraps the same compiler.
 - We hand the SPIR-V bytes to Vulkan via `vkCreateShaderModule` — an [[LWJGL]] call.
 
 So [[LWJGL]] is **not** involved in GLSL the language — only in loading the *compiled* result.
 
 > A solid-color clear needs **no** shaders or pipeline at all — the clear is performed by `loadOp = CLEAR`. Shaders first appeared at the **first triangle** (2026-06-11) — see [[Graphics Pipeline]].
 
-## The automation (built 2026-06-11, as planned)
-The `compileShaders` [[Gradle]] task runs `glslc` over `src/main/glsl/*.vert|frag|comp` into `build/generated/shaders/`, registered as a resource dir — so each shader ships in the jar as `/shaders/<name>.spv` and `Pipeline` loads it from the classpath. `glslc` infers the stage from the file extension.
+## The automation (built 2026-06-11; switched glslc -> bundled shaderc 2026-06-14)
+The `compileShaders` [[Gradle]] task compiles `src/main/glsl/*.vert|frag` into `build/generated/shaders/`, registered as a resource dir — so each shader ships in the jar as `/shaders/<name>.spv` and `Pipeline` loads it from the classpath. It runs `jvre.tools.ShaderTool` (driving jvre's own `ShaderCompiler` over the bundled `lwjgl-shaderc`), **not** the external `glslc` executable — so the build needs no Vulkan SDK (the CI / JitPack / from-source unblocker). The stage is inferred from the file extension. See [[Testing and CI-CD]] for the migration.
 
 ## What the first shaders taught
 - **Stages talk by `location`, not by name**: the vertex shader's `layout(location = 0) out vec3` feeds the fragment shader's `layout(location = 0) in vec3`; the fragment's `location = 0` *output* is **color attachment 0**.

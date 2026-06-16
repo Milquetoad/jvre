@@ -1,25 +1,29 @@
 # Roadmap (forward-looking)
 
-**As of 2026-06-14.** The backward diary is [[Progress Log]]; the original bootstrap checklist is [[Roadmap - Clear to Color]]. This note is the *forward* plan and the *why* behind its ordering.
+**As of 2026-06-16 -- jvre 1.0.0 is RELEASED on Maven Central** (`io.github.milquetoad:jvre:1.0.0`). The backward diary is [[Progress Log]]; the original bootstrap checklist is [[Roadmap - Clear to Color]]. This note is now the *post-1.0 forward plan* (Phase 3 remaining + Phase 4) and the *why* behind its ordering.
 
-## Where we are
-The full Vulkan substrate (L0/L1 plumbing) and both API altitudes exist:
-- **L2 `Renderer2D`** -- v1 surface COMPLETE (fills, strokes, the SDF render path, image + multi-texture batching, text via SDF glyphs) + the transform stack. Rich and coherent. See [[L2 Feature Set - Renderer2D]].
+## Where we are -- 1.0 shipped 🏁
+The full Vulkan substrate (L0/L1 plumbing), **both API altitudes, AND the L1 escape hatch** are delivered, documented, and released:
+- **L2 `Renderer2D`** -- fills, strokes, the SDF render path (incl. crisp SDF curves), image + multi-texture batching + **file loading** (`loadImage`) + per-texture **`Filter`**, text via SDF glyphs + measurement, the transform stack. See [[L2 Feature Set - Renderer2D]].
 - **`ShaderEffect`** -- the fullscreen Shadertoy altitude, contract-guarded.
-- **L1** -- the building blocks (`Pipeline`, `Buffer`, `Texture`, `Font`) are public but *raw*: there is no sanctioned "bring your own geometry + shader" surface yet, and no input/time/capability surface.
+- **L1 escape hatch** -- a sanctioned "bring your own geometry + shaders + uniforms + textures" surface (`PipelineSpec`/`VertexLayout`/`FrameRenderer`/`SceneRenderer` + `Camera`), mixable with L2; `Device` exposes raw Vulkan. The dogfood (the cube via the public API) retired the hardcoded SCENE.
+- **Interactivity + capability knobs** -- per-frame `Input` snapshot, `time()`/`dt()`, creation-time `RendererOptions` (vsync/MSAA/GPU).
+- **Delivery** -- cross-platform CI (Win+Linux), de-pinned natives, GPG-signed Maven Central release, a documented + **audited** public surface ([[Public API surface|docs/api-surface.md]]), user guides in `docs/`.
 
-Measured against the [[Design North Star]]: the **approachability half (L2) is well-built**; its *approachability is still unproven* (defaults, the "first five minutes", error quality), and the **flexibility half (L1 escape hatch for geometry) is only half-delivered** (fullscreen effects yes, custom meshes no). L2 is also currently **draw-only** -- it cannot react to input.
+Measured against the [[Design North Star]]: **both halves delivered** -- approachability (L2 + defaults + the "hello rectangle" docs) AND flexibility (the L1 geometry escape hatch). The standing North Star debts from the 0.x era are paid. The forward work is now **building jvre out to FULLY-FLEDGED** (see [[jvre-fully-fledged-not-pull-based]]).
 
-## The destination: a professional v1.0 on Maven Central
-**Decided 2026-06-14.** jvre is a learning project whose curriculum explicitly includes **software engineering, project management, and shipping a real product** -- so the finish line is not "it works on my machine," it is **v1.0 delivered as if it were a professional library**. "Done learning" = jvre shipped to Maven Central with the polish that entails.
+## The destination: a professional v1.0 on Maven Central -- ✅ ACHIEVED (2026-06-16)
+**Decided 2026-06-14; reached 2026-06-16.** jvre is a learning project whose curriculum explicitly includes **software engineering, project management, and shipping a real product** -- so the finish line was not "it works on my machine," it was **v1.0 delivered as if it were a professional library**. "Done learning" = jvre shipped to Maven Central with the polish that entails. **Done.**
 
-**Framework Definition of Done (v1.0)** -- jvre is "done" (1.0) when:
-- **Both altitudes deliver the North Star.** L2 is *approachable* (defaults Just Work, the "hello rectangle" five-minutes is real, errors speak L2) AND *interactive* (input + time). L1 is *flexible* (the geometry escape hatch -- mix `fillRect` and a custom shader/mesh in one program).
-- **Cross-platform proven** -- Windows + Linux, CI green on both.
-- **Usable by a stranger** -- getting-started + examples + an API overview; a consumable published artifact; the LWJGL natives story de-pinned.
-- **Honest scope statement** -- what jvre is and isn't (not a game engine, not a GUI toolkit).
-- **The per-change [[Definition of Done]] held throughout** -- validation silent, no leaks, tested.
-- **API declared stable** -- semver `1.0.0` is a compatibility promise.
+**Framework Definition of Done (v1.0)** -- every criterion met:
+- ✅ **Both altitudes deliver the North Star.** L2 is *approachable* (defaults Just Work, the "hello rectangle" docs are real) AND *interactive* (`Input` + `time()`/`dt()`). L1 is *flexible* (the geometry escape hatch -- mix `fillRect` and a custom shader/mesh in one program).
+- ✅ **Cross-platform proven** -- Windows + Linux, CI green on both.
+- ✅ **Usable by a stranger** -- getting-started + the `docs/` guides + an API overview; a published Central artifact; the LWJGL natives story de-pinned.
+- ✅ **Honest scope statement** -- README says what jvre is and isn't (not a game engine, not a GUI toolkit).
+- ✅ **The per-change [[Definition of Done]] held throughout** -- validation silent, no leaks, tested.
+- ✅ **API declared stable** -- semver `1.0.0` is a compatibility promise (the surface audit + [[Public API surface]] doc).
+
+**Beyond 1.0:** the curriculum continues -- jvre is built out toward a fully-fledged framework (Phase 3 remaining refinements + Phase 4 capability axis), as committed planned work. See [[jvre-fully-fledged-not-pull-based]].
 
 **v1.0 = Phases 1-2 + the Release track (below).** Phases 3-4 (polish, the GUI demo, compute, ray tracing) are explicitly **post-1.0** capability growth, not done-ness.
 

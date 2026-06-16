@@ -36,7 +36,7 @@ Uploads go `vmaMapMemory` -> write -> `vmaUnmapMemory` -> `vmaFlushAllocation`. 
 
 ## Dedicated allocations: the attachment exception
 
-Sub-allocation is for the many-small-resources case. **Full-screen attachments are the textbook opposite**: large (the depth image is ~1.9 MB at 800x600, growing with resolution), long-lived, recreated on resize, and drivers can optimize dedicated attachment memory. So the [[3D and the Depth Buffer|depth image]] passes `VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT`; small textures stay pooled. The future MSAA color target is the same case.
+Sub-allocation is for the many-small-resources case. **Full-screen attachments are the textbook opposite**: large (the depth image is ~1.9 MB at 800x600, growing with resolution), long-lived, recreated on resize, and drivers can optimize dedicated attachment memory. So the [[3D and the Depth Buffer|depth image]] passes `VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT`; small textures stay pooled. The MSAA color target (shipped with the [[MSAA]] milestone) is the same case -- also `DEDICATED_MEMORY`.
 
 ## What did NOT change
 

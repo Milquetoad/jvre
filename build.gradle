@@ -293,6 +293,16 @@ signing {
     }
 }
 
+// Wipe the staging dir before each publish so the bundle is EXACTLY ONE
+// consistent, freshly-signed version -- the publish task never cleans up after
+// itself, so otherwise old versions + stale signatures from earlier runs pile up
+// and get zipped in (a bad/mixed bundle).
+tasks.register('cleanCentralStaging', Delete) {
+    delete layout.buildDirectory.dir('staging-deploy')
+}
+tasks.matching { it.name == 'publishMavenPublicationToCentralStagingRepository' }
+        .configureEach { dependsOn 'cleanCentralStaging' }
+
 // Bundle the staging-repo layout into a single zip for the Central Portal
 // "Publish Component" upload (UI or the Publisher API). Run the RELEASE build as:
 //     gradlew centralBundle -PsignArtifacts

@@ -24,6 +24,11 @@ directory is for people who want to *use* jvre.
   own geometry, vertex layout, shaders, uniforms, and textures, mixed with the 2D
   surface in one frame; plus the `Camera` helper for 3D.
 
+## Reference
+
+- **[Public API surface](api-surface.md)** — the complete set of public types
+  (the 1.0 compatibility contract), grouped by role.
+
 ## The shape of jvre: two altitudes, one engine
 
 jvre is deliberately layered. You pick the altitude that fits the job, and you can

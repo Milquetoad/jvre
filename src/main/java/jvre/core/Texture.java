@@ -85,7 +85,7 @@ public class Texture {
      * plus the layout transitions the image needs around the copy. The staging
      * buffer is destroyed once the pixels live in the image.
      */
-    public static Texture create(Device device, long commandPool,
+    static Texture create(Device device, long commandPool,
                                  byte[] pixels, int width, int height) {
         // NEAREST: the default for hand-authored exact pixels (crisp, no blur).
         return create(device, commandPool, pixels, width, height, Filter.NEAREST);
@@ -93,7 +93,7 @@ public class Texture {
 
     /** {@link #create(Device, long, byte[], int, int)} with an explicit sampling
      *  {@link Filter} (NEAREST for crisp pixels, LINEAR for smooth scaling). */
-    public static Texture create(Device device, long commandPool,
+    static Texture create(Device device, long commandPool,
                                  byte[] pixels, int width, int height, Filter filter) {
         // R8G8B8A8_SRGB (4 bytes/texel, GPU linearizes on sample). The sprite/image path.
         return upload(device, commandPool, pixels, width, height,
@@ -114,12 +114,12 @@ public class Texture {
      * the right default for a decoded image asset); pass an explicit filter to
      * override. (Mipmaps are a later refinement.)
      */
-    public static Texture load(Device device, long commandPool, String resourcePath) {
+    static Texture load(Device device, long commandPool, String resourcePath) {
         return load(device, commandPool, resourcePath, Filter.LINEAR);
     }
 
     /** {@link #load(Device, long, String)} with an explicit sampling {@link Filter}. */
-    public static Texture load(Device device, long commandPool, String resourcePath, Filter filter) {
+    static Texture load(Device device, long commandPool, String resourcePath, Filter filter) {
         ByteBuffer fileBytes = readResource(resourcePath);   // native buffer -- memFree below
         try (MemoryStack stack = stackPush()) {
             IntBuffer w = stack.mallocInt(1);
@@ -178,7 +178,7 @@ public class Texture {
      * fragment shader smoothstep a clean anti-aliased edge between texels. Same
      * staging upload as {@link #create}, just a narrower format + smarter filter.
      */
-    public static Texture createSdfAtlas(Device device, long commandPool,
+    static Texture createSdfAtlas(Device device, long commandPool,
                                          byte[] coverage, int width, int height) {
         return upload(device, commandPool, coverage, width, height,
                 VK_FORMAT_R8_UNORM, 1, VK_FILTER_LINEAR);
@@ -217,7 +217,7 @@ public class Texture {
      * the GPU samples fastest). The image starts in layout UNDEFINED with no
      * contents; filling + transitioning it comes after.
      */
-    public Texture(Device device, int width, int height, int format, int usage) {
+    Texture(Device device, int width, int height, int format, int usage) {
         this.device = device;
         this.width = width;
         this.height = height;
@@ -397,17 +397,18 @@ public class Texture {
     }
 
     /** The VkImage handle -- for layout barriers, copies, and the image view. */
-    public long image() { return image; }
+    long image() { return image; }
 
     /** The VkImageView -- bound into a descriptor so a shader can sample it. */
-    public long view() { return view; }
+    long view() { return view; }
 
     /** The VkSampler -- paired with the view in a COMBINED_IMAGE_SAMPLER descriptor. */
-    public long sampler() { return sampler; }
+    long sampler() { return sampler; }
 
+    /** The texture's pixel dimensions -- public on the opaque handle. */
     public int width()  { return width; }
     public int height() { return height; }
-    public int format() { return format; }
+    int format() { return format; }
 
     /** Destroy sampler + view, then the image (its slice returns to VMA's block). */
     public void close() {

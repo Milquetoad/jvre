@@ -15,7 +15,8 @@ import static org.lwjgl.vulkan.VK10.VK_SUCCESS;
  * present returning OUT_OF_DATE/SUBOPTIMAL on resize) must NOT go through
  * this -- they need real handling, not an exception.
  */
-public final class Vk {
+// Package-private: an internal helper, not part of jvre's public API.
+final class Vk {
 
     private Vk() {}  // static utility; no instances
 

@@ -27,8 +27,8 @@ Measured against the [[Design North Star]]: the **approachability half (L2) is w
 1. **On-philosophy first.** The North Star's two explicit debts -- *prove L2 approachability* and *deliver L1 flexibility* -- outrank net-new capability.
 2. **Cheap + high-leverage before big + speculative.** Small seams that unlock whole categories (input, time) come first.
 3. **Honor forcing functions.** The owner is migrating to Linux; cross-platform is a first-class constraint that has *never been verified* -- validate it before more code piles on top.
-4. **Refinements are pull-based.** Polish (kerning, MSDF, `Style`, sampler knobs) ships when a real consumer needs it, not speculatively.
-5. **The power axis is real but last.** Compute / ray tracing are "reachable, not promised" -- genuine milestones, but they don't pay down the standing debts.
+4. **~~Refinements are pull-based.~~ SUPERSEDED 2026-06-16 -- jvre will be FULLY-FLEDGED.** The owner has committed to building out the *complete* expected feature set of a serious rendering framework (the bigger of "rendering layer of a game engine" or "rendering software"), as **planned, committed work** -- NOT "ships when a consumer needs it." This lands **post-1.0** (1.0 is still phases 1-2 + the release track), but the catalogued refinements (mipmaps/anisotropy, kerning, MSDF, `Style`, custom fonts, blend modes, ...) and the power axis below are now a committed backlog to schedule, not opportunistic polish. A dedicated post-1.0 feature-plan pass is owed. See [[jvre-fully-fledged-not-pull-based]] (memory).
+5. **The power axis is committed, not "if need arises."** Compute / ray tracing / instancing / render-to-texture are genuine planned milestones (post-1.0), part of being fully-fledged -- still sequenced after the standing debts + 1.0, but no longer framed as merely "reachable, not promised."
 
 ---
 
@@ -62,6 +62,8 @@ The project-management / delivery half of the learning goal. Climbs a ladder rat
 - **R2. Publishing plumbing.** Gradle `maven-publish`: the main JAR + **sources** + **javadoc** jars, a complete POM (name/description/license/SCM/developer), semver `0.x` while the API churns.
 - **R3. Pre-1.0 distribution.** Tagged **GitHub Releases** + **JitPack** (zero-setup consumption from a git tag) so others can try it without Central's bureaucracy. Wire release builds into CI (extends 1c).
 - **R4. Maven Central at 1.0.** Verified namespace **`io.github.milquetoad`** (GitHub-verified, free), **GPG-signed** artifacts, the sources/javadoc jars, via the Central Portal. Done once the API is stable -- re-publishing breaking `0.x` to Central is painful and discouraged.
+  - **API surface audit ✅ DONE (2026-06-16)** -- the "API declared stable" precondition: pruned `jvre.core` 29 -> 26 public types (hid `Vk`/`Commands`/`Swapchain`, trimmed `Buffer`/`Texture`/`Pipeline`/`Font` to opaque handles, kept `Device` as the raw escape). Principle: tighten now (reversible), widen later (additive). Contract written down in `docs/api-surface.md`.
+  - **Remaining R4 mechanics:** GPG key + keyserver, the Gradle `signing` + Central-publish plugin, bump version 0.x -> 1.0.0, `publishToMavenLocal` dry-run, then the immutable upload. The account/key steps are the owner's.
 - Cross-cutting: a **getting-started + API overview + examples** doc set (shares work with 1d), and an **honest scope statement** in the README.
 
 ## Phase 4 -- The power axis (longer-term)

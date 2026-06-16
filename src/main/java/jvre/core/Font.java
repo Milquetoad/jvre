@@ -83,7 +83,7 @@ public final class Font {
      * The atlas height is one bake size for every render size (SDF scales for
      * free), so a moderate height (~48px) balances sharpness against atlas memory.
      */
-    public static Font load(Device device, long commandPool, String resourcePath, float pixelHeight) {
+    static Font load(Device device, long commandPool, String resourcePath, float pixelHeight) {
         ByteBuffer ttf = readResource(resourcePath);   // native buffer -- memFree at the end
         try (MemoryStack stack = stackPush()) {
             STBTTFontinfo info = STBTTFontinfo.malloc(stack);
@@ -224,8 +224,9 @@ public final class Font {
         return glyphs[c - FIRST_CHAR];
     }
 
-    /** Free the atlas texture. */
-    public void close() {
+    /** Free the atlas texture. Package-private: the default font is renderer-owned
+     *  (closed by the Renderer); a public custom-font API will come later. */
+    void close() {
         atlas.close();
     }
 

@@ -25,7 +25,8 @@ import static org.lwjgl.vulkan.VK13.*;
  * overlap instead (a later concern). Factored out of {@link Buffer} once a
  * second caller ({@link Texture}) needed the identical scaffolding.
  */
-public final class Commands {
+// Package-private: an internal helper, not part of jvre's public API.
+final class Commands {
 
     private Commands() {}  // static utility; no instances
 

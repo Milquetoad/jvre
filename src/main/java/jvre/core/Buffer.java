@@ -62,14 +62,14 @@ public class Buffer {
      * queue -- every graphics queue implicitly supports transfer). The staging
      * buffer is destroyed as soon as the copy lands.
      */
-    public static Buffer deviceLocal(Device device, long commandPool, float[] data, int usage) {
+    static Buffer deviceLocal(Device device, long commandPool, float[] data, int usage) {
         Buffer staging = stagingBuffer(device, (long) data.length * Float.BYTES);
         staging.uploadFloats(data);
         return promoteToDeviceLocal(device, commandPool, staging, usage);
     }
 
     /** Same staging upload, for 16-bit data (e.g. UINT16 index buffers). */
-    public static Buffer deviceLocal(Device device, long commandPool, short[] data, int usage) {
+    static Buffer deviceLocal(Device device, long commandPool, short[] data, int usage) {
         Buffer staging = stagingBuffer(device, (long) data.length * Short.BYTES);
         staging.uploadShorts(data);
         return promoteToDeviceLocal(device, commandPool, staging, usage);
@@ -97,7 +97,7 @@ public class Buffer {
      * (VMA prefers VRAM). VMA translates intent into a concrete memory type and
      * places the buffer inside one of its big shared blocks.
      */
-    public Buffer(Device device, long size, int usage, boolean hostVisible) {
+    Buffer(Device device, long size, int usage, boolean hostVisible) {
         this.device = device;
         this.size = size;
 
@@ -140,7 +140,7 @@ public class Buffer {
      * visible to the GPU (a no-op when VMA picked coherent memory -- the desktop
      * norm -- and the required flush anywhere else).
      */
-    public void uploadFloats(float[] data) {
+    void uploadFloats(float[] data) {
         uploadFloats(data, data.length);
     }
 
@@ -149,7 +149,7 @@ public class Buffer {
      * growable arena (e.g. the L2 shape vertex buffer) whose backing array is
      * oversized and only partly live each frame.
      */
-    public void uploadFloats(float[] data, int count) {
+    void uploadFloats(float[] data, int count) {
         long bytes = (long) count * Float.BYTES;
         checkFits(bytes);
         try (MemoryStack stack = stackPush()) {
@@ -165,7 +165,7 @@ public class Buffer {
     }
 
     /** Same as {@link #uploadFloats}, for 16-bit values (index data). */
-    public void uploadShorts(short[] data) {
+    void uploadShorts(short[] data) {
         long bytes = (long) data.length * Short.BYTES;
         checkFits(bytes);
         try (MemoryStack stack = stackPush()) {
@@ -183,7 +183,7 @@ public class Buffer {
      * PIXELS (e.g. R8G8B8A8 = 4 bytes/texel) into a host-visible buffer before
      * the GPU copies them into an image ({@link Texture}).
      */
-    public void uploadBytes(byte[] data) {
+    void uploadBytes(byte[] data) {
         long bytes = data.length;
         checkFits(bytes);
         try (MemoryStack stack = stackPush()) {
@@ -197,11 +197,11 @@ public class Buffer {
     }
 
     /** The VkBuffer handle -- for vkCmdBindVertexBuffers / vkCmdCopyBuffer. */
-    public long handle() {
+    long handle() {
         return handle;
     }
 
-    public long size() {
+    long size() {
         return size;
     }
 

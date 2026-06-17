@@ -31,16 +31,14 @@ public final class FrameRenderer {
     }
 
     /** Bind a pipeline created by {@link Renderer#createPipeline}. If it declared a
-     *  UBO, this frame's descriptor set is bound automatically. */
+     *  UBO/texture, this frame's descriptor set is bound automatically -- but at
+     *  DRAW time (see {@link #draw}), after {@link #uniform}/{@link #texture} have
+     *  written it. Binding it HERE, before those writes, makes the draw sample stale
+     *  / unwritten descriptor data (a black first frame -- the
+     *  update-before-bind rule). */
     public void bind(Pipeline pipeline) {
         bound = pipeline;
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
-        if (pipeline.hasDescriptorSet()) {
-            try (MemoryStack stack = stackPush()) {
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                        pipeline.layout(), 0, stack.longs(pipeline.uniformSet(frame)), null);
-            }
-        }
     }
 
     /** Bind a vertex buffer into binding 0 (the layout the bound pipeline expects). */
@@ -80,12 +78,25 @@ public final class FrameRenderer {
 
     /** Draw {@code vertexCount} vertices (non-indexed), one instance. */
     public void draw(int vertexCount) {
+        bindDescriptorSet();
         vkCmdDraw(cmd, vertexCount, 1, 0, 0);
     }
 
     /** Draw {@code indexCount} indices from the bound index buffer, one instance. */
     public void drawIndexed(int indexCount) {
+        bindDescriptorSet();
         vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
+    }
+
+    /** Bind the bound pipeline's per-frame descriptor set, just before a draw --
+     *  AFTER uniform()/texture() updated it (update-before-bind). */
+    private void bindDescriptorSet() {
+        if (bound != null && bound.hasDescriptorSet()) {
+            try (MemoryStack stack = stackPush()) {
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        bound.layout(), 0, stack.longs(bound.uniformSet(frame)), null);
+            }
+        }
     }
 
     private void requireBound(String call) {

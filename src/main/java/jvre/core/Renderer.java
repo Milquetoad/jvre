@@ -611,6 +611,8 @@ public class Renderer {
                     stack.longs(batch.arenas[currentFrame].handle()), stack.longs(0));
             vkCmdPushConstants(cmd, shapePipeline.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0,
                     stack.floats(width, height));
+            // One scissor struct, retargeted per run (a run carries its clip rect).
+            VkRect2D.Buffer scissor = VkRect2D.calloc(1, stack);
             int runs = r2d.runCount();
             int total = r2d.vertexCount();
             for (int r = 0; r < runs; r++) {
@@ -620,10 +622,31 @@ public class Renderer {
                 if (vcount <= 0) {
                     continue;
                 }
+                // Set this run's scissor (its pushClip rect, or the full framebuffer
+                // when unclipped). The L2 clip stack opened a new run at each clip
+                // change, so the scissor is constant within a run.
+                int[] clip = r2d.runClip(r);
+                if (clip == null) {
+                    scissor.offset().x(0).y(0);
+                    scissor.extent().width(width).height(height);
+                } else {
+                    if (clip[2] <= 0 || clip[3] <= 0) {
+                        continue;   // fully clipped out (empty intersection) -- nothing to draw
+                    }
+                    scissor.offset().x(clip[0]).y(clip[1]);
+                    scissor.extent().width(clip[2]).height(clip[3]);
+                }
+                vkCmdSetScissor(cmd, 0, scissor);
+
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                         shapePipeline.layout(), 0, stack.longs(batch.currentRunSets[r]), null);
                 vkCmdDraw(cmd, vcount, 1, first, 0);
             }
+            // Restore the full-framebuffer scissor (hygiene: leave dynamic state sane
+            // for anything recorded after the shapes in this pass).
+            scissor.offset().x(0).y(0);
+            scissor.extent().width(width).height(height);
+            vkCmdSetScissor(cmd, 0, scissor);
         }
     }
 

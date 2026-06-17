@@ -7,6 +7,7 @@ import jvre.core.Color;
 import jvre.core.Cull;
 import jvre.core.CursorShape;
 import jvre.core.Diagnostics;
+import jvre.core.Filter;
 import jvre.core.Font;
 import jvre.core.Input;
 import jvre.core.Instance;
@@ -22,8 +23,10 @@ import jvre.core.ShaderEffect;
 import jvre.core.Stage;
 import jvre.core.Surface;
 import jvre.core.Texture;
+import jvre.core.TextureOptions;
 import jvre.core.VertexLayout;
 import jvre.core.Window;
+import jvre.core.WrapMode;
 
 import org.joml.Matrix4f;
 import org.lwjgl.system.Configuration;
@@ -123,7 +126,7 @@ public class Main {
             layout(push_constant) uniform Push { float pulse; } pc;
             layout(location = 0) out vec4 outColor;
             void main() {
-                vec4 t = texture(tex, vUv);          // grayscale checker
+                vec4 t = texture(tex, vUv * 2.0);    // grayscale checker, UV 0..2 (tiles 2x2 with REPEAT)
                 outColor = vec4(t.rgb * vColor * pc.pulse, t.a);  // tinted per face, pulsed
             }
             """;
@@ -212,7 +215,10 @@ public class Main {
                 .texture(Stage.FRAGMENT)                           // the checker
                 .pushConstants(Float.BYTES, Stage.FRAGMENT)        // float pulse
                 .label("demo-cube").build());
-        cubeTexture = renderer.createImage(makeChecker(256, 32), 256, 256);
+        // Batch 2: WrapMode.REPEAT -- the cube samples UV 0..2 (see CUBE_FRAG), so
+        // the checker TILES 2x2 per face instead of clamping/stretching at the edge.
+        cubeTexture = renderer.createImage(makeChecker(256, 32), 256, 256,
+                TextureOptions.builder().filter(Filter.NEAREST).wrap(WrapMode.REPEAT).build());
         cubeVerts = renderer.createVertexBuffer(new float[] {
                 //    x      y      z       r     g     b      u   v   (per-face, CCW from outside)
                 -0.5f,-0.5f, 0.5f, 1.0f,0.3f,0.3f, 0f,0f,  0.5f,-0.5f, 0.5f, 1.0f,0.3f,0.3f, 1f,0f,

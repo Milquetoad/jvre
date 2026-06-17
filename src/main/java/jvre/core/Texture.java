@@ -88,16 +88,25 @@ public class Texture {
     static Texture create(Device device, long commandPool,
                                  byte[] pixels, int width, int height) {
         // NEAREST: the default for hand-authored exact pixels (crisp, no blur).
-        return create(device, commandPool, pixels, width, height, Filter.NEAREST);
+        return create(device, commandPool, pixels, width, height,
+                TextureOptions.builder().filter(Filter.NEAREST).build());
     }
 
     /** {@link #create(Device, long, byte[], int, int)} with an explicit sampling
      *  {@link Filter} (NEAREST for crisp pixels, LINEAR for smooth scaling). */
     static Texture create(Device device, long commandPool,
                                  byte[] pixels, int width, int height, Filter filter) {
+        return create(device, commandPool, pixels, width, height,
+                TextureOptions.builder().filter(filter).build());
+    }
+
+    /** {@link #create(Device, long, byte[], int, int)} with full sampler {@link
+     *  TextureOptions} (filter + wrap mode). */
+    static Texture create(Device device, long commandPool,
+                                 byte[] pixels, int width, int height, TextureOptions opts) {
         // R8G8B8A8_SRGB (4 bytes/texel, GPU linearizes on sample). The sprite/image path.
         return upload(device, commandPool, pixels, width, height,
-                VK_FORMAT_R8G8B8A8_SRGB, 4, filter.vk);
+                VK_FORMAT_R8G8B8A8_SRGB, 4, opts);
     }
 
     /**
@@ -115,11 +124,18 @@ public class Texture {
      * override. (Mipmaps are a later refinement.)
      */
     static Texture load(Device device, long commandPool, String resourcePath) {
-        return load(device, commandPool, resourcePath, Filter.LINEAR);
+        return load(device, commandPool, resourcePath,
+                TextureOptions.builder().filter(Filter.LINEAR).build());
     }
 
     /** {@link #load(Device, long, String)} with an explicit sampling {@link Filter}. */
     static Texture load(Device device, long commandPool, String resourcePath, Filter filter) {
+        return load(device, commandPool, resourcePath,
+                TextureOptions.builder().filter(filter).build());
+    }
+
+    /** {@link #load(Device, long, String)} with full sampler {@link TextureOptions}. */
+    static Texture load(Device device, long commandPool, String resourcePath, TextureOptions opts) {
         ByteBuffer fileBytes = readResource(resourcePath);   // native buffer -- memFree below
         try (MemoryStack stack = stackPush()) {
             IntBuffer w = stack.mallocInt(1);
@@ -139,7 +155,7 @@ public class Texture {
                 // (tested) create() path. One copy at load time -- negligible.
                 byte[] pixels = new byte[width * height * 4];
                 decoded.get(pixels);
-                return create(device, commandPool, pixels, width, height, filter);
+                return create(device, commandPool, pixels, width, height, opts);
             } finally {
                 // get() advanced decoded's position to the end. stb_image_free frees
                 // the pointer AT THE BUFFER'S CURRENT POSITION (LWJGL uses the
@@ -181,7 +197,8 @@ public class Texture {
     static Texture createSdfAtlas(Device device, long commandPool,
                                          byte[] coverage, int width, int height) {
         return upload(device, commandPool, coverage, width, height,
-                VK_FORMAT_R8_UNORM, 1, VK_FILTER_LINEAR);
+                VK_FORMAT_R8_UNORM, 1,
+                TextureOptions.builder().filter(Filter.LINEAR).wrap(WrapMode.CLAMP).build());
     }
 
     /**
@@ -202,16 +219,16 @@ public class Texture {
     static Texture renderTarget(Device device, int width, int height, int format, Filter filter) {
         Texture texture = new Texture(device, width, height, format,
                 VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
-        texture.createViewAndSampler(filter.vk);
+        texture.createViewAndSampler(TextureOptions.builder().filter(filter).wrap(WrapMode.CLAMP).build());
         return texture;
     }
 
     /** The shared staging upload: stage the pixels, create the image in {@code
-     *  format}, copy + transition, then build the view + a sampler of {@code
-     *  filter}. {@code bytesPerTexel} sizes the staging buffer for the format. */
+     *  format}, copy + transition, then build the view + a sampler from {@code
+     *  opts}. {@code bytesPerTexel} sizes the staging buffer for the format. */
     private static Texture upload(Device device, long commandPool, byte[] pixels,
                                   int width, int height, int format,
-                                  int bytesPerTexel, int filter) {
+                                  int bytesPerTexel, TextureOptions opts) {
         long imageBytes = (long) width * height * bytesPerTexel;
         if (pixels.length != imageBytes) {
             throw new IllegalArgumentException("Expected " + imageBytes
@@ -226,7 +243,7 @@ public class Texture {
         Texture texture = new Texture(device, width, height, format,
                 VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
         texture.uploadFrom(commandPool, staging);
-        texture.createViewAndSampler(filter);
+        texture.createViewAndSampler(opts);
 
         staging.close();  // served its purpose; the pixels live in the image now
         return texture;
@@ -362,7 +379,7 @@ public class Texture {
      * texture path ({@link #create}); a render-target image would need a view
      * but no sampler.
      */
-    private void createViewAndSampler(int filter) {
+    private void createViewAndSampler(TextureOptions opts) {
         try (MemoryStack stack = stackPush()) {
             // ---- Image view: identical idea to the swapchain image views ----
             VkImageViewCreateInfo viewInfo = VkImageViewCreateInfo.calloc(stack);
@@ -389,13 +406,14 @@ public class Texture {
             // bilerp the 4 nearest texels (smears a color image, but is exactly
             // what an SDF atlas needs -- a smooth distance gradient to threshold).
             // mag = drawn LARGER than the texel grid; min = drawn smaller.
-            samplerInfo.magFilter(filter);
-            samplerInfo.minFilter(filter);
-            // Address mode = behavior for UVs outside [0,1]. CLAMP_TO_EDGE stretches
-            // the edge texel (sane sprite default; REPEAT would tile, for terrain).
-            samplerInfo.addressModeU(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
-            samplerInfo.addressModeV(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
-            samplerInfo.addressModeW(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+            samplerInfo.magFilter(opts.filter.vk);
+            samplerInfo.minFilter(opts.filter.vk);
+            // Address mode = behavior for UVs outside [0,1] (the caller's WrapMode).
+            // CLAMP stretches the edge texel (sane sprite default); REPEAT/MIRROR tile
+            // (terrain, patterns); BORDER samples the border colour below.
+            samplerInfo.addressModeU(opts.wrap.vk);
+            samplerInfo.addressModeV(opts.wrap.vk);
+            samplerInfo.addressModeW(opts.wrap.vk);
             // Anisotropy OFF: it needs a device feature we don't enable, and does
             // nothing for NEAREST without mips anyway.
             samplerInfo.anisotropyEnable(false);

@@ -56,6 +56,7 @@ public class Device {
     private final int graphicsFamily;
     private final int presentFamily;
     private final long allocator;  // VmaAllocator -- device-scoped, owns the memory blocks
+    private final float maxAnisotropy;  // sampler anisotropy cap (1.0 = feature off/unavailable)
 
     public Device(Instance instance, Surface surface, String preferGpu) {
         this.physicalDevice = pickPhysicalDevice(instance, surface, preferGpu);
@@ -83,6 +84,22 @@ public class Device {
             }
 
             VkPhysicalDeviceFeatures deviceFeatures = VkPhysicalDeviceFeatures.calloc(stack);
+            // Anisotropic filtering is an OPTIONAL core feature (a device-feature
+            // toggle, not a 1.3 promoted one) -- it must be ENABLED at device
+            // creation before any sampler may request it, and the device advertises
+            // a max. Query support, enable it if present, and remember the cap (1.0 =
+            // "off / not available", a sane sampler value). Universal on desktop;
+            // queried rather than assumed (the house rule, like the depth format).
+            VkPhysicalDeviceFeatures supported = VkPhysicalDeviceFeatures.calloc(stack);
+            vkGetPhysicalDeviceFeatures(physicalDevice, supported);
+            if (supported.samplerAnisotropy()) {
+                deviceFeatures.samplerAnisotropy(true);
+                VkPhysicalDeviceProperties props = VkPhysicalDeviceProperties.malloc(stack);
+                vkGetPhysicalDeviceProperties(physicalDevice, props);
+                maxAnisotropy = props.limits().maxSamplerAnisotropy();
+            } else {
+                maxAnisotropy = 1.0f;
+            }
 
             // Opt IN to the post-1.0 features we use. Features added after 1.0 are
             // enabled by CHAINING a feature struct into pNext rather than via
@@ -163,6 +180,9 @@ public class Device {
     public int graphicsFamily()              { return graphicsFamily; }
     public int presentFamily()               { return presentFamily; }
     public long allocator()                  { return allocator; }  // VmaAllocator
+    /** Max sampler anisotropy the device supports (1.0 = the feature is off/unavailable);
+     *  a sampler clamps its requested level to this. */
+    float maxAnisotropy()                    { return maxAnisotropy; }
 
     // (The hand-rolled findMemoryType -- the memory-type hunt both Buffer and
     // Texture once used -- retired when VMA took over type selection. The

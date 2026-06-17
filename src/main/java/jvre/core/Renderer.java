@@ -286,6 +286,12 @@ public class Renderer {
         return Texture.create(device, commandPool, rgbaPixels, width, height, filter);
     }
 
+    /** {@link #createImage(byte[], int, int)} with full sampler {@link TextureOptions}
+     *  (filter + wrap mode). */
+    public Texture createImage(byte[] rgbaPixels, int width, int height, TextureOptions options) {
+        return Texture.create(device, commandPool, rgbaPixels, width, height, options);
+    }
+
     /**
      * Load + decode an image FILE from the classpath ({@code resourcePath}, e.g.
      * {@code "/images/sprite.png"}) into a drawable image -- PNG/JPEG/BMP/TGA/...
@@ -302,6 +308,12 @@ public class Renderer {
      *  (e.g. {@link Filter#NEAREST} for pixel art). */
     public Texture loadImage(String resourcePath, Filter filter) {
         return Texture.load(device, commandPool, resourcePath, filter);
+    }
+
+    /** {@link #loadImage(String)} with full sampler {@link TextureOptions} (e.g.
+     *  {@link WrapMode#REPEAT} to tile the image across a larger quad). */
+    public Texture loadImage(String resourcePath, TextureOptions options) {
+        return Texture.load(device, commandPool, resourcePath, options);
     }
 
     /** The bake height for the built-in font + {@link #loadFont(String)} -- one

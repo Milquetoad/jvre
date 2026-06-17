@@ -103,6 +103,7 @@ public class Main {
     private jvre.core.RenderTarget cubeTarget;   // offscreen target the cube renders into (DEMO_RTT)
     private jvre.core.RenderTarget canvasTarget; // offscreen L2 canvas target (DEMO_RTT)
     private Renderer2D gc;                        // a Renderer2D drawing into canvasTarget
+    private boolean screenshotRequested;         // F2 -> read the canvas target back + write a PNG (4d)
 
     // A user's own shaders for the custom pipeline -- compiled at runtime via
     // ShaderCompiler (no build-time step), exactly as a jvre consumer would. The
@@ -355,6 +356,9 @@ public class Main {
 
     private void mainLoop() {
         System.out.println("Entering render loop. Close the window to exit.");
+        if (canvasTarget != null) {
+            System.out.println("Press F2 to save a PNG screenshot of the L2 canvas (render-to-texture readback).");
+        }
         while (!window.shouldClose()) {
             window.pollEvents();
             // Offscreen pass: render the cube into its target BEFORE drawFrame
@@ -370,6 +374,12 @@ public class Main {
                 drawShapes();
             }
             renderer.drawFrame();
+
+            // 4d: act on a screenshot request now that the canvas target is rendered.
+            if (screenshotRequested) {
+                screenshotRequested = false;
+                saveCanvasScreenshot();
+            }
 
             // FPS report once a second -- vsync ON caps near the refresh rate;
             // OFF runs uncapped (the present-mode knob, made observable).
@@ -460,6 +470,11 @@ public class Main {
         if (in.keyPressed(Key.ESCAPE)) {
             typed.setLength(0);
         }
+        // 4d: F2 requests a readback screenshot of the L2 canvas target (acted on
+        // after drawFrame, when this frame's canvas has actually been rendered).
+        if (in.keyPressed(Key.F2) && canvasTarget != null) {
+            screenshotRequested = true;
+        }
         // Batch 1: clipboard -- Ctrl+C copies the field, Ctrl+V pastes into it.
         boolean ctrl = in.keyDown(Key.LEFT_CONTROL) || in.keyDown(Key.RIGHT_CONTROL);
         if (ctrl && in.keyPressed(Key.C)) {
@@ -534,6 +549,26 @@ public class Main {
 
         g.pop();
         g.end();
+    }
+
+    /**
+     * Read the offscreen L2 canvas target back to CPU memory (RGBA8) and write it
+     * to a PNG -- proving render-to-texture readback (4d) end to end. jvre gives you
+     * the pixels (renderer.readPixels); the file format is the caller's choice, so
+     * the demo encodes the PNG with stb_image_write at the edge.
+     */
+    private void saveCanvasScreenshot() {
+        byte[] rgba = renderer.readPixels(canvasTarget);
+        int w = canvasTarget.width();
+        int h = canvasTarget.height();
+        java.nio.ByteBuffer buf = org.lwjgl.system.MemoryUtil.memAlloc(rgba.length);
+        buf.put(rgba).flip();
+        String path = "jvre-canvas.png";
+        boolean ok = org.lwjgl.stb.STBImageWrite.stbi_write_png(path, w, h, 4, buf, w * 4);
+        org.lwjgl.system.MemoryUtil.memFree(buf);
+        System.out.println(ok
+                ? "Saved canvas screenshot (" + w + "x" + h + "): " + new java.io.File(path).getAbsolutePath()
+                : "Screenshot failed (stb_image_write).");
     }
 
     private void cleanup() {

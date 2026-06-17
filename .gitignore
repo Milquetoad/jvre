@@ -34,3 +34,6 @@ CLAUDE.md
 
 # Logs / misc
 *.log
+
+# Demo runtime output (the F2 render-to-texture readback screenshot)
+/jvre-canvas.png

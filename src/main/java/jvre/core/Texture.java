@@ -221,8 +221,11 @@ public class Texture {
      * destination when the target is multisampled, or the direct target when not).
      */
     static Texture renderTarget(Device device, int width, int height, int format, Filter filter) {
+        // COLOR_ATTACHMENT (rendered into) | SAMPLED (read back as a texture) |
+        // TRANSFER_SRC (copied to a buffer for readback -- Renderer.readPixels).
         Texture texture = new Texture(device, width, height, format,
-                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT
+                        | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
         texture.createViewAndSampler(TextureOptions.builder().filter(filter).wrap(WrapMode.CLAMP).build());
         return texture;
     }

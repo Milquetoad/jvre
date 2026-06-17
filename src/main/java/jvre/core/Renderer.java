@@ -2,6 +2,7 @@ package jvre.core;
 
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.vulkan.VkBufferImageCopy;
 import org.lwjgl.vulkan.VkClearValue;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkCommandBufferAllocateInfo;
@@ -383,6 +384,103 @@ public class Renderer {
     public RenderTarget createRenderTarget(int width, int height, Filter filter) {
         return new RenderTarget(device, width, height, formats.colorFormat(),
                 formats.depthFormat(), formats.sampleCount(), filter);
+    }
+
+    /**
+     * Read a {@link RenderTarget}'s pixels back to CPU memory as RGBA8 (4 bytes per
+     * texel, row-major top-to-bottom, length {@code width*height*4}) -- frame
+     * readback, the inverse of an image upload. The strategic payoff is automated
+     * visual-regression testing (render -> read back -> diff a golden PNG); it also
+     * powers screenshots. {@code target} must have been RENDERED this session.
+     *
+     * <p>The copy is image -> host-readable staging buffer (a {@link Commands#oneShot}
+     * on the graphics queue), then a CPU map. A full {@link #waitIdle()} runs first
+     * so no in-flight frame is still using the target -- this is a SYNCHRONIZING call
+     * (not for the hot path; meant for screenshots / regression captures). BGRA
+     * color formats are swizzled to RGBA on the way out.
+     */
+    public byte[] readPixels(RenderTarget target) {
+        int w = target.width();
+        int h = target.height();
+        int format = target.texture().format();
+        long bytes = (long) w * h * 4;
+
+        // No frame may be reading/writing the target while we transition + copy it.
+        waitIdle();
+
+        Buffer staging = Buffer.readback(device, bytes);
+        Commands.oneShot(device, commandPool, cmd -> {
+            try (MemoryStack stack = stackPush()) {
+                // The target sits in SHADER_READ_ONLY after its pass. Move it to
+                // TRANSFER_SRC for the copy, making the render's color writes
+                // available to the transfer read.
+                VkImageMemoryBarrier2.Buffer barrier = VkImageMemoryBarrier2.calloc(1, stack);
+                barrier.sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2);
+                barrier.image(target.colorImage());
+                barrier.srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+                barrier.dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+                // src = the target's last use in SHADER_READ_ONLY (a shader sample),
+                // matching the oldLayout (a WRITE access mask here is inconsistent
+                // with SHADER_READ_ONLY and the layer flags it). The color writes
+                // were already made available when the target pass transitioned to
+                // SHADER_READ_ONLY; dst = TRANSFER_READ makes them visible to the copy.
+                barrier.oldLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                barrier.newLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+                barrier.srcStageMask(VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
+                barrier.srcAccessMask(VK_ACCESS_2_SHADER_READ_BIT);
+                barrier.dstStageMask(VK_PIPELINE_STAGE_2_COPY_BIT);
+                barrier.dstAccessMask(VK_ACCESS_2_TRANSFER_READ_BIT);
+                barrier.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT);
+                barrier.subresourceRange().baseMipLevel(0);
+                barrier.subresourceRange().levelCount(1);
+                barrier.subresourceRange().baseArrayLayer(0);
+                barrier.subresourceRange().layerCount(1);
+
+                VkDependencyInfo depInfo = VkDependencyInfo.calloc(stack);
+                depInfo.sType(VK_STRUCTURE_TYPE_DEPENDENCY_INFO);
+                depInfo.pImageMemoryBarriers(barrier);
+                vkCmdPipelineBarrier2(cmd, depInfo);
+
+                // Copy the whole image (mip 0, layer 0) into the buffer, tightly
+                // packed (bufferRowLength/Height 0 -> derived from imageExtent).
+                VkBufferImageCopy.Buffer region = VkBufferImageCopy.calloc(1, stack);
+                region.bufferOffset(0);
+                region.bufferRowLength(0);
+                region.bufferImageHeight(0);
+                region.imageSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT);
+                region.imageSubresource().mipLevel(0);
+                region.imageSubresource().baseArrayLayer(0);
+                region.imageSubresource().layerCount(1);
+                region.imageOffset().x(0).y(0).z(0);
+                region.imageExtent().width(w).height(h).depth(1);
+                vkCmdCopyImageToBuffer(cmd, target.colorImage(),
+                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staging.handle(), region);
+
+                // Restore SHADER_READ_ONLY so the target stays sampleable afterwards.
+                barrier.oldLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+                barrier.newLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                barrier.srcStageMask(VK_PIPELINE_STAGE_2_COPY_BIT);
+                barrier.srcAccessMask(VK_ACCESS_2_TRANSFER_READ_BIT);
+                barrier.dstStageMask(VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
+                barrier.dstAccessMask(VK_ACCESS_2_SHADER_READ_BIT);
+                vkCmdPipelineBarrier2(cmd, depInfo);
+            }
+        });
+
+        byte[] pixels = new byte[(int) bytes];
+        staging.downloadBytes(pixels);
+        staging.close();
+
+        // The target's color format is usually BGRA -- swizzle to RGBA, what PNG /
+        // image libs expect.
+        if (format == VK_FORMAT_B8G8R8A8_SRGB || format == VK_FORMAT_B8G8R8A8_UNORM) {
+            for (int i = 0; i + 2 < pixels.length; i += 4) {
+                byte b = pixels[i];
+                pixels[i] = pixels[i + 2];
+                pixels[i + 2] = b;
+            }
+        }
+        return pixels;
     }
 
     /**

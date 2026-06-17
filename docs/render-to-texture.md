@@ -124,6 +124,46 @@ Fixes, easiest first:
 
 A uniform that's constant across the frame (or a pipeline drawn once) has no issue.
 
+## Reading pixels back
+
+Once a target has been rendered, copy its pixels to CPU memory with
+`renderer.readPixels(target)` → a `byte[]` of RGBA8 (row-major, top-to-bottom,
+`width*height*4` bytes). For screenshots, thumbnails, or visual-regression tests:
+
+```java
+byte[] rgba = renderer.readPixels(target);
+// e.g. encode a PNG with stb_image_write, or diff against a golden image
+```
+
+It's a **synchronizing** call (it waits for the GPU), so use it for captures, not
+every frame.
+
+## Headless rendering (no window)
+
+You can run the whole thing with **no window, no display** — render offscreen and
+read back — which is how you'd generate images on a server or diff golden PNGs in
+CI. Create a **headless** `Instance` and `Renderer` (no `Window`/`Surface`), draw
+into targets, call `render()` (the offscreen analog of `drawFrame`), then
+`readPixels`:
+
+```java
+Instance instance = new Instance("app", true, /* headless */ true);
+Renderer renderer = new Renderer(instance, RendererOptions.builder().build());
+
+RenderTarget target = renderer.createRenderTarget(512, 512);
+Renderer2D g = renderer.createCanvas(target);
+g.begin();
+g.fillCircle(256, 256, 120, Color.CYAN);
+g.end();
+
+renderer.render();                          // execute the offscreen pass (no present)
+byte[] rgba = renderer.readPixels(target);  // ... and read it back
+```
+
+A complete example is `jvre.demo.HeadlessDemo` (`gradlew runHeadless`). (Running
+this in CI needs a GPU runner or a software Vulkan driver; the capability itself
+needs no display.)
+
 ## Lifetime
 
 ```java

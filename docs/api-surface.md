@@ -18,7 +18,7 @@ and may change freely.
 | `Window` | the OS window + input (GLFW) |
 | `Instance` | the Vulkan instance (+ optional validation) |
 | `Surface` | the window ↔ Vulkan bridge |
-| `Renderer` | owns the device, swapchain, and the frame loop; the hub |
+| `Renderer` | owns the device, swapchain, and the frame loop; the hub. Windowed (`Instance`+`Surface`+`Window`) or **headless** (`Instance`+`RendererOptions` — no window; render into targets via `render()` + `readPixels`) |
 | `RendererOptions` | creation-time config (clear color, vsync, MSAA, GPU preference) |
 
 ## L2 — "just draw"

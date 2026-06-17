@@ -2,6 +2,7 @@ package jvre.core;
 
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.vulkan.VkBufferImageCopy;
 import org.lwjgl.vulkan.VkClearValue;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkCommandBufferAllocateInfo;
@@ -58,6 +59,10 @@ public class Renderer {
     // surface and the window's current framebuffer size.
     private final Surface surface;
     private final Window window;
+    // Headless = no surface/window/swapchain: render only into RenderTargets and
+    // read back (the format keystone already removed the format dependency). The
+    // present path (drawFrame) is disabled; render() does an offscreen one-shot.
+    private final boolean headless;
 
     private static final String SHAPE2D_VERT = "/shaders/shape2d.vert.spv";
     private static final String SHAPE2D_FRAG = "/shaders/shape2d.frag.spv";
@@ -185,6 +190,7 @@ public class Renderer {
     public Renderer(Instance instance, Surface surface, Window window, RendererOptions options) {
         this.surface = surface;
         this.window = window;
+        this.headless = false;
         this.clearR = options.clearR;
         this.clearG = options.clearG;
         this.clearB = options.clearB;
@@ -205,6 +211,74 @@ public class Renderer {
         createCommandPool();
         createCommandBuffers();
         createSyncObjects();
+    }
+
+    /**
+     * Create a HEADLESS renderer: NO window, surface, or swapchain. You render only
+     * into {@link RenderTarget}s ({@link #drawToTarget} / {@link #createCanvas}),
+     * call {@link #render()} to execute the queued passes, and {@link #readPixels}
+     * to get the result -- the engine for automated visual-regression tests (render
+     * -> read back -> diff a golden PNG) and offscreen image generation, runnable
+     * with no display.
+     *
+     * <p>It reuses the entire target-pass machinery; only the swapchain present loop
+     * is absent. The format keystone already decoupled what pipelines bake, so the
+     * formats come from {@link RenderFormats#headless} (RGBA8, single-sample) instead
+     * of a swapchain. No frames-in-flight: {@link #render()} is synchronous.
+     */
+    public Renderer(Instance instance, RendererOptions options) {
+        this.surface = null;
+        this.window = null;
+        this.headless = true;
+        this.clearR = options.clearR;
+        this.clearG = options.clearG;
+        this.clearB = options.clearB;
+        this.vsync = false;
+        this.msaaRequested = 1;   // headless v1: no MSAA (single-sample targets)
+
+        this.device = new Device(instance, null, options.preferGpu);
+        this.swapchain = null;
+        this.formats = RenderFormats.headless(device);
+        // Only a command pool is needed: render() and readPixels each use a one-shot
+        // submit (Commands.oneShot), so there are no per-frame buffers or sync
+        // objects, no acquire/present.
+        createCommandPool();
+        System.out.println("Headless renderer created (no swapchain; "
+                + "color format " + formats.colorFormat() + ", offscreen only).");
+    }
+
+    /**
+     * Execute this frame's queued offscreen passes (headless only): upload + record
+     * every {@link #createCanvas} batch and {@link #drawToTarget} callback into ONE
+     * one-shot submit, and block until the GPU finishes. Afterward each target holds
+     * its rendered result -- {@link #readPixels} it, or sample it into a later pass.
+     * The synchronous, present-free analog of {@link #drawFrame}.
+     */
+    public void render() {
+        if (!headless) {
+            throw new IllegalStateException("render() is for headless renderers; use drawFrame()");
+        }
+        // Slot 0 always (no frames-in-flight). Upload + prepare each active canvas
+        // batch, then record all target passes in one submit (oneShot waits).
+        for (Canvas canvas : canvases) {
+            if (canvas.r2d().floatCount() > 0) {
+                uploadAndPrepareBatch(canvas.batch(), canvas.r2d(), 0);
+            }
+        }
+        Commands.oneShot(device, commandPool, cmd -> {
+            for (Canvas canvas : canvases) {
+                if (canvas.r2d().floatCount() > 0) {
+                    recordTargetPass(cmd, canvas.target(),
+                            cc -> recordShapeDraws(cc, canvas.batch(), canvas.r2d(),
+                                    canvas.target().width(), canvas.target().height()));
+                }
+            }
+            for (TargetPass pass : targetPasses) {
+                recordTargetPass(cmd, pass.target(),
+                        cc -> pass.content().render(new FrameRenderer(cc, 0)));
+            }
+        });
+        targetPasses.clear();   // immediate mode -- re-enqueue next render()
     }
 
     // ------------------------------------------------------------------
@@ -386,6 +460,103 @@ public class Renderer {
     }
 
     /**
+     * Read a {@link RenderTarget}'s pixels back to CPU memory as RGBA8 (4 bytes per
+     * texel, row-major top-to-bottom, length {@code width*height*4}) -- frame
+     * readback, the inverse of an image upload. The strategic payoff is automated
+     * visual-regression testing (render -> read back -> diff a golden PNG); it also
+     * powers screenshots. {@code target} must have been RENDERED this session.
+     *
+     * <p>The copy is image -> host-readable staging buffer (a {@link Commands#oneShot}
+     * on the graphics queue), then a CPU map. A full {@link #waitIdle()} runs first
+     * so no in-flight frame is still using the target -- this is a SYNCHRONIZING call
+     * (not for the hot path; meant for screenshots / regression captures). BGRA
+     * color formats are swizzled to RGBA on the way out.
+     */
+    public byte[] readPixels(RenderTarget target) {
+        int w = target.width();
+        int h = target.height();
+        int format = target.texture().format();
+        long bytes = (long) w * h * 4;
+
+        // No frame may be reading/writing the target while we transition + copy it.
+        waitIdle();
+
+        Buffer staging = Buffer.readback(device, bytes);
+        Commands.oneShot(device, commandPool, cmd -> {
+            try (MemoryStack stack = stackPush()) {
+                // The target sits in SHADER_READ_ONLY after its pass. Move it to
+                // TRANSFER_SRC for the copy, making the render's color writes
+                // available to the transfer read.
+                VkImageMemoryBarrier2.Buffer barrier = VkImageMemoryBarrier2.calloc(1, stack);
+                barrier.sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2);
+                barrier.image(target.colorImage());
+                barrier.srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+                barrier.dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+                // src = the target's last use in SHADER_READ_ONLY (a shader sample),
+                // matching the oldLayout (a WRITE access mask here is inconsistent
+                // with SHADER_READ_ONLY and the layer flags it). The color writes
+                // were already made available when the target pass transitioned to
+                // SHADER_READ_ONLY; dst = TRANSFER_READ makes them visible to the copy.
+                barrier.oldLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                barrier.newLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+                barrier.srcStageMask(VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
+                barrier.srcAccessMask(VK_ACCESS_2_SHADER_READ_BIT);
+                barrier.dstStageMask(VK_PIPELINE_STAGE_2_COPY_BIT);
+                barrier.dstAccessMask(VK_ACCESS_2_TRANSFER_READ_BIT);
+                barrier.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT);
+                barrier.subresourceRange().baseMipLevel(0);
+                barrier.subresourceRange().levelCount(1);
+                barrier.subresourceRange().baseArrayLayer(0);
+                barrier.subresourceRange().layerCount(1);
+
+                VkDependencyInfo depInfo = VkDependencyInfo.calloc(stack);
+                depInfo.sType(VK_STRUCTURE_TYPE_DEPENDENCY_INFO);
+                depInfo.pImageMemoryBarriers(barrier);
+                vkCmdPipelineBarrier2(cmd, depInfo);
+
+                // Copy the whole image (mip 0, layer 0) into the buffer, tightly
+                // packed (bufferRowLength/Height 0 -> derived from imageExtent).
+                VkBufferImageCopy.Buffer region = VkBufferImageCopy.calloc(1, stack);
+                region.bufferOffset(0);
+                region.bufferRowLength(0);
+                region.bufferImageHeight(0);
+                region.imageSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT);
+                region.imageSubresource().mipLevel(0);
+                region.imageSubresource().baseArrayLayer(0);
+                region.imageSubresource().layerCount(1);
+                region.imageOffset().x(0).y(0).z(0);
+                region.imageExtent().width(w).height(h).depth(1);
+                vkCmdCopyImageToBuffer(cmd, target.colorImage(),
+                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staging.handle(), region);
+
+                // Restore SHADER_READ_ONLY so the target stays sampleable afterwards.
+                barrier.oldLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+                barrier.newLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                barrier.srcStageMask(VK_PIPELINE_STAGE_2_COPY_BIT);
+                barrier.srcAccessMask(VK_ACCESS_2_TRANSFER_READ_BIT);
+                barrier.dstStageMask(VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
+                barrier.dstAccessMask(VK_ACCESS_2_SHADER_READ_BIT);
+                vkCmdPipelineBarrier2(cmd, depInfo);
+            }
+        });
+
+        byte[] pixels = new byte[(int) bytes];
+        staging.downloadBytes(pixels);
+        staging.close();
+
+        // The target's color format is usually BGRA -- swizzle to RGBA, what PNG /
+        // image libs expect.
+        if (format == VK_FORMAT_B8G8R8A8_SRGB || format == VK_FORMAT_B8G8R8A8_UNORM) {
+            for (int i = 0; i + 2 < pixels.length; i += 4) {
+                byte b = pixels[i];
+                pixels[i] = pixels[i + 2];
+                pixels[i + 2] = b;
+            }
+        }
+        return pixels;
+    }
+
+    /**
      * Build a USER-DEFINED pipeline (the L1 escape hatch) from a {@link
      * PipelineSpec}. jvre injects the swapchain color/depth formats + sample count
      * it owns, so the user never passes Vulkan formats. The caller OWNS the
@@ -457,8 +628,15 @@ public class Renderer {
 
     /** Current framebuffer size in pixels -- what the L2 surface exposes (g.width()/
      *  g.height()) so the user can compose relative layout as plain arithmetic. */
-    int framebufferWidth()  { return swapchain.width(); }
-    int framebufferHeight() { return swapchain.height(); }
+    int framebufferWidth()  { requireWindowed("framebuffer size"); return swapchain.width(); }
+    int framebufferHeight() { requireWindowed("framebuffer size"); return swapchain.height(); }
+
+    private void requireWindowed(String what) {
+        if (headless) {
+            throw new IllegalStateException("Headless renderer has no " + what
+                    + " -- draw into RenderTargets (createCanvas / drawToTarget) and read them back");
+        }
+    }
 
     /**
      * Per-Renderer2D GPU resources for one shape batch: a per-frame-in-flight vertex
@@ -1233,6 +1411,9 @@ public class Renderer {
      * Acquire/present results drive swapchain recreation on resize.
      */
     public void drawFrame() {
+        if (headless) {
+            throw new IllegalStateException("drawFrame() is for windowed renderers; use render()");
+        }
         // Wall-clock delta since the last drawFrame call -- exposed as dt() so the
         // NEXT frame's drawShapes (which runs before this) reads the previous
         // frame's duration. Measured here, once per call, before any early-return.
@@ -1511,8 +1692,10 @@ public class Renderer {
         }
         // Swapchain.close() destroys our image views, then the swapchain (which
         // frees the images it owns). The swapchain was created FROM the device,
-        // so it goes before the device.
-        swapchain.close();
+        // so it goes before the device. (Headless has no swapchain.)
+        if (swapchain != null) {
+            swapchain.close();
+        }
         device.close();
     }
 }

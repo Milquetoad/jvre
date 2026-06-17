@@ -79,6 +79,13 @@ public class Buffer {
         return new Buffer(device, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
     }
 
+    /** A host-READABLE staging buffer to copy GPU data back into (TRANSFER_DST +
+     *  HOST_ACCESS_RANDOM) -- the readback counterpart of {@link #stagingBuffer}.
+     *  Fill it with a {@code vkCmdCopy*ToBuffer} then read via {@link #downloadBytes}. */
+    static Buffer readback(Device device, long bytes) {
+        return new Buffer(device, bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, HostAccess.READ);
+    }
+
     /** Copy a filled staging buffer into a fresh device-local one, then destroy it. */
     private static Buffer promoteToDeviceLocal(Device device, long commandPool,
                                                Buffer staging, int usage) {
@@ -97,7 +104,20 @@ public class Buffer {
      * (VMA prefers VRAM). VMA translates intent into a concrete memory type and
      * places the buffer inside one of its big shared blocks.
      */
+    /**
+     * How (if at all) the CPU touches this buffer's memory -- the intent VMA turns
+     * into a memory type. NONE = GPU-only (VRAM). WRITE = the CPU streams data IN
+     * only (staging uploads, UBOs); the cheapest host-visible flavor (write-combined
+     * memory, slow to READ). READ = the CPU reads data back OUT (readback staging);
+     * needs randomly-readable host memory.
+     */
+    enum HostAccess { NONE, WRITE, READ }
+
     Buffer(Device device, long size, int usage, boolean hostVisible) {
+        this(device, size, usage, hostVisible ? HostAccess.WRITE : HostAccess.NONE);
+    }
+
+    Buffer(Device device, long size, int usage, HostAccess access) {
         this.device = device;
         this.size = size;
 
@@ -112,14 +132,15 @@ public class Buffer {
             // single-queue story as the swapchain images).
             bufferInfo.sharingMode(VK_SHARING_MODE_EXCLUSIVE);
 
-            // The intent declaration. AUTO lets VMA choose the memory type from
-            // how the buffer is described + these flags. HOST_ACCESS_SEQUENTIAL_
-            // WRITE promises "the CPU only streams data IN, never reads back" --
-            // the cheapest host-visible flavor (write-combined memory is fine).
+            // The intent declaration. AUTO lets VMA choose the memory type. SEQUENTIAL
+            // _WRITE = "CPU streams IN, never reads" (write-combined is fine); RANDOM
+            // = "CPU reads back" (readback staging -- needs host-cached/readable mem).
             VmaAllocationCreateInfo allocInfo = VmaAllocationCreateInfo.calloc(stack);
             allocInfo.usage(VMA_MEMORY_USAGE_AUTO);
-            if (hostVisible) {
+            if (access == HostAccess.WRITE) {
                 allocInfo.flags(VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            } else if (access == HostAccess.READ) {
+                allocInfo.flags(VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT);
             }
 
             // One call: create the VkBuffer, find/grow a block, bind at an offset.
@@ -193,6 +214,26 @@ public class Buffer {
             memByteBuffer(pData.get(0), data.length).put(data);
             vmaUnmapMemory(device.allocator(), allocation);
             vmaFlushAllocation(device.allocator(), allocation, 0, bytes);
+        }
+    }
+
+    /**
+     * Read this buffer's bytes back into {@code dst} through the CPU -- the inverse
+     * of {@link #uploadBytes}, for a {@link #readback} buffer the GPU has copied
+     * into. vmaInvalidateAllocation makes the GPU's writes visible to the CPU before
+     * we read (a no-op on coherent memory -- the desktop norm -- and the required
+     * cache invalidate anywhere else, the mirror of the upload flush).
+     */
+    void downloadBytes(byte[] dst) {
+        long bytes = dst.length;
+        checkFits(bytes);
+        try (MemoryStack stack = stackPush()) {
+            PointerBuffer pData = stack.mallocPointer(1);
+            Vk.check(vmaMapMemory(device.allocator(), allocation, pData),
+                    "Failed to map buffer memory for readback");
+            vmaInvalidateAllocation(device.allocator(), allocation, 0, bytes);
+            memByteBuffer(pData.get(0), dst.length).get(dst);
+            vmaUnmapMemory(device.allocator(), allocation);
         }
     }
 

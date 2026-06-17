@@ -45,9 +45,22 @@ public class Instance {
     private VkDebugUtilsMessengerCallbackEXT debugCallback;
 
     public Instance(String appName, boolean enableValidation) {
+        this(appName, enableValidation, false);
+    }
+
+    /**
+     * @param headless no window -> request NO GLFW surface extensions (and skip the
+     *     GLFW loader probe, which needs {@code glfwInit}). LWJGL loads Vulkan
+     *     independently of GLFW, so a headless instance needs neither -- the path
+     *     for rendering with no display (CI regression tests).
+     */
+    public Instance(String appName, boolean enableValidation, boolean headless) {
         this.validation = enableValidation;
 
-        if (!glfwVulkanSupported()) {
+        // glfwVulkanSupported() needs GLFW initialized (only the Window does that),
+        // so headless skips it -- the loader-version check below covers "is Vulkan
+        // present" without GLFW.
+        if (!headless && !glfwVulkanSupported()) {
             throw new IllegalStateException("Vulkan is not supported by the loader");
         }
         // Two independent "supports 1.3" questions: the INSTANCE (loader/runtime)
@@ -82,7 +95,7 @@ public class Instance {
             VkInstanceCreateInfo createInfo = VkInstanceCreateInfo.calloc(stack);
             createInfo.sType(VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO);
             createInfo.pApplicationInfo(appInfo);
-            createInfo.ppEnabledExtensionNames(getRequiredExtensions(stack));
+            createInfo.ppEnabledExtensionNames(getRequiredExtensions(stack, headless));
 
             if (validation) {
                 createInfo.ppEnabledLayerNames(stack.pointers(stack.UTF8(VALIDATION_LAYER)));
@@ -175,8 +188,17 @@ public class Instance {
         }
     }
 
-    /** GLFW's required extensions, plus VK_EXT_debug_utils when validating. */
-    private PointerBuffer getRequiredExtensions(MemoryStack stack) {
+    /** GLFW's required (surface) extensions, plus VK_EXT_debug_utils when validating.
+     *  Headless requests NO GLFW surface extensions (no surface to present to) --
+     *  just debug_utils if validating. */
+    private PointerBuffer getRequiredExtensions(MemoryStack stack, boolean headless) {
+        if (headless) {
+            // No surface extensions; only debug_utils (when validating).
+            if (!validation) {
+                return null;   // no instance extensions at all
+            }
+            return stack.pointers(stack.UTF8(VK_EXT_DEBUG_UTILS_EXTENSION_NAME));
+        }
         PointerBuffer glfwExtensions = glfwGetRequiredInstanceExtensions();
         if (glfwExtensions == null) {
             throw new RuntimeException("Failed to get the required GLFW instance extensions");

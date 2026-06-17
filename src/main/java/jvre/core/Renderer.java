@@ -59,6 +59,10 @@ public class Renderer {
     // surface and the window's current framebuffer size.
     private final Surface surface;
     private final Window window;
+    // Headless = no surface/window/swapchain: render only into RenderTargets and
+    // read back (the format keystone already removed the format dependency). The
+    // present path (drawFrame) is disabled; render() does an offscreen one-shot.
+    private final boolean headless;
 
     private static final String SHAPE2D_VERT = "/shaders/shape2d.vert.spv";
     private static final String SHAPE2D_FRAG = "/shaders/shape2d.frag.spv";
@@ -186,6 +190,7 @@ public class Renderer {
     public Renderer(Instance instance, Surface surface, Window window, RendererOptions options) {
         this.surface = surface;
         this.window = window;
+        this.headless = false;
         this.clearR = options.clearR;
         this.clearG = options.clearG;
         this.clearB = options.clearB;
@@ -206,6 +211,74 @@ public class Renderer {
         createCommandPool();
         createCommandBuffers();
         createSyncObjects();
+    }
+
+    /**
+     * Create a HEADLESS renderer: NO window, surface, or swapchain. You render only
+     * into {@link RenderTarget}s ({@link #drawToTarget} / {@link #createCanvas}),
+     * call {@link #render()} to execute the queued passes, and {@link #readPixels}
+     * to get the result -- the engine for automated visual-regression tests (render
+     * -> read back -> diff a golden PNG) and offscreen image generation, runnable
+     * with no display.
+     *
+     * <p>It reuses the entire target-pass machinery; only the swapchain present loop
+     * is absent. The format keystone already decoupled what pipelines bake, so the
+     * formats come from {@link RenderFormats#headless} (RGBA8, single-sample) instead
+     * of a swapchain. No frames-in-flight: {@link #render()} is synchronous.
+     */
+    public Renderer(Instance instance, RendererOptions options) {
+        this.surface = null;
+        this.window = null;
+        this.headless = true;
+        this.clearR = options.clearR;
+        this.clearG = options.clearG;
+        this.clearB = options.clearB;
+        this.vsync = false;
+        this.msaaRequested = 1;   // headless v1: no MSAA (single-sample targets)
+
+        this.device = new Device(instance, null, options.preferGpu);
+        this.swapchain = null;
+        this.formats = RenderFormats.headless(device);
+        // Only a command pool is needed: render() and readPixels each use a one-shot
+        // submit (Commands.oneShot), so there are no per-frame buffers or sync
+        // objects, no acquire/present.
+        createCommandPool();
+        System.out.println("Headless renderer created (no swapchain; "
+                + "color format " + formats.colorFormat() + ", offscreen only).");
+    }
+
+    /**
+     * Execute this frame's queued offscreen passes (headless only): upload + record
+     * every {@link #createCanvas} batch and {@link #drawToTarget} callback into ONE
+     * one-shot submit, and block until the GPU finishes. Afterward each target holds
+     * its rendered result -- {@link #readPixels} it, or sample it into a later pass.
+     * The synchronous, present-free analog of {@link #drawFrame}.
+     */
+    public void render() {
+        if (!headless) {
+            throw new IllegalStateException("render() is for headless renderers; use drawFrame()");
+        }
+        // Slot 0 always (no frames-in-flight). Upload + prepare each active canvas
+        // batch, then record all target passes in one submit (oneShot waits).
+        for (Canvas canvas : canvases) {
+            if (canvas.r2d().floatCount() > 0) {
+                uploadAndPrepareBatch(canvas.batch(), canvas.r2d(), 0);
+            }
+        }
+        Commands.oneShot(device, commandPool, cmd -> {
+            for (Canvas canvas : canvases) {
+                if (canvas.r2d().floatCount() > 0) {
+                    recordTargetPass(cmd, canvas.target(),
+                            cc -> recordShapeDraws(cc, canvas.batch(), canvas.r2d(),
+                                    canvas.target().width(), canvas.target().height()));
+                }
+            }
+            for (TargetPass pass : targetPasses) {
+                recordTargetPass(cmd, pass.target(),
+                        cc -> pass.content().render(new FrameRenderer(cc, 0)));
+            }
+        });
+        targetPasses.clear();   // immediate mode -- re-enqueue next render()
     }
 
     // ------------------------------------------------------------------
@@ -555,8 +628,15 @@ public class Renderer {
 
     /** Current framebuffer size in pixels -- what the L2 surface exposes (g.width()/
      *  g.height()) so the user can compose relative layout as plain arithmetic. */
-    int framebufferWidth()  { return swapchain.width(); }
-    int framebufferHeight() { return swapchain.height(); }
+    int framebufferWidth()  { requireWindowed("framebuffer size"); return swapchain.width(); }
+    int framebufferHeight() { requireWindowed("framebuffer size"); return swapchain.height(); }
+
+    private void requireWindowed(String what) {
+        if (headless) {
+            throw new IllegalStateException("Headless renderer has no " + what
+                    + " -- draw into RenderTargets (createCanvas / drawToTarget) and read them back");
+        }
+    }
 
     /**
      * Per-Renderer2D GPU resources for one shape batch: a per-frame-in-flight vertex
@@ -1331,6 +1411,9 @@ public class Renderer {
      * Acquire/present results drive swapchain recreation on resize.
      */
     public void drawFrame() {
+        if (headless) {
+            throw new IllegalStateException("drawFrame() is for windowed renderers; use render()");
+        }
         // Wall-clock delta since the last drawFrame call -- exposed as dt() so the
         // NEXT frame's drawShapes (which runs before this) reads the previous
         // frame's duration. Measured here, once per call, before any early-return.
@@ -1609,8 +1692,10 @@ public class Renderer {
         }
         // Swapchain.close() destroys our image views, then the swapchain (which
         // frees the images it owns). The swapchain was created FROM the device,
-        // so it goes before the device.
-        swapchain.close();
+        // so it goes before the device. (Headless has no swapchain.)
+        if (swapchain != null) {
+            swapchain.close();
+        }
         device.close();
     }
 }

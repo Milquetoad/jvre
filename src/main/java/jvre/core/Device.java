@@ -61,9 +61,14 @@ public class Device {
     public Device(Instance instance, Surface surface, String preferGpu) {
         this.physicalDevice = pickPhysicalDevice(instance, surface, preferGpu);
 
+        // surface == null = HEADLESS: no window/swapchain, render only into targets
+        // and read back. Then there is no present requirement -- present "is" the
+        // graphics family (never used to present), so the rest of the code is
+        // unchanged (queue set collapses to one family, EXCLUSIVE sharing).
+        boolean headless = surface == null;
         QueueFamilyIndices indices = findQueueFamilies(physicalDevice, surface);
         this.graphicsFamily = indices.graphicsFamily;
-        this.presentFamily = indices.presentFamily;
+        this.presentFamily = headless ? indices.graphicsFamily : indices.presentFamily;
 
         try (MemoryStack stack = stackPush()) {
             // Collapse graphics+present into the set of DISTINCT families to request
@@ -119,7 +124,9 @@ public class Device {
             createInfo.sType(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO);
             createInfo.pQueueCreateInfos(queueCreateInfos);
             createInfo.pEnabledFeatures(deviceFeatures);
-            createInfo.ppEnabledExtensionNames(asPointerBuffer(stack, DEVICE_EXTENSIONS));
+            // Swapchain extension only when we have a surface to present to.
+            createInfo.ppEnabledExtensionNames(asPointerBuffer(stack,
+                    headless ? new String[0] : DEVICE_EXTENSIONS));
             createInfo.pNext(features13.address());  // chain the 1.3 features in
             // No ppEnabledLayerNames: device-level layers are legacy; current
             // validation requires enabledLayerCount == 0 (the instance layer covers
@@ -211,16 +218,18 @@ public class Device {
             PointerBuffer devices = stack.mallocPointer(deviceCount.get(0));
             vkEnumeratePhysicalDevices(instance.handle(), deviceCount, devices);
 
-            // Walk every GPU; keep the highest-scoring SUITABLE one.
+            // Walk every GPU; keep the highest-scoring SUITABLE one. Headless drops
+            // the present + swapchain requirements (no surface to present to).
+            boolean needPresent = surface != null;
             VkPhysicalDevice best = null;
             int bestScore = -1;
             for (int i = 0; i < devices.capacity(); i++) {
                 VkPhysicalDevice candidate = new VkPhysicalDevice(devices.get(i), instance.handle());
                 QueueFamilyIndices indices = findQueueFamilies(candidate, surface);
-                // Suitable = graphics + present queues, swapchain support, AND the
-                // Vulkan 1.3 API + features our render path actually enables.
-                if (!indices.isComplete()
-                        || !checkDeviceExtensionSupport(candidate, stack)
+                // Suitable = a graphics queue, (present + swapchain unless headless),
+                // AND Vulkan 1.3 with the features our render path actually enables.
+                if (!indices.isComplete(needPresent)
+                        || !checkDeviceExtensionSupport(candidate, needPresent, stack)
                         || !checkApiAndFeatureSupport(candidate, stack)) {
                     continue;
                 }
@@ -231,8 +240,9 @@ public class Device {
                 }
             }
             if (best == null) {
-                throw new RuntimeException("No suitable GPU found (need graphics + present "
-                        + "+ swapchain + Vulkan 1.3 with dynamicRendering/synchronization2)");
+                throw new RuntimeException("No suitable GPU found (need graphics"
+                        + (needPresent ? " + present + swapchain" : "")
+                        + " + Vulkan 1.3 with dynamicRendering/synchronization2)");
             }
 
             // If an override was requested but the winner doesn't match it, no
@@ -329,8 +339,14 @@ public class Device {
         return features13.dynamicRendering() && features13.synchronization2();
     }
 
-    /** Does this GPU support every device extension we require (per-GPU enumeration)? */
-    private boolean checkDeviceExtensionSupport(VkPhysicalDevice device, MemoryStack stack) {
+    /** Does this GPU support every device extension we require (per-GPU enumeration)?
+     *  Headless requires none ({@code needSwapchain == false}); the windowed path
+     *  requires VK_KHR_swapchain. */
+    private boolean checkDeviceExtensionSupport(VkPhysicalDevice device, boolean needSwapchain,
+                                                MemoryStack stack) {
+        if (!needSwapchain) {
+            return true;   // headless: no device extensions required
+        }
         IntBuffer extCount = stack.ints(0);
         vkEnumerateDeviceExtensionProperties(device, (String) null, extCount, null);
 
@@ -346,11 +362,12 @@ public class Device {
     }
 
     /**
-     * Find a queue family that supports graphics and one that can present to our
-     * surface (they may coincide). Present support is surface-specific, so it is
-     * QUERIED per family, not read from a flag.
+     * Find a queue family that supports graphics and (unless headless) one that can
+     * present to our surface (they may coincide). Present support is surface-specific,
+     * so it is QUERIED per family; a null surface (headless) skips it entirely.
      */
     private QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device, Surface surface) {
+        boolean needPresent = surface != null;
         try (MemoryStack stack = stackPush()) {
             QueueFamilyIndices indices = new QueueFamilyIndices();
 
@@ -366,11 +383,13 @@ public class Device {
                 if ((families.get(i).queueFlags() & VK_QUEUE_GRAPHICS_BIT) != 0) {
                     indices.graphicsFamily = i;
                 }
-                vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface.handle(), presentSupport);
-                if (presentSupport.get(0) == VK_TRUE) {
-                    indices.presentFamily = i;
+                if (needPresent) {
+                    vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface.handle(), presentSupport);
+                    if (presentSupport.get(0) == VK_TRUE) {
+                        indices.presentFamily = i;
+                    }
                 }
-                if (indices.isComplete()) {
+                if (indices.isComplete(needPresent)) {
                     break;
                 }
             }
@@ -395,8 +414,10 @@ public class Device {
         Integer graphicsFamily;
         Integer presentFamily;
 
-        boolean isComplete() {
-            return graphicsFamily != null && presentFamily != null;
+        /** Complete = a graphics family, plus a present family when one is needed
+         *  (the windowed path; headless needs only graphics). */
+        boolean isComplete(boolean needPresent) {
+            return graphicsFamily != null && (!needPresent || presentFamily != null);
         }
     }
 }

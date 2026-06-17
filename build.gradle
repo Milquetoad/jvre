@@ -191,6 +191,16 @@ tasks.register('runGuiDemo', JavaExec) {
     standardInput = System.in
 }
 
+// Run the HEADLESS demo (jvre.demo.HeadlessDemo) -- renders offscreen with no
+// window and writes a PNG. The foundation for visual-regression testing.
+tasks.register('runHeadless', JavaExec) {
+    description = 'Runs the headless render demo (jvre.demo.HeadlessDemo) -- no window, writes a PNG'
+    group = 'application'
+    dependsOn 'classes', 'compileShaders', 'processResources'
+    mainClass = 'jvre.demo.HeadlessDemo'
+    classpath = sourceSets.main.runtimeClasspath + configurations.nativesRuntime
+}
+
 // Treat the generated .spv files as ordinary resources, built before them.
 sourceSets.main.resources.srcDir(shaderOutDir)
 tasks.named('processResources') { dependsOn 'compileShaders' }

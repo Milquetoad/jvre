@@ -464,7 +464,15 @@ public final class Renderer2D {
     /** Baseline-to-baseline line height, in pixels, at {@code size} in the built-in
      *  font -- the vertical step for stacking lines or rows. */
     public float lineHeight(float size) {
-        Font font = owner.font();
+        return lineHeight(owner.font(), size);
+    }
+
+    /** {@link #lineHeight(float)} for an explicit {@code font} (e.g. one from
+     *  {@link Renderer#loadFont}) -- parity with {@link #textWidth(Font, String, float)}. */
+    public float lineHeight(Font font, float size) {
+        if (font == null) {
+            throw new IllegalArgumentException("lineHeight: null font");
+        }
         return font.lineHeight() * font.scaleFor(size);
     }
 

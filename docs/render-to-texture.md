@@ -164,6 +164,32 @@ A complete example is `jvre.demo.HeadlessDemo` (`gradlew runHeadless`). (Running
 this in CI needs a GPU runner or a software Vulkan driver; the capability itself
 needs no display.)
 
+## Float / HDR targets
+
+By default a target's colour format matches the screen (8-bit, clamped to [0,1]).
+For **HDR** — storing values *outside* [0,1] (bright highlights, accumulation; the
+intermediate buffer for tone-mapping or bloom) — pass `TargetFormat.HDR` (16-bit
+float per channel):
+
+```java
+RenderTarget hdr = renderer.createRenderTarget(w, h, TargetFormat.HDR);
+```
+
+Because a pipeline **bakes** its attachment format, geometry rendered *into* an HDR
+target needs a pipeline baked for it — use `createPipeline(spec, target)` (the plain
+`createPipeline(spec)` bakes for the screen):
+
+```java
+Pipeline hdrPass = renderer.createPipeline(spec, hdr);   // shader can output values > 1
+```
+
+A typical post-processing chain: render the scene into the HDR target with an
+HDR-baked pipeline, then a screen pipeline samples it (`frame.texture(hdr.texture())`)
+and tone-maps to the LDR screen. `jvre.demo.HdrDemo` (`gradlew runHdr`) shows this —
+split-screen clamp vs. Reinhard, so you can see the highlight detail the float
+buffer preserved. (`readPixels` is 8-bit only; tone-map an HDR target to an LDR one
+before reading it back.)
+
 ## Lifetime
 
 ```java

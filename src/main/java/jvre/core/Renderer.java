@@ -455,7 +455,25 @@ public class Renderer {
     /** {@link #createRenderTarget(int, int)} with an explicit sampling {@link Filter}
      *  (e.g. {@link Filter#NEAREST} for a pixel-perfect upscale source). */
     public RenderTarget createRenderTarget(int width, int height, Filter filter) {
-        return new RenderTarget(device, width, height, formats.colorFormat(),
+        return createRenderTarget(width, height, TargetFormat.DEFAULT, filter);
+    }
+
+    /**
+     * Create an offscreen target with an explicit {@link TargetFormat} -- notably
+     * {@link TargetFormat#HDR} for a float buffer that stores values outside [0,1]
+     * (the intermediate for tone-mapping / bloom / post-processing). Geometry
+     * rendered INTO an HDR target needs a pipeline baked for it ({@link
+     * #createPipeline(PipelineSpec, RenderTarget)}); the built-in pipelines are
+     * baked for the screen's DEFAULT format. Depth + MSAA follow the renderer.
+     */
+    public RenderTarget createRenderTarget(int width, int height, TargetFormat format) {
+        return createRenderTarget(width, height, format, Filter.LINEAR);
+    }
+
+    /** {@link #createRenderTarget(int, int, TargetFormat)} with an explicit {@link Filter}. */
+    public RenderTarget createRenderTarget(int width, int height, TargetFormat format, Filter filter) {
+        int colorFormat = (format == TargetFormat.DEFAULT) ? formats.colorFormat() : format.vk;
+        return new RenderTarget(device, width, height, colorFormat,
                 formats.depthFormat(), formats.sampleCount(), filter);
     }
 
@@ -476,6 +494,15 @@ public class Renderer {
         int w = target.width();
         int h = target.height();
         int format = target.texture().format();
+        // This path assumes 8-bit RGBA/BGRA (4 bytes/texel + the BGRA swizzle). An
+        // HDR/float target has wider texels and a different value range, so reading
+        // it back needs format-aware handling -- not yet supported (tone-map it to an
+        // LDR target first, then read that).
+        if (format != VK_FORMAT_R8G8B8A8_SRGB && format != VK_FORMAT_R8G8B8A8_UNORM
+                && format != VK_FORMAT_B8G8R8A8_SRGB && format != VK_FORMAT_B8G8R8A8_UNORM) {
+            throw new IllegalArgumentException("readPixels supports 8-bit RGBA/BGRA "
+                    + "targets only; tone-map an HDR target to an LDR one first");
+        }
         long bytes = (long) w * h * 4;
 
         // No frame may be reading/writing the target while we transition + copy it.
@@ -567,6 +594,19 @@ public class Renderer {
     public Pipeline createPipeline(PipelineSpec spec) {
         return Pipeline.fromSpec(device, formats.colorFormat(), formats.depthFormat(),
                 formats.sampleCount(), spec, MAX_FRAMES_IN_FLIGHT);
+    }
+
+    /**
+     * Build a pipeline baked to render INTO {@code target} -- needed when the target
+     * has a non-default colour format ({@link TargetFormat#HDR}), since a pipeline
+     * bakes its attachment formats and must match the pass it runs in. Use the
+     * returned pipeline only with {@code target} (or another target of the same
+     * format/depth/samples); the plain {@link #createPipeline(PipelineSpec)} bakes
+     * for the screen. Caller-owned: {@code close()} it before the Renderer.
+     */
+    public Pipeline createPipeline(PipelineSpec spec, RenderTarget target) {
+        return Pipeline.fromSpec(device, target.colorFormat(), target.depthFormat(),
+                target.sampleCount(), spec, MAX_FRAMES_IN_FLIGHT);
     }
 
     /**

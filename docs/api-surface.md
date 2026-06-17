@@ -27,6 +27,8 @@ and may change freely.
 | `Renderer2D` | the 2D surface: shapes, strokes, text, images, transform stack |
 | `Color` | immutable color value |
 | `Filter` | texture sampling filter (NEAREST / LINEAR) |
+| `WrapMode` | texture address mode (CLAMP / REPEAT / MIRROR / BORDER) |
+| `TextureOptions` | bundled sampler config (filter + wrap + mipmaps + anisotropy) for `createImage`/`loadImage` |
 
 ## Shader effects
 | Type | Role |

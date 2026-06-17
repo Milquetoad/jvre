@@ -21,10 +21,14 @@ public final class TextureOptions {
 
     final Filter filter;
     final WrapMode wrap;
+    final boolean mipmaps;
+    final boolean anisotropy;
 
     private TextureOptions(Builder b) {
         this.filter = b.filter;
         this.wrap = b.wrap;
+        this.mipmaps = b.mipmaps;
+        this.anisotropy = b.anisotropy;
     }
 
     public static Builder builder() {
@@ -34,6 +38,8 @@ public final class TextureOptions {
     public static final class Builder {
         private Filter filter = Filter.LINEAR;
         private WrapMode wrap = WrapMode.CLAMP;
+        private boolean mipmaps = false;
+        private boolean anisotropy = false;
 
         /** Magnification/minification filter ({@link Filter#NEAREST} / {@link Filter#LINEAR}). */
         public Builder filter(Filter filter) {
@@ -44,6 +50,28 @@ public final class TextureOptions {
         /** Address mode outside [0,1] UVs ({@link WrapMode}; default {@link WrapMode#CLAMP}). */
         public Builder wrap(WrapMode wrap) {
             this.wrap = wrap;
+            return this;
+        }
+
+        /**
+         * Generate a mipmap chain (downscaled copies) and sample it -- smoother,
+         * less shimmery MINIFICATION when the texture is drawn smaller than its
+         * texel size (distant 3D surfaces, zoomed-out sprites). Off by default;
+         * pairs naturally with {@link Filter#LINEAR}.
+         */
+        public Builder mipmaps(boolean on) {
+            this.mipmaps = on;
+            return this;
+        }
+
+        /**
+         * Enable anisotropic filtering -- sharper textures viewed at a grazing
+         * ANGLE (receding floors/walls), where plain mip sampling over-blurs. Uses
+         * the device's max level (clamped, and a no-op if the device lacks the
+         * feature). Needs {@link #mipmaps} to do anything. Off by default.
+         */
+        public Builder anisotropy(boolean on) {
+            this.anisotropy = on;
             return this;
         }
 

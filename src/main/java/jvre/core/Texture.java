@@ -4,7 +4,10 @@ import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.util.vma.VmaAllocationCreateInfo;
 import org.lwjgl.vulkan.VkBufferImageCopy;
+import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDependencyInfo;
+import org.lwjgl.vulkan.VkFormatProperties;
+import org.lwjgl.vulkan.VkImageBlit;
 import org.lwjgl.vulkan.VkImageCreateInfo;
 import org.lwjgl.vulkan.VkImageMemoryBarrier2;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
@@ -68,6 +71,7 @@ public class Texture {
     private final int width;
     private final int height;
     private final int format;   // VkFormat the texels are stored as
+    private final int mipLevels; // 1 = no mip chain; >1 = a generated mip pyramid
     private long view = VK_NULL_HANDLE;     // VkImageView -- the typed lens shaders read through
     private long sampler = VK_NULL_HANDLE;  // VkSampler  -- how shaders filter + address it
 
@@ -240,8 +244,16 @@ public class Texture {
                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);  // hostVisible: CPU writes the pixels in
         staging.uploadBytes(pixels);
 
-        Texture texture = new Texture(device, width, height, format,
-                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+        // Mipmaps: a pyramid of half-size levels, generated GPU-side by blitting.
+        // The image then needs TRANSFER_SRC too (each level is the blit source for
+        // the next), and the format must support a LINEAR blit (checked up front).
+        int mips = opts.mipmaps ? mipLevelsFor(width, height) : 1;
+        int usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT
+                | (mips > 1 ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0);
+        if (mips > 1) {
+            requireLinearBlit(device, format);
+        }
+        Texture texture = new Texture(device, width, height, format, usage, mips);
         texture.uploadFrom(commandPool, staging);
         texture.createViewAndSampler(opts);
 
@@ -257,10 +269,15 @@ public class Texture {
      * contents; filling + transitioning it comes after.
      */
     Texture(Device device, int width, int height, int format, int usage) {
+        this(device, width, height, format, usage, 1);
+    }
+
+    Texture(Device device, int width, int height, int format, int usage, int mipLevels) {
         this.device = device;
         this.width = width;
         this.height = height;
         this.format = format;
+        this.mipLevels = mipLevels;
 
         try (MemoryStack stack = stackPush()) {
             // ---- 1. The image object: picture description + tiling + usage ----
@@ -269,7 +286,7 @@ public class Texture {
             imageInfo.imageType(VK_IMAGE_TYPE_2D);          // a flat 2D picture (1D / 3D also exist)
             imageInfo.format(format);                       // texel layout, e.g. R8G8B8A8_SRGB
             imageInfo.extent().width(width).height(height).depth(1);  // depth 1 == 2D
-            imageInfo.mipLevels(1);                         // no mip chain yet (a later beat)
+            imageInfo.mipLevels(mipLevels);                 // 1 = no chain; >1 = mip pyramid
             imageInfo.arrayLayers(1);                       // one image (not an array / atlas-layer set)
             imageInfo.tiling(VK_IMAGE_TILING_OPTIMAL);      // driver's private swizzle; NOT CPU-mappable
             imageInfo.initialLayout(VK_IMAGE_LAYOUT_UNDEFINED);  // contents undefined; transition before use
@@ -310,17 +327,14 @@ public class Texture {
     private void uploadFrom(long commandPool, Buffer staging) {
         Commands.oneShot(device, commandPool, cmd -> {
             try (MemoryStack stack = stackPush()) {
-                // One reusable barrier targeting this image's whole color
-                // subresource (1 mip, 1 layer); retargeted between the two
-                // transitions. No queue-family ownership transfer.
+                // One reusable barrier (retargeted between transitions); no
+                // queue-family ownership transfer.
                 VkImageMemoryBarrier2.Buffer barrier = VkImageMemoryBarrier2.calloc(1, stack);
                 barrier.sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2);
                 barrier.image(image);
                 barrier.srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
                 barrier.dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
                 barrier.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT);
-                barrier.subresourceRange().baseMipLevel(0);
-                barrier.subresourceRange().levelCount(1);
                 barrier.subresourceRange().baseArrayLayer(0);
                 barrier.subresourceRange().layerCount(1);
 
@@ -328,22 +342,21 @@ public class Texture {
                 depInfo.sType(VK_STRUCTURE_TYPE_DEPENDENCY_INFO);
                 depInfo.pImageMemoryBarriers(barrier);
 
-                // ---- Transition 1: UNDEFINED -> TRANSFER_DST ----
-                // Nothing precedes (NONE); the COPY stage's write must wait for
-                // the layout to be in place. oldLayout=UNDEFINED discards the
-                // (nonexistent) prior contents -- we overwrite the whole image.
+                // ---- Transition ALL mip levels UNDEFINED -> TRANSFER_DST ----
+                // (Just mip 0 when there's no chain.) oldLayout=UNDEFINED discards
+                // the (nonexistent) prior contents -- we overwrite the whole image.
+                barrier.subresourceRange().baseMipLevel(0).levelCount(mipLevels);
                 barrier.oldLayout(VK_IMAGE_LAYOUT_UNDEFINED);
                 barrier.newLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
                 barrier.srcStageMask(VK_PIPELINE_STAGE_2_NONE);
                 barrier.srcAccessMask(VK_ACCESS_2_NONE);
-                barrier.dstStageMask(VK_PIPELINE_STAGE_2_COPY_BIT);
+                barrier.dstStageMask(VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT);
                 barrier.dstAccessMask(VK_ACCESS_2_TRANSFER_WRITE_BIT);
                 vkCmdPipelineBarrier2(cmd, depInfo);
 
-                // ---- The copy: linear buffer -> tiled image ----
-                // bufferRowLength/Height = 0 means "tightly packed", so the
-                // driver derives the source stride from imageExtent. The
-                // imageSubresource picks WHICH mip/layer (mip 0, layer 0).
+                // ---- The copy: linear buffer -> tiled image (the BASE level) ----
+                // bufferRowLength/Height = 0 means "tightly packed", so the driver
+                // derives the source stride from imageExtent. mipLevel 0.
                 VkBufferImageCopy.Buffer region = VkBufferImageCopy.calloc(1, stack);
                 region.bufferOffset(0);
                 region.bufferRowLength(0);
@@ -357,19 +370,105 @@ public class Texture {
                 vkCmdCopyBufferToImage(cmd, staging.handle(), image,
                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region);
 
-                // ---- Transition 2: TRANSFER_DST -> SHADER_READ_ONLY ----
-                // Wait for the copy's write (COPY stage), make it visible to the
-                // FRAGMENT shader's sampled reads. After this the image is ready
-                // to be bound + sampled in every later frame.
+                if (mipLevels > 1) {
+                    generateMipmaps(cmd, barrier, depInfo);
+                } else {
+                    // ---- mip 0: TRANSFER_DST -> SHADER_READ_ONLY (ready to sample) ----
+                    barrier.subresourceRange().baseMipLevel(0).levelCount(1);
+                    barrier.oldLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+                    barrier.newLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                    barrier.srcStageMask(VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT);
+                    barrier.srcAccessMask(VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                    barrier.dstStageMask(VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
+                    barrier.dstAccessMask(VK_ACCESS_2_SHADER_READ_BIT);
+                    vkCmdPipelineBarrier2(cmd, depInfo);
+                }
+            }
+        });
+    }
+
+    /**
+     * Build the mip pyramid GPU-side: starting from the full-size base level (just
+     * copied in, all levels in TRANSFER_DST), repeatedly BLIT level i-1 down into
+     * the half-size level i with LINEAR filtering. Each source level, once blitted
+     * FROM, transitions to SHADER_READ_ONLY; the final (smallest) level, only ever
+     * a blit destination, transitions at the end. So every level ends sampleable.
+     * (The classic vulkan-tutorial routine; blits run on the TRANSFER stage.)
+     */
+    private void generateMipmaps(VkCommandBuffer cmd, VkImageMemoryBarrier2.Buffer barrier,
+                                 VkDependencyInfo depInfo) {
+        try (MemoryStack stack = stackPush()) {
+            int mipW = width;
+            int mipH = height;
+            for (int i = 1; i < mipLevels; i++) {
+                // level i-1: TRANSFER_DST -> TRANSFER_SRC (it becomes the blit source)
+                barrier.subresourceRange().baseMipLevel(i - 1).levelCount(1);
                 barrier.oldLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-                barrier.newLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-                barrier.srcStageMask(VK_PIPELINE_STAGE_2_COPY_BIT);
+                barrier.newLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+                barrier.srcStageMask(VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT);
                 barrier.srcAccessMask(VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                barrier.dstStageMask(VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT);
+                barrier.dstAccessMask(VK_ACCESS_2_TRANSFER_READ_BIT);
+                vkCmdPipelineBarrier2(cmd, depInfo);
+
+                int nextW = Math.max(1, mipW / 2);
+                int nextH = Math.max(1, mipH / 2);
+                VkImageBlit.Buffer blit = VkImageBlit.calloc(1, stack);
+                blit.srcSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                        .mipLevel(i - 1).baseArrayLayer(0).layerCount(1);
+                blit.srcOffsets(0).x(0).y(0).z(0);
+                blit.srcOffsets(1).x(mipW).y(mipH).z(1);
+                blit.dstSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                        .mipLevel(i).baseArrayLayer(0).layerCount(1);
+                blit.dstOffsets(0).x(0).y(0).z(0);
+                blit.dstOffsets(1).x(nextW).y(nextH).z(1);
+                vkCmdBlitImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                        image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, blit, VK_FILTER_LINEAR);
+
+                // level i-1 done as a source -> SHADER_READ_ONLY
+                barrier.oldLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+                barrier.newLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                barrier.srcStageMask(VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT);
+                barrier.srcAccessMask(VK_ACCESS_2_TRANSFER_READ_BIT);
                 barrier.dstStageMask(VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
                 barrier.dstAccessMask(VK_ACCESS_2_SHADER_READ_BIT);
                 vkCmdPipelineBarrier2(cmd, depInfo);
+
+                mipW = nextW;
+                mipH = nextH;
             }
-        });
+
+            // The last level was only ever a blit DST -> SHADER_READ_ONLY.
+            barrier.subresourceRange().baseMipLevel(mipLevels - 1).levelCount(1);
+            barrier.oldLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            barrier.newLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            barrier.srcStageMask(VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT);
+            barrier.srcAccessMask(VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            barrier.dstStageMask(VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
+            barrier.dstAccessMask(VK_ACCESS_2_SHADER_READ_BIT);
+            vkCmdPipelineBarrier2(cmd, depInfo);
+        }
+    }
+
+    /** Mip-chain length for a {@code width} x {@code height} image: floor(log2(max
+     *  dimension)) + 1 (down to a 1x1 level). */
+    private static int mipLevelsFor(int width, int height) {
+        return 1 + (int) (Math.floor(Math.log(Math.max(width, height)) / Math.log(2)));
+    }
+
+    /** Mip generation blits with a LINEAR filter, which the format must support in
+     *  optimal tiling -- verify it (true for R8G8B8A8 on desktop) and fail clearly
+     *  otherwise, rather than letting validation flag the blit. */
+    private static void requireLinearBlit(Device device, int format) {
+        try (MemoryStack stack = stackPush()) {
+            VkFormatProperties props = VkFormatProperties.malloc(stack);
+            vkGetPhysicalDeviceFormatProperties(device.physicalDevice(), format, props);
+            if ((props.optimalTilingFeatures()
+                    & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) == 0) {
+                throw new RuntimeException("Texture format " + format
+                        + " does not support linear-filtered blits, so mipmaps can't be generated for it");
+            }
+        }
     }
 
     /**
@@ -389,7 +488,7 @@ public class Texture {
             viewInfo.format(format);
             viewInfo.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT);
             viewInfo.subresourceRange().baseMipLevel(0);
-            viewInfo.subresourceRange().levelCount(1);
+            viewInfo.subresourceRange().levelCount(mipLevels);   // the whole pyramid
             viewInfo.subresourceRange().baseArrayLayer(0);
             viewInfo.subresourceRange().layerCount(1);
 
@@ -414,19 +513,23 @@ public class Texture {
             samplerInfo.addressModeU(opts.wrap.vk);
             samplerInfo.addressModeV(opts.wrap.vk);
             samplerInfo.addressModeW(opts.wrap.vk);
-            // Anisotropy OFF: it needs a device feature we don't enable, and does
-            // nothing for NEAREST without mips anyway.
-            samplerInfo.anisotropyEnable(false);
-            samplerInfo.maxAnisotropy(1.0f);
+            // Anisotropy (caller's choice): sharper textures at grazing angles. Only
+            // if requested AND the device enabled the feature (maxAnisotropy > 1);
+            // clamp to the device max. Needs mips to matter.
+            boolean aniso = opts.anisotropy && device.maxAnisotropy() > 1.0f;
+            samplerInfo.anisotropyEnable(aniso);
+            samplerInfo.maxAnisotropy(aniso ? device.maxAnisotropy() : 1.0f);
             samplerInfo.borderColor(VK_BORDER_COLOR_INT_OPAQUE_BLACK);
             // false = normalized [0,1] UVs (the universal convention), not raw texels.
             samplerInfo.unnormalizedCoordinates(false);
             samplerInfo.compareEnable(false);   // not a shadow-map compare sampler
             samplerInfo.compareOp(VK_COMPARE_OP_ALWAYS);
-            // No mip chain yet -> NEAREST mip mode, LOD clamped to level 0.
-            samplerInfo.mipmapMode(VK_SAMPLER_MIPMAP_MODE_NEAREST);
+            // Mip sampling: with a chain, LINEAR mip mode (trilinear) blends between
+            // levels and maxLod opens the whole pyramid; without one, level 0 only.
+            samplerInfo.mipmapMode(mipLevels > 1
+                    ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST);
             samplerInfo.minLod(0.0f);
-            samplerInfo.maxLod(0.0f);
+            samplerInfo.maxLod(mipLevels > 1 ? (float) mipLevels : 0.0f);
             samplerInfo.mipLodBias(0.0f);
 
             LongBuffer pSampler = stack.longs(VK_NULL_HANDLE);

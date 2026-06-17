@@ -170,8 +170,26 @@ Texture sprite = renderer.loadImage("/images/hero.png", Filter.NEAREST);  // pix
 Texture grad   = renderer.createImage(pixels, w, h, Filter.LINEAR);       // smooth a generated gradient
 ```
 
-(Mipmaps and anisotropy — which improve *down*scaling — are a later refinement;
-this knob covers upscaling.)
+### Full sampler config (`TextureOptions`)
+
+For more than the filter — wrap mode, mipmaps, anisotropy — pass `TextureOptions`
+to `createImage` / `loadImage`:
+
+```java
+Texture tile = renderer.loadImage("/tile.png", TextureOptions.builder()
+        .filter(Filter.LINEAR)
+        .wrap(WrapMode.REPEAT)   // tile when UVs leave [0,1]: CLAMP / REPEAT / MIRROR / BORDER
+        .mipmaps(true)           // smoother *minification* (drawn small / at an angle)
+        .anisotropy(true)        // sharper at grazing angles (needs mipmaps)
+        .build());
+```
+
+- **Wrap** only matters when UVs go outside `[0,1]` (tiling a texture across a quad
+  bigger than itself, scrolling). `CLAMP` (the default) stretches the edge texel.
+- **Mipmaps** generate a pyramid of downscaled copies, so a texture drawn *smaller*
+  than its texel size (distant 3D surfaces, zoomed-out) is smooth instead of shimmery.
+- **Anisotropy** keeps textures sharp at a grazing angle, where plain mips over-blur.
+  It uses the device's max level (and is a no-op if the device lacks the feature).
 
 ## The transform stack
 

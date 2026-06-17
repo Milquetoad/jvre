@@ -215,10 +215,14 @@ public class Main {
                 .texture(Stage.FRAGMENT)                           // the checker
                 .pushConstants(Float.BYTES, Stage.FRAGMENT)        // float pulse
                 .label("demo-cube").build());
-        // Batch 2: WrapMode.REPEAT -- the cube samples UV 0..2 (see CUBE_FRAG), so
-        // the checker TILES 2x2 per face instead of clamping/stretching at the edge.
+        // Batch 2: the cube's texture exercises the whole sampler config --
+        //  - WrapMode.REPEAT: it samples UV 0..2 (CUBE_FRAG), so the checker TILES
+        //    2x2 per face instead of clamping/stretching at the edge;
+        //  - mipmaps + anisotropy: smoother, less shimmery checker on the tilted /
+        //    receding cube faces (the minification regime), generated GPU-side.
         cubeTexture = renderer.createImage(makeChecker(256, 32), 256, 256,
-                TextureOptions.builder().filter(Filter.NEAREST).wrap(WrapMode.REPEAT).build());
+                TextureOptions.builder().filter(Filter.LINEAR).wrap(WrapMode.REPEAT)
+                        .mipmaps(true).anisotropy(true).build());
         cubeVerts = renderer.createVertexBuffer(new float[] {
                 //    x      y      z       r     g     b      u   v   (per-face, CCW from outside)
                 -0.5f,-0.5f, 0.5f, 1.0f,0.3f,0.3f, 0f,0f,  0.5f,-0.5f, 0.5f, 1.0f,0.3f,0.3f, 1f,0f,

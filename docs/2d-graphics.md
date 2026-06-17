@@ -200,6 +200,29 @@ g.scale(s);
 g.pop();
 ```
 
+## Clipping to a rectangle
+
+Restrict drawing to a rectangle — for scroll views, panels, or any masked region —
+with a clip stack that works like the transform stack: `pushClip` narrows the
+drawable area, `popClip` restores it. Anything drawn outside the rectangle is cut
+off.
+
+```java
+g.pushClip(x, y, w, h);          // restrict drawing to this rectangle
+g.fillCircle(x, y, 80, color);   // only the part inside the rect appears
+g.text("clipped", x + 8, y + 8, 40f, color);
+g.popClip();                     // back to the previous clip
+```
+
+Clips **nest** (a child is intersected with its parent), and the rectangle is given
+in the **current transform's** coordinates — so a clip pushed under a `scale` or
+`translate` tracks that transform. Every `pushClip` needs a matching `popClip`
+(checked at `end()`), just like `push`/`pop`.
+
+> A clip under a **rotation** falls back to the rectangle's axis-aligned bounding
+> box (a hardware scissor can't rotate). For tight rotated or non-rectangular
+> masking, a shape/stencil clip is planned.
+
 ## Reading input
 
 `window.input()` returns a per-frame **input snapshot**, refreshed automatically by

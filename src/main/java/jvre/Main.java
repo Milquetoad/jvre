@@ -451,6 +451,22 @@ public class Main {
         // 4b: a line drawn with a font from renderer.loadFont (the custom-font path).
         g.text(customFont, "loadFont(): your own TTF", 40, 556, 22, Color.rgb(20, 20, 20));
 
+        // 4c: RECT CLIP -- subsequent drawing restricted to a box (pushClip/popClip).
+        // The grey outline shows the bounds; the circle slides through, clipped at
+        // every edge, and the tall label is clipped top/bottom. The clip is mapped
+        // through the active scale(s) transform, so it tracks the scaled layout.
+        float clipX = 400, clipY = 478, clipW = 150, clipH = 64;
+        g.pushClip(clipX, clipY, clipW, clipH);
+        float tc = renderer.time();
+        float bx = clipX + clipW * 0.5f + (float) Math.sin(tc * 1.6) * (clipW * 0.6f);
+        g.fillCircle(bx, clipY + clipH * 0.5f, 40, Color.rgb(90, 200, 130));
+        g.text("pushClip", clipX + 8, clipY + 6, 30, Color.rgb(20, 20, 20));
+        g.popClip();
+        // Frame drawn AFTER popClip, so the outline sits on TOP of the clipped
+        // content (a clean window border) instead of being painted over by it.
+        g.strokeRect(clipX, clipY, clipW, clipH, 2, Color.rgb(120, 120, 120));
+        g.text("rect clip", clipX, clipY + clipH + 6, 13, Color.rgb(40, 40, 40));
+
         // ... and a box tracking the cursor (red while held, scroll resizes it).
         // The mouse is in real pixels; divide by s to place it in our scaled space.
         cursorSize = Math.max(12f, Math.min(160f, cursorSize + in.scrollY() * 6f));

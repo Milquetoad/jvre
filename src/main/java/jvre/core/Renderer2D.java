@@ -5,6 +5,7 @@ import org.joml.Matrix3x2f;
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Deque;
+import java.util.LinkedList;
 
 /**
  * The L2 "just draw" surface -- the high-level altitude from
@@ -54,18 +55,36 @@ public final class Renderer2D {
     // surface (sizes from the live framebuffer).
     private final RenderTarget canvas;
 
-    // Draw RUNS -- the flush-on-texture-switch batching. The vertex arena stays
-    // one buffer in paint order; runs slice it into contiguous ranges that each
-    // need a different texture bound. runFirst[i] = the first vertex of run i;
-    // runTex[i] = the texture for run i (null -> the 1x1 white default). A run
-    // ends where the next begins (the last runs to vertexCount()). Flat/SDF
-    // shapes join the current run (they ignore the texture); an image() with a
-    // DIFFERENT texture opens a new run. So draw order is preserved across any
-    // mix of shapes and images -- the Renderer draws the runs in order, binding
-    // each run's texture. (Modeled on raylib's rlgl default batch.)
+    // Draw RUNS -- the flush-on-boundary batching. The vertex arena stays one buffer
+    // in paint order; runs slice it into contiguous ranges that each need a
+    // different TEXTURE bound OR a different scissor CLIP. runFirst[i] = the first
+    // vertex of run i; runTex[i] = the texture for run i (null -> the 1x1 white
+    // default); runClip[i] = the scissor rect [x,y,w,h] in framebuffer pixels (null
+    // -> no clip, the full framebuffer). A run ends where the next begins (the last
+    // runs to vertexCount()). Flat/SDF shapes join the current run (they ignore the
+    // texture); an image() with a DIFFERENT texture, or any pushClip/popClip that
+    // changes the active clip, opens a new run. So draw order is preserved across
+    // any mix of shapes, images, and clip regions -- the Renderer draws the runs in
+    // order, binding each run's texture and setting its scissor. (Modeled on
+    // raylib's rlgl default batch.)
     private int[] runFirst = new int[8];
     private Texture[] runTex = new Texture[8];
+    private int[][] runClip = new int[8][];   // each [x,y,w,h] in framebuffer px, or null = no clip
     private int runCount = 0;
+
+    // The clip stack -- like the transform stack, an explicitly scoped piece of
+    // drawing state (pushClip/popClip pairs; end() asserts balance). `currentClip`
+    // is the active scissor rect [x,y,w,h] in FRAMEBUFFER PIXELS (null = no clip).
+    // pushClip transforms the given rect by the current transform, takes its
+    // axis-aligned bounding box, and intersects it with the parent clip + the
+    // framebuffer -- so nested clips narrow, and a translate/scale maps exactly. A
+    // ROTATED clip becomes its bounding box (a loose clip): scissor is axis-aligned
+    // in pixels and can't rotate; tight non-rect/rotated clipping is the planned
+    // shape-mask (stencil) feature. The clipStack holds the PARENT clip to restore.
+    private int[] currentClip;   // null = no clip (full framebuffer)
+    // LinkedList, not ArrayDeque: the parent clip pushed for a top-level pushClip is
+    // null (no enclosing clip), and ArrayDeque forbids null elements.
+    private final Deque<int[]> clipStack = new LinkedList<>();
 
     // The transform stack -- the ONE sanctioned piece of drawing state, legal
     // because it is explicitly scoped (push/pop pairs; end() asserts balance).
@@ -110,6 +129,8 @@ public final class Renderer2D {
         runCount = 0;
         transform.identity();      // each frame starts in the untransformed pixel space
         transformStack.clear();
+        currentClip = null;        // ...and unclipped (the full framebuffer)
+        clipStack.clear();
     }
 
     /** Close the frame. The accumulated shapes are now ready to be drawn. */
@@ -120,6 +141,10 @@ public final class Renderer2D {
         if (!transformStack.isEmpty()) {
             int n = transformStack.size();
             throw new IllegalStateException("end(): " + n + " push() call(s) without a matching pop()");
+        }
+        if (!clipStack.isEmpty()) {
+            int n = clipStack.size();
+            throw new IllegalStateException("end(): " + n + " pushClip() call(s) without a matching popClip()");
         }
         inFrame = false;
     }
@@ -169,6 +194,82 @@ public final class Renderer2D {
     public void scale(float sx, float sy) {
         requireInFrame("scale");
         transform.scale(sx, sy);
+    }
+
+    // ------------------------------------------------------------------
+    // Clip stack -- restrict subsequent drawing to a rectangle (scroll views, UI
+    // panels, masked regions). Scoped like the transform stack (pushClip/popClip
+    // pairs; end() asserts balance) and driven by the dynamic scissor the pipeline
+    // already enables: a clip change flushes the batch at that boundary (a new draw
+    // run with a new scissor), exactly like a texture switch.
+    // ------------------------------------------------------------------
+
+    /**
+     * Restrict subsequent drawing to the rectangle corner {@code (x, y)} + size
+     * {@code w x h}, in the CURRENT transform's coordinates (like {@link
+     * #fillRect}). Nested clips INTERSECT -- a child never draws outside its
+     * parent. Restore the previous clip with the matching {@link #popClip()}.
+     *
+     * <p>The rect is mapped through the current transform to framebuffer pixels.
+     * Under translate/scale that is exact; under ROTATION the clip becomes the
+     * rect's axis-aligned bounding box (a looser clip), because a hardware scissor
+     * is axis-aligned and cannot rotate. For tight rotated or non-rectangular
+     * clipping, a shape/mask clip (stencil-based) is planned.
+     */
+    public void pushClip(float x, float y, float w, float h) {
+        requireInFrame("pushClip");
+        if (w < 0f || h < 0f) {
+            throw new IllegalArgumentException("pushClip: negative size (" + w + " x " + h + ")");
+        }
+        int[] rect = transformedPixelRect(x, y, w, h);          // AABB of the rect in framebuffer px
+        int[] clip = (currentClip == null) ? rect : intersectClip(currentClip, rect);
+        clipStack.push(currentClip);   // remember the parent (may be null) to restore on pop
+        currentClip = clip;
+    }
+
+    /** Restore the clip saved by the matching {@link #pushClip}. */
+    public void popClip() {
+        requireInFrame("popClip");
+        if (clipStack.isEmpty()) {
+            throw new IllegalStateException("popClip() called without a matching pushClip()");
+        }
+        currentClip = clipStack.pop();
+    }
+
+    /**
+     * The given local rect's axis-aligned bounding box in FRAMEBUFFER PIXELS:
+     * transform its four corners by the current transform (L2's pixel space is 1:1
+     * with the framebuffer, so this lands in scissor coordinates directly), take the
+     * min/max, and clamp to the framebuffer. Floor the min / ceil the max so a
+     * partially-covered edge pixel is kept (conservative).
+     */
+    private int[] transformedPixelRect(float x, float y, float w, float h) {
+        float[] cx = { x, x + w, x + w, x };
+        float[] cy = { y, y, y + h, y + h };
+        float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE;
+        float maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
+        for (int i = 0; i < 4; i++) {
+            float tx = transform.m00() * cx[i] + transform.m10() * cy[i] + transform.m20();
+            float ty = transform.m01() * cx[i] + transform.m11() * cy[i] + transform.m21();
+            minX = Math.min(minX, tx); maxX = Math.max(maxX, tx);
+            minY = Math.min(minY, ty); maxY = Math.max(maxY, ty);
+        }
+        int fbW = width(), fbH = height();
+        int x0 = Math.max(0, (int) Math.floor(minX));
+        int y0 = Math.max(0, (int) Math.floor(minY));
+        int x1 = Math.min(fbW, (int) Math.ceil(maxX));
+        int y1 = Math.min(fbH, (int) Math.ceil(maxY));
+        return new int[] { x0, y0, Math.max(0, x1 - x0), Math.max(0, y1 - y0) };
+    }
+
+    /** Intersect two [x,y,w,h] pixel rects; an empty result has w or h == 0
+     *  (a zero-extent scissor draws nothing -- the correct "clipped out" behaviour). */
+    private static int[] intersectClip(int[] a, int[] b) {
+        int x0 = Math.max(a[0], b[0]);
+        int y0 = Math.max(a[1], b[1]);
+        int x1 = Math.min(a[0] + a[2], b[0] + b[2]);
+        int y1 = Math.min(a[1] + a[3], b[1] + b[3]);
+        return new int[] { x0, y0, Math.max(0, x1 - x0), Math.max(0, y1 - y0) };
     }
 
     /**
@@ -483,30 +584,59 @@ public final class Renderer2D {
 
     /**
      * Note that the next vertices will sample {@code tex}, opening a new draw run
-     * if the current run is already committed to a different texture. Three cases:
-     * no run yet -> start run 0 with tex; current run has no texture yet (only
-     * flat/SDF shapes, which don't sample) -> adopt tex for it; current run
-     * already uses a different texture -> split a new run at the current vertex.
-     * (Same texture again: nothing -- it just keeps batching.)
+     * if the current run is already committed to a different texture. First syncs
+     * the clip ({@link #ensureRun}), so the run we adopt into / split from already
+     * has the active clip. Three cases: current run has no texture yet (only
+     * flat/SDF shapes, which don't sample) -> adopt tex for it; current run already
+     * uses a different texture -> split a new run at the current vertex; same
+     * texture -> keep batching.
      */
     private void useTexture(Texture tex) {
-        if (runCount == 0) {
-            pushRun(0, tex);
-        } else if (runTex[runCount - 1] == null) {
+        ensureRun();
+        if (runTex[runCount - 1] == null) {
             runTex[runCount - 1] = tex;            // adopt: flat shapes share this run
         } else if (runTex[runCount - 1] != tex) {
-            pushRun(vertexCount(), tex);           // switch: new run from here on
+            pushRun(vertexCount(), tex, currentClip);   // switch: new run from here on
         }
     }
 
-    /** Append a run starting at {@code firstVertex} with texture {@code tex}. */
-    private void pushRun(int firstVertex, Texture tex) {
+    /**
+     * Ensure the current run matches the active clip before any vertex is emitted.
+     * Opens run 0 (no texture) if none exists, or -- when the clip changed since the
+     * current run opened (a pushClip/popClip) -- splits a new run at the current
+     * vertex, CARRYING the current run's texture (so an image continuing across a
+     * clip boundary keeps sampling it). Every emit() + useTexture() funnels through
+     * here, so clip changes flush the batch exactly like texture switches.
+     */
+    private void ensureRun() {
+        if (runCount == 0) {
+            pushRun(0, null, currentClip);
+        } else if (!sameClip(runClip[runCount - 1], currentClip)) {
+            pushRun(vertexCount(), runTex[runCount - 1], currentClip);
+        }
+    }
+
+    private static boolean sameClip(int[] a, int[] b) {
+        if (a == b) {
+            return true;   // both null (no clip), or the same array
+        }
+        if (a == null || b == null) {
+            return false;
+        }
+        return a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3];
+    }
+
+    /** Append a run starting at {@code firstVertex} with texture {@code tex} and
+     *  scissor {@code clip} ([x,y,w,h] in framebuffer px, or null = no clip). */
+    private void pushRun(int firstVertex, Texture tex, int[] clip) {
         if (runCount == runFirst.length) {
             runFirst = Arrays.copyOf(runFirst, runFirst.length * 2);
             runTex = Arrays.copyOf(runTex, runTex.length * 2);
+            runClip = Arrays.copyOf(runClip, runClip.length * 2);
         }
         runFirst[runCount] = firstVertex;
         runTex[runCount] = tex;
+        runClip[runCount] = clip;
         runCount++;
     }
 
@@ -758,6 +888,12 @@ public final class Renderer2D {
         return runTex[i];
     }
 
+    /** Scissor clip for run {@code i} as [x,y,w,h] in framebuffer pixels, or null --
+     *  the Renderer sets the full framebuffer for a null (unclipped) run. */
+    int[] runClip(int i) {
+        return runClip[i];
+    }
+
     // ------------------------------------------------------------------
     // internals
     // ------------------------------------------------------------------
@@ -785,11 +921,10 @@ public final class Renderer2D {
     private void emit(float px, float py, float[] c, float localX, float localY,
                       float halfX, float halfY, float cornerRadius,
                       float u, float v, float mode) {
-        // Every shape lives in some run. The first vertex of the frame opens run 0
-        // (texture null -> the white default); image() may later adopt or split it.
-        if (runCount == 0) {
-            pushRun(0, null);
-        }
+        // Every shape lives in some run matching the active clip: open run 0, or
+        // split a new run when a pushClip/popClip changed the clip (ensureRun).
+        // image()/text() already called this via useTexture, so it's a no-op there.
+        ensureRun();
         // Apply the current transform CPU-side, to the POSITION only. The SDF
         // local coord and the uv stay in the shape's own frame: they interpolate
         // relative to the transformed quad (like a UV), so the fragment computes

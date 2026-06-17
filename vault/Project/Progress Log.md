@@ -2,6 +2,13 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-17 — The format keystone: RenderFormats seam 🗝️✅
+- **Batch K -- the unlock** ([[Roadmap|Batch K]]): decouple the attachment formats + sample count that pipelines + render targets BAKE from the swapchain. A behavior-preserving REFACTOR whose value is the SEAM it opens. On branch `feat/format-keystone`.
+- **`RenderFormats(colorFormat, depthFormat, sampleCount)`** -- a small internal record. The Renderer holds one (sourced from the swapchain via `fromSwapchain`, refreshed on swapchain recreation), and EVERY bake site -- `buildShapePipeline`, `buildEffectPipeline`, `createPipeline`, `createRenderTarget` -- now reads from it instead of `swapchain.imageFormat()/depthFormat()/sampleCount()`. (The swapchain render loop itself still reads the swapchain directly -- the keystone is about FORMATS baked, not the present path.)
+- **Why it matters (what it unblocks, all without touching the bake sites again):** **headless** (no swapchain -> supply chosen default formats), **float/HDR targets** (override just the color format), and **per-target pipeline variants** (the 1x-target-on-MSAA case). The three things [[Render to Texture and Offscreen Targets|the RTT note]] + the batch plan flagged as needing the same refactor -- now paid once.
+- **Verified on the 4090:** behavior unchanged (the demo renders identically), validation silent, swapchain recreation still correct (formats refreshed on rebuild). No public API change (jvre still injects formats -- the guarded L1 promise).
+- **Next**: **headless** rides directly on this (a windowless `Device`+`Renderer`; the parked 4d readback folds in), then Batch 5 (float/HDR + N-input channels).
+
 ## 2026-06-17 — Batch 3: text kerning 🔤✅
 - **The cheap, independent half of Batch 3** ([[Roadmap|Batch 3]]): pair-kerning for text, so "AV"/"To"/"Wo" tuck together instead of looking gappy. On branch `feat/text-kerning`.
 - **Precomputed at bake.** `Font.load` builds a kern table (`stbtt_GetCodepointKernAdvance` per glyph pair, scaled to bake-px like `glyph.advance`) WHILE the font info + ttf are alive, so nothing native needs to outlive `load`. A flat `float[RANGE*RANGE]`; `Font.kerning(left,right)` looks it up (0 outside the baked range).

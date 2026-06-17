@@ -64,6 +64,11 @@ public class Renderer {
 
     private final Device device;
     private Swapchain swapchain;
+    // The attachment formats + sample count every pipeline + render target BAKES.
+    // Sourced from the swapchain today (refreshed on recreation); the keystone seam
+    // that a headless renderer / float target will populate differently. See
+    // RenderFormats. Read it -- NOT the swapchain -- at every bake site.
+    private RenderFormats formats;
 
     // The optional fullscreen ShaderEffect: when installed, recordCommandBuffer
     // draws IT instead of the cube demo -- the first content seam in the
@@ -190,6 +195,9 @@ public class Renderer {
         // image format (dynamic rendering's one remaining coupling).
         this.device = new Device(instance, surface, options.preferGpu);
         this.swapchain = new Swapchain(device, surface, window, vsync, msaaRequested);
+        // The formats pipelines + targets bake -- from the swapchain on the window
+        // path (the keystone seam; a headless renderer would set these differently).
+        this.formats = RenderFormats.fromSwapchain(swapchain);
         // The command pool: one-shot transfer command buffers (texture/buffer
         // uploads from createImage / createVertexBuffer / font) record from it, as
         // do the per-frame command buffers. No built-in geometry anymore -- the
@@ -220,7 +228,7 @@ public class Renderer {
             effectPipeline.close();
         }
         effectPipeline = Pipeline.fullscreenEffect(device,
-                swapchain.imageFormat(), swapchain.depthFormat(), swapchain.sampleCount(),
+                formats.colorFormat(), formats.depthFormat(), formats.sampleCount(),
                 Pipeline.readResource(FULLSCREEN_VERT), effect.fragmentSpirv(),
                 "fullscreen + " + effect.name());
     }
@@ -373,8 +381,8 @@ public class Renderer {
     /** {@link #createRenderTarget(int, int)} with an explicit sampling {@link Filter}
      *  (e.g. {@link Filter#NEAREST} for a pixel-perfect upscale source). */
     public RenderTarget createRenderTarget(int width, int height, Filter filter) {
-        return new RenderTarget(device, width, height, swapchain.imageFormat(),
-                swapchain.depthFormat(), swapchain.sampleCount(), filter);
+        return new RenderTarget(device, width, height, formats.colorFormat(),
+                formats.depthFormat(), formats.sampleCount(), filter);
     }
 
     /**
@@ -386,8 +394,8 @@ public class Renderer {
      * would require rebuilding it. A rebuild hook is a later refinement.)
      */
     public Pipeline createPipeline(PipelineSpec spec) {
-        return Pipeline.fromSpec(device, swapchain.imageFormat(), swapchain.depthFormat(),
-                swapchain.sampleCount(), spec, MAX_FRAMES_IN_FLIGHT);
+        return Pipeline.fromSpec(device, formats.colorFormat(), formats.depthFormat(),
+                formats.sampleCount(), spec, MAX_FRAMES_IN_FLIGHT);
     }
 
     /**
@@ -438,8 +446,8 @@ public class Renderer {
         if (shapePipeline != null) {
             shapePipeline.close();
         }
-        shapePipeline = Pipeline.shapes2D(device, swapchain.imageFormat(),
-                swapchain.depthFormat(), swapchain.sampleCount(), SHAPE2D_VERT, SHAPE2D_FRAG);
+        shapePipeline = Pipeline.shapes2D(device, formats.colorFormat(),
+                formats.depthFormat(), formats.sampleCount(), SHAPE2D_VERT, SHAPE2D_FRAG);
     }
 
     /** True when the L2 surface exists and the user drew at least one shape this frame. */
@@ -1410,6 +1418,7 @@ public class Renderer {
         // pool and per-frame sync objects survive untouched.
         swapchain = new Swapchain(device, surface, window, vsync, msaaRequested);
         createRenderFinishedSemaphores();
+        this.formats = RenderFormats.fromSwapchain(swapchain);   // refresh the bake source
 
         // Pipelines bake the attachment FORMAT (not the extent -- viewport is
         // dynamic), and the rebuilt swapchain renegotiated it. Same format (the

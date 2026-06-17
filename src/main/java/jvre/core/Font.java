@@ -61,21 +61,30 @@ public final class Font {
         float advance;          // how far to move the pen after this glyph
     }
 
+    private static final int RANGE = LAST_CHAR - FIRST_CHAR + 1;   // baked codepoint count
+
     private final Texture atlas;
     private final float bakeHeight;   // the pixel height glyphs were baked at
     private final float ascent;       // baseline offset from the top, px @ bake size
     private final float descent;      // px @ bake size (negative)
     private final float lineGap;      // px @ bake size
     private final Glyph[] glyphs;     // indexed by codepoint - FIRST_CHAR
+    // Kerning: per glyph-PAIR spacing adjustment, in px @ bake size, indexed
+    // [(left-FIRST)*RANGE + (right-FIRST)]. Precomputed at bake (so the font info +
+    // ttf buffer needn't outlive load); usually negative (pull pairs like "AV"
+    // together). From stb_truetype's legacy 'kern' table -- fonts that kern only via
+    // GPOS yield zeros (a text-shaping engine is out of scope).
+    private final float[] kern;
 
     private Font(Texture atlas, float bakeHeight, float ascent, float descent,
-                 float lineGap, Glyph[] glyphs) {
+                 float lineGap, Glyph[] glyphs, float[] kern) {
         this.atlas = atlas;
         this.bakeHeight = bakeHeight;
         this.ascent = ascent;
         this.descent = descent;
         this.lineGap = lineGap;
         this.glyphs = glyphs;
+        this.kern = kern;
     }
 
     /**
@@ -177,10 +186,25 @@ public final class Font {
             System.arraycopy(atlasPixels, 0, trimmed, 0, trimmed.length);
             Texture atlas = Texture.createSdfAtlas(device, commandPool, trimmed, ATLAS_WIDTH, usedHeight);
 
+            // Precompute the kern table (font info is alive here; the ttf is freed
+            // below). stb reads the legacy 'kern' table -> font units, scaled to
+            // bake-px like glyph.advance. Count non-zero pairs for diagnostics.
+            float[] kern = new float[RANGE * RANGE];
+            int kernPairs = 0;
+            for (int c1 = FIRST_CHAR; c1 <= LAST_CHAR; c1++) {
+                for (int c2 = FIRST_CHAR; c2 <= LAST_CHAR; c2++) {
+                    int k = stbtt_GetCodepointKernAdvance(info, c1, c2);
+                    if (k != 0) {
+                        kern[(c1 - FIRST_CHAR) * RANGE + (c2 - FIRST_CHAR)] = k * scale;
+                        kernPairs++;
+                    }
+                }
+            }
+
             System.out.println("Font baked: " + resourcePath + " @ " + (int) pixelHeight
                     + "px -> " + ATLAS_WIDTH + "x" + usedHeight + " SDF atlas ("
-                    + (LAST_CHAR - FIRST_CHAR + 1) + " glyphs).");
-            return new Font(atlas, pixelHeight, ascent, descent, lineGap, glyphs);
+                    + RANGE + " glyphs, " + kernPairs + " kerning pairs).");
+            return new Font(atlas, pixelHeight, ascent, descent, lineGap, glyphs, kern);
         } finally {
             memFree(ttf);
         }
@@ -214,6 +238,16 @@ public final class Font {
      *  descent is negative, so this is the full line height). */
     float lineHeight() {
         return ascent - descent + lineGap;
+    }
+
+    /** Kerning adjustment between {@code left} and {@code right}, in px @ bake size
+     *  (scale it by {@link #scaleFor} like an advance). 0 if either is outside the
+     *  baked range or the font carries no kern pair for them. */
+    float kerning(char left, char right) {
+        if (left < FIRST_CHAR || left > LAST_CHAR || right < FIRST_CHAR || right > LAST_CHAR) {
+            return 0f;
+        }
+        return kern[(left - FIRST_CHAR) * RANGE + (right - FIRST_CHAR)];
     }
 
     /** Glyph for {@code c}, or null if outside the baked range (caller skips it). */

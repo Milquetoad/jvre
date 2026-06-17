@@ -497,14 +497,19 @@ public final class Renderer2D {
         float startX = x;
         float penX = x;
         float baseline = y + font.ascent() * scale;   // (x, y) is the TOP-left; drop to the baseline
+        char prev = 0;                                  // previous glyph, for kerning (0 = none / line start)
 
         for (int i = 0; i < s.length(); i++) {
             char ch = s.charAt(i);
             if (ch == '\n') {
                 penX = startX;
                 baseline += font.lineHeight() * scale;
+                prev = 0;                               // no kerning across a line break
                 continue;
             }
+            // Kerning: nudge the pen by the prev->ch pair spacing before placing ch.
+            penX += font.kerning(prev, ch) * scale;
+            prev = ch;
             Font.Glyph g = font.glyph(ch);
             if (g == null) {
                 Font.Glyph space = font.glyph(' ');
@@ -544,13 +549,17 @@ public final class Renderer2D {
         float scale = font.scaleFor(size);
         float widest = 0f;
         float line = 0f;
+        char prev = 0;
         for (int i = 0; i < s.length(); i++) {
             char ch = s.charAt(i);
             if (ch == '\n') {
                 widest = Math.max(widest, line);
                 line = 0f;
+                prev = 0;
                 continue;
             }
+            line += font.kerning(prev, ch) * scale;   // mirror text()'s kerning
+            prev = ch;
             Font.Glyph gl = font.glyph(ch);
             if (gl == null) {
                 Font.Glyph space = font.glyph(' ');

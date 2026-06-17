@@ -491,6 +491,10 @@ public class Main {
         // 4b: a line drawn with a font from renderer.loadFont (the custom-font path).
         g.text(customFont, "loadFont(): your own TTF", 40, 556, 22, Color.rgb(20, 20, 20));
 
+        // Batch 3: kerning -- pairs like AV / To / Wo / Ya / LY tuck together
+        // (DejaVu carries ~220 kern pairs; the pen is nudged per pair).
+        g.text("kerning: AVA To Wo Ya We LY P.", 40, 582, 17, Color.rgb(20, 20, 20));
+
         // 4c: RECT CLIP -- subsequent drawing restricted to a box (pushClip/popClip).
         // The grey outline shows the bounds; the circle slides through, clipped at
         // every edge, and the tall label is clipped top/bottom. The clip is mapped

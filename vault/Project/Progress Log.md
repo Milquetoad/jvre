@@ -2,6 +2,15 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-17 — Batch 3: text kerning 🔤✅
+- **The cheap, independent half of Batch 3** ([[Roadmap|Batch 3]]): pair-kerning for text, so "AV"/"To"/"Wo" tuck together instead of looking gappy. On branch `feat/text-kerning`.
+- **Precomputed at bake.** `Font.load` builds a kern table (`stbtt_GetCodepointKernAdvance` per glyph pair, scaled to bake-px like `glyph.advance`) WHILE the font info + ttf are alive, so nothing native needs to outlive `load`. A flat `float[RANGE*RANGE]`; `Font.kerning(left,right)` looks it up (0 outside the baked range).
+- **Applied in layout.** `Renderer2D.text()` tracks the previous glyph and nudges the pen by `kerning(prev,ch) * scaleFor(size)` before each glyph (reset across `'\n'`); `textWidth()` mirrors it so measurement matches the drawn width.
+- **The stb limitation, surfaced + checked:** `stbtt_GetCodepointKernAdvance` reads only the LEGACY `'kern'` table, not GPOS (a GPOS shaper = HarfBuzz territory, out of scope). Added a diagnostic to the bake line -- and DejaVu Sans turns out to carry **220 kern pairs** in the ASCII range, so it actually kerns. Fonts that kern only via GPOS would yield 0 pairs (documented).
+- **Verified on the 4090:** "220 kerning pairs" logged, validation silent, clean run. Demo: a "kerning: AVA To Wo Ya We LY P." line. Docs: a kerning note in [[2d-graphics|the 2D guide]]'s Text section.
+- **MSDF** (the other half of Batch 3) stays a separate **spike** -- it needs an offline atlas generator (no LWJGL MSDF binding); not started.
+- **Next**: the format keystone -> headless (the parked 4d readback folds in) + Batch 5, or Batch 4 (shader workflow).
+
 ## 2026-06-17 — Batch 2: sampler / texture completeness 🎚️✅
 - **The catalogued "sampler config," delivered** ([[Roadmap|Batch 2]]): wrap modes + mipmaps + anisotropy. On branch `feat/sampler-completeness`.
 - **`TextureOptions` (the API shape):** four sampler knobs (filter, wrap, mipmaps, anisotropy) is too many for overload-explosion, so a small builder bundles them -- the extensible config object. The plain `createImage`/`loadImage` (no options, or a bare `Filter`) keep their intent defaults; pass `TextureOptions` for more. Threaded through `Texture` (create/load/upload/createViewAndSampler, renderTarget, createSdfAtlas) + new `Renderer` overloads.

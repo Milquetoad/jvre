@@ -111,6 +111,7 @@ public class RenderTarget {
     public int height()      { return height; }
     int sampleCount()        { return sampleCount; }
     int depthFormat()        { return depthFormat; }
+    int colorFormat()        { return color.format(); }   // the (possibly HDR) attachment format a pipeline bakes
 
     // The handles the render loop binds as attachments / transitions with barriers.
     long colorImage()     { return color.image(); }   // single-sample; SHADER_READ barrier target

@@ -201,6 +201,15 @@ tasks.register('runHeadless', JavaExec) {
     classpath = sourceSets.main.runtimeClasspath + configurations.nativesRuntime
 }
 
+// Run the HDR demo (jvre.demo.HdrDemo) -- a float render target + tone-mapping.
+tasks.register('runHdr', JavaExec) {
+    description = 'Runs the HDR/float render-target demo (jvre.demo.HdrDemo)'
+    group = 'application'
+    dependsOn 'classes', 'compileShaders', 'processResources'
+    mainClass = 'jvre.demo.HdrDemo'
+    classpath = sourceSets.main.runtimeClasspath + configurations.nativesRuntime
+}
+
 // Treat the generated .spv files as ordinary resources, built before them.
 sourceSets.main.resources.srcDir(shaderOutDir)
 tasks.named('processResources') { dependsOn 'compileShaders' }

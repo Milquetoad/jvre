@@ -44,6 +44,7 @@ and may change freely.
 | `Cull`, `Stage` | fixed-function + shader-stage enums |
 | `SceneRenderer`, `FrameRenderer` | record draws against a jvre-owned facade |
 | `Camera` | Vulkan-correct view + projection matrices |
+| `TargetFormat` | a render target's colour format — `DEFAULT` (LDR) or `HDR` (float); for `createRenderTarget` + `createPipeline(spec, target)` |
 | `Device` | the raw-Vulkan escape: exposes `VkPhysicalDevice` / `VkDevice` / `VkQueue` for anything jvre doesn't yet wrap |
 
 ## Handles (opaque — you hold them, jvre makes them)

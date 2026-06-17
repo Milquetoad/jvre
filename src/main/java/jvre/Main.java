@@ -5,6 +5,7 @@ import jvre.core.Buffer;
 import jvre.core.Camera;
 import jvre.core.Color;
 import jvre.core.Cull;
+import jvre.core.CursorShape;
 import jvre.core.Diagnostics;
 import jvre.core.Font;
 import jvre.core.Input;
@@ -87,6 +88,7 @@ public class Main {
     private float cursorSize = 48;   // the interactive cursor box; scroll resizes it
     private float spin = 0f;          // accumulated rotation, integrated from dt()
     private final StringBuilder typed = new StringBuilder();   // the demo text field's contents
+    private String lastDropped = "";   // Batch 1: names of the last files dropped on the window
     private Texture demoImage;    // a generated texture drawn via g.image(), when DEMO_2D
     private Texture demoImage2;   // a SECOND texture -- proves multi-texture batching (flush-on-switch)
     private Font customFont;      // a font loaded via the public renderer.loadFont (DEMO_2D)
@@ -365,6 +367,8 @@ public class Main {
             long n = System.nanoTime();
             if (n - fpsLastNanos >= 1_000_000_000L) {
                 System.out.println("FPS: " + fpsFrames + (VSYNC ? " (vsync)" : " (uncapped)"));
+                // Batch 1: live window title (runtime setTitle).
+                window.setTitle(TITLE + "  |  " + fpsFrames + " FPS");
                 fpsFrames = 0;
                 fpsLastNanos = n;
             }
@@ -446,7 +450,33 @@ public class Main {
         if (in.keyPressed(Key.ESCAPE)) {
             typed.setLength(0);
         }
-        g.text("type: " + typed + "_", 280, 470, 20, Color.rgb(20, 20, 20));
+        // Batch 1: clipboard -- Ctrl+C copies the field, Ctrl+V pastes into it.
+        boolean ctrl = in.keyDown(Key.LEFT_CONTROL) || in.keyDown(Key.RIGHT_CONTROL);
+        if (ctrl && in.keyPressed(Key.C)) {
+            window.setClipboard(typed.toString());
+        }
+        if (ctrl && in.keyPressed(Key.V)) {
+            String clip = window.clipboard();
+            if (clip != null) {
+                typed.append(clip);
+            }
+        }
+        g.text("type: " + typed + "_  (Ctrl+C/V)", 280, 470, 20, Color.rgb(20, 20, 20));
+
+        // Batch 1: file drop -- remember the names dropped this frame, and show them.
+        String[] drops = in.droppedFiles();
+        if (drops.length > 0) {
+            StringBuilder sb = new StringBuilder();
+            for (String d : drops) {
+                sb.append(new java.io.File(d).getName()).append("  ");
+            }
+            lastDropped = sb.toString().trim();
+        }
+        g.text("drop files here -> " + (lastDropped.isEmpty() ? "(none yet)" : lastDropped),
+                280, 500, 14, Color.rgb(70, 70, 70));
+        // Batch 1: HiDPI content scale, for clarity (L2 already draws in framebuffer px).
+        g.text(String.format("content scale: %.2fx", window.contentScaleX()),
+                280, 522, 13, Color.rgb(110, 110, 110));
 
         // 4b: a line drawn with a font from renderer.loadFont (the custom-font path).
         g.text(customFont, "loadFont(): your own TTF", 40, 556, 22, Color.rgb(20, 20, 20));
@@ -475,6 +505,18 @@ public class Main {
         float half = cursorSize * 0.5f;
         g.fillRoundedRect(in.mouseX() / s - half, in.mouseY() / s - half,
                 cursorSize, cursorSize, 10, box);
+
+        // Batch 1: standard OS cursor shapes by hover region -- an I-beam over the
+        // text field, a hand over the clip "window", an arrow elsewhere. (Mouse in
+        // real pixels -> reference space by dividing by the scale s.)
+        float mx = in.mouseX() / s, my = in.mouseY() / s;
+        if (mx >= 280 && mx <= 520 && my >= 452 && my <= 478) {
+            window.setCursor(CursorShape.IBEAM);
+        } else if (mx >= clipX && mx <= clipX + clipW && my >= clipY && my <= clipY + clipH) {
+            window.setCursor(CursorShape.HAND);
+        } else {
+            window.setCursor(CursorShape.ARROW);
+        }
 
         g.pop();
         g.end();

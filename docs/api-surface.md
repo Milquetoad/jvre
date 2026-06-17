@@ -63,6 +63,7 @@ the screen, then sample back: `target.texture()` (the result, a `Texture`),
 |---|---|
 | `Diagnostics` | the crash-log / environment-fingerprint helper |
 | `Input`, `Key`, `MouseButton` | the per-frame input snapshot + its enums |
+| `CursorShape` | standard OS cursor shapes for `Window.setCursor` |
 
 ---
 

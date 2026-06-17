@@ -2,11 +2,14 @@ package jvre.core;
 
 import org.lwjgl.glfw.GLFWErrorCallback;
 import org.lwjgl.glfw.GLFWFramebufferSizeCallback;
+import org.lwjgl.system.MemoryStack;
 
 import java.nio.DoubleBuffer;
+import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 
 import static org.lwjgl.glfw.GLFW.*;
+import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.NULL;
 
 /**
@@ -36,6 +39,11 @@ public class Window {
     // and mid-callback is no place to rebuild a swapchain -- the render loop
     // picks it up at a safe point in its own frame.
     private boolean framebufferResized = false;
+
+    // Standard cursors are created lazily and CACHED (creating a fresh one per
+    // setCursor() call would leak). Indexed by CursorShape.ordinal(); 0 = not yet
+    // created. Destroyed at close (before glfwTerminate, which would free them too).
+    private final long[] cursors = new long[CursorShape.values().length];
 
     public Window(int width, int height, CharSequence title) {
         // GLFW reports errors through a callback, not return codes -- without one
@@ -77,6 +85,65 @@ public class Window {
         return glfwWindowShouldClose(handle);
     }
 
+    /** Change the window's title bar text at runtime (e.g. a document name or a
+     *  live FPS readout). */
+    public void setTitle(CharSequence title) {
+        glfwSetWindowTitle(handle, title);
+    }
+
+    /** Set the mouse cursor to a standard {@link CursorShape} (e.g. an I-beam over a
+     *  text field). The standard cursor is created once and cached. */
+    public void setCursor(CursorShape shape) {
+        int i = shape.ordinal();
+        if (cursors[i] == NULL) {
+            cursors[i] = glfwCreateStandardCursor(shape.glfw);
+        }
+        glfwSetCursor(handle, cursors[i]);
+    }
+
+    /** The system clipboard's text, or {@code null} if it holds no convertible text.
+     *  (For a paste action.) */
+    public String clipboard() {
+        return glfwGetClipboardString(handle);
+    }
+
+    /** Set the system clipboard's text (for a copy action). */
+    public void setClipboard(CharSequence text) {
+        glfwSetClipboardString(handle, text);
+    }
+
+    /**
+     * The DPI content scale (framebuffer pixels per window coordinate) -- e.g. 2.0
+     * on a typical "retina" / 200%-scaled display, 1.0 on a standard one. The X
+     * axis; see {@link #contentScaleY()}. jvre's L2 already works in framebuffer
+     * PIXELS (so drawing is DPI-correct automatically); this is for apps that also
+     * need the factor (e.g. to size text in points, or convert window coords).
+     */
+    public float contentScaleX() {
+        return contentScale(true);
+    }
+
+    /** The DPI content scale on the Y axis (see {@link #contentScaleX()}). */
+    public float contentScaleY() {
+        return contentScale(false);
+    }
+
+    private float contentScale(boolean x) {
+        try (MemoryStack stack = stackPush()) {
+            FloatBuffer sx = stack.mallocFloat(1);
+            FloatBuffer sy = stack.mallocFloat(1);
+            glfwGetWindowContentScale(handle, sx, sy);
+            return (x ? sx : sy).get(0);
+        }
+    }
+
+    /** Current window size in SCREEN COORDINATES (not pixels), written into w/h --
+     *  the complement of {@link #framebufferSize} (pixels). They differ by the
+     *  {@linkplain #contentScaleX() content scale} on high-DPI displays. */
+    public void windowSize(IntBuffer w, IntBuffer h) {
+        glfwGetWindowSize(handle, w, h);
+    }
+
     public void pollEvents() {
         // Bracket the GLFW dispatch: clear this frame's edges/scroll, let GLFW
         // fire the callbacks, then snapshot the cursor. Input is fresh afterward
@@ -116,6 +183,13 @@ public class Window {
 
     /** Destroy the window and shut GLFW down. */
     public void close() {
+        // Destroy the cached standard cursors before terminating (glfwTerminate
+        // would free them anyway, but tidy ownership is clearer).
+        for (long cursor : cursors) {
+            if (cursor != NULL) {
+                glfwDestroyCursor(cursor);
+            }
+        }
         glfwDestroyWindow(handle);  // also detaches per-window callbacks
         glfwTerminate();
         // Detach before freeing so GLFW can't call into freed memory.

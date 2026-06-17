@@ -2,6 +2,14 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-17 — Batch 1: OS / window surface features 🪟✅
+- **First of the [[Roadmap|2026-06-17 feature batches]]:** five small, independent, GLFW-backed window/input features -- chosen first because they're cheap, low-risk, and touch no rendering core. On branch `feat/window-os-features` (off `main`).
+- **`Window`:** `setTitle` (runtime title), `setCursor(CursorShape)` (standard OS cursors -- ARROW/IBEAM/CROSSHAIR/HAND/RESIZE_H/V, lazily created + cached, destroyed at close), `clipboard()` / `setClipboard()` (system clipboard get/set), `contentScaleX()`/`contentScaleY()` (the DPI factor) + `windowSize()` (screen coords, complementing `framebufferSize` px). New public `CursorShape` enum (house style, like `Key`/`Filter`).
+- **`Input`:** `droppedFiles()` -- file paths dropped on the window this frame (a `GLFWDropCallback`, accumulated + cleared per frame, same model as typed text / edges).
+- **HiDPI clarity (not new code, the *story*):** jvre's L2 space is already framebuffer PIXELS, so drawing + `mouseX()` are DPI-correct automatically; `contentScale` is exposed only for apps that need the factor. Documented framebuffer-px vs window-coords in [[2d-graphics|the 2D guide]].
+- **Verified on the 4090:** `setTitle` auto-checked live (the window title reads "...| 60 FPS"), validation silent, clean compile/run. The interactive four (cursor-by-hover, Ctrl+C/V clipboard, file drop, content-scale label) demoed in `Main` for an owner spot-check. Docs: api-surface (`CursorShape`) + a "Window and OS integration" section in the 2D guide.
+- **Next**: Batch 2 (sampler/texture completeness) + Batch 3-kerning, then the format keystone + headless + Batch 5.
+
 ## 2026-06-17 — Rect/scissor clip (L2) ✂️✅
 - **[[Roadmap|4c]]:** `g.pushClip(x,y,w,h)` / `g.popClip()` -- restrict L2 drawing to a rectangle (scroll views, UI panels, masked regions). A clip stack alongside the transform stack, driven by the **dynamic scissor** the pipeline already enables (`vkCmdSetScissor`). On branch `feat/rect-clip`.
 - **Mechanism = a new run boundary.** The existing batch already splits into draw RUNS at texture switches; a clip change now opens a run too. Generalized a run to carry `(firstVertex, texture, clip)`; a shared `ensureRun()` (called by both `emit()` and `useTexture()`) splits a new run -- carrying the current texture -- whenever the active clip changed, so clip changes flush exactly like texture switches. `recordShapeDraws` sets `vkCmdSetScissor` per run (full framebuffer for an unclipped/null run), and skips fully-clipped-out (empty) runs.

@@ -252,6 +252,37 @@ press; "is the player holding W" is a `keyDown`. Use `typedChars()` (not raw key
 codes) to accumulate typed text — it already applies the keyboard layout, shift,
 and auto-repeat.
 
+**Dropped files** arrive on the same per-frame snapshot — drag files onto the
+window and read their paths:
+
+```java
+for (String path : in.droppedFiles()) {   // empty unless files were dropped this frame
+    // e.g. renderer.loadImage(path) or open a document
+}
+```
+
+## Window and OS integration
+
+The `Window` exposes the rest of the OS surface:
+
+```java
+window.setTitle("My App — " + fps + " FPS");   // runtime title (e.g. a live readout)
+
+window.setCursor(CursorShape.IBEAM);           // ARROW, IBEAM, CROSSHAIR, HAND, RESIZE_H/V
+                                               // (set it per hover region each frame)
+
+window.setClipboard("copied text");            // copy
+String pasted = window.clipboard();            // paste (null if the clipboard has no text)
+
+float scale = window.contentScaleX();          // DPI factor (e.g. 2.0 at 200% scaling)
+```
+
+On **HiDPI**: jvre's 2D space is in **framebuffer pixels**, so drawing and
+`input.mouseX()` are already DPI-correct — you don't multiply by the scale. The
+`contentScale` factor is there only if you need it (sizing in points, or converting
+window coordinates). `window.framebufferSize(...)` is pixels; `window.windowSize(...)`
+is screen coordinates; they differ by `contentScale` on scaled displays.
+
 ## Time and animation
 
 The renderer tracks frame time for you:

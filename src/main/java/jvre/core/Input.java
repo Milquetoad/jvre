@@ -1,6 +1,7 @@
 package jvre.core;
 
 import org.lwjgl.glfw.GLFWCharCallback;
+import org.lwjgl.glfw.GLFWDropCallback;
 import org.lwjgl.glfw.GLFWKeyCallback;
 import org.lwjgl.glfw.GLFWMouseButtonCallback;
 import org.lwjgl.glfw.GLFWScrollCallback;
@@ -8,6 +9,8 @@ import org.lwjgl.system.MemoryStack;
 
 import java.nio.DoubleBuffer;
 import java.nio.IntBuffer;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.lwjgl.glfw.GLFW.*;
 import static org.lwjgl.system.MemoryStack.stackPush;
@@ -70,12 +73,18 @@ public final class Input {
     private final boolean[] keyWentUp = new boolean[KEY_COUNT];
     private final StringBuilder typed = new StringBuilder();
 
+    // Files dropped onto the window THIS frame (their paths), accumulated by the
+    // drop callback and cleared each newFrame -- the same per-frame model as typed
+    // text and the edge flags.
+    private final List<String> dropped = new ArrayList<>();
+
     // Kept as fields so they can be freed at shutdown (off-heap native callbacks),
     // the same pattern as Window's resize callback.
     private final GLFWMouseButtonCallback mouseButtonCallback;
     private final GLFWScrollCallback scrollCallback;
     private final GLFWKeyCallback keyCallback;
     private final GLFWCharCallback charCallback;
+    private final GLFWDropCallback dropCallback;
 
     Input(long window) {
         this.window = window;
@@ -121,6 +130,16 @@ public final class Input {
         // OS auto-repeat included) -- the correct source for text fields.
         charCallback = GLFWCharCallback.create((win, codepoint) -> typed.appendCodePoint(codepoint));
         glfwSetCharCallback(window, charCallback);
+
+        // Drag-and-drop: GLFW fires once with a native array of dropped file paths.
+        // GLFWDropCallback.getName extracts each as a String; we accumulate them for
+        // this frame (cleared in newFrame).
+        dropCallback = GLFWDropCallback.create((win, count, names) -> {
+            for (int i = 0; i < count; i++) {
+                dropped.add(GLFWDropCallback.getName(names, i));
+            }
+        });
+        glfwSetDropCallback(window, dropCallback);
     }
 
     // ---- frame lifecycle (driven by Window.pollEvents) ----------------------
@@ -138,6 +157,7 @@ public final class Input {
         scrollX = 0;
         scrollY = 0;
         typed.setLength(0);
+        dropped.clear();
     }
 
     /** Snapshot the cursor (window coords -> framebuffer pixels) AFTER events are
@@ -220,11 +240,18 @@ public final class Input {
         return typed.toString();
     }
 
+    /** The file paths dropped onto the window THIS frame (empty if none). For a
+     *  drag-and-drop "open file" / asset-drop interaction. */
+    public String[] droppedFiles() {
+        return dropped.toArray(new String[0]);
+    }
+
     /** Free the native callbacks (the window's destroy already detached them). */
     void free() {
         mouseButtonCallback.free();
         scrollCallback.free();
         keyCallback.free();
         charCallback.free();
+        dropCallback.free();
     }
 }

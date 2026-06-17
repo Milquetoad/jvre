@@ -6,6 +6,7 @@ import jvre.core.Camera;
 import jvre.core.Color;
 import jvre.core.Cull;
 import jvre.core.Diagnostics;
+import jvre.core.Font;
 import jvre.core.Input;
 import jvre.core.Instance;
 import jvre.core.Key;
@@ -88,6 +89,7 @@ public class Main {
     private final StringBuilder typed = new StringBuilder();   // the demo text field's contents
     private Texture demoImage;    // a generated texture drawn via g.image(), when DEMO_2D
     private Texture demoImage2;   // a SECOND texture -- proves multi-texture batching (flush-on-switch)
+    private Font customFont;      // a font loaded via the public renderer.loadFont (DEMO_2D)
     private Pipeline cubePipeline; // a USER-DEFINED pipeline (the L1 escape hatch)
     private Buffer cubeVerts;      // its vertex geometry (an indexed, textured cube)
     private Buffer cubeIndices;    // its UINT16 indices
@@ -181,6 +183,11 @@ public class Main {
             // Bake the default font now (at startup) rather than lazily on the
             // first text() call mid-loop -- avoids a one-time hitch in frame 1.
             renderer.font();
+            // A CUSTOM font via the public loadFont path (4b) -- caller-owned, baked
+            // at 64px. We reuse the bundled DejaVu TTF (shipping a second typeface is
+            // a licensing matter), but ANY .ttf on the classpath loads identically;
+            // this exercises loadFont -> text(Font, ...) -> close().
+            customFont = renderer.loadFont("/fonts/DejaVuSans.ttf", 64f);
         }
 
         // The L1 escape-hatch DOGFOOD: reproduce jvre's own textured 3D cube using
@@ -441,6 +448,9 @@ public class Main {
         }
         g.text("type: " + typed + "_", 280, 470, 20, Color.rgb(20, 20, 20));
 
+        // 4b: a line drawn with a font from renderer.loadFont (the custom-font path).
+        g.text(customFont, "loadFont(): your own TTF", 40, 556, 22, Color.rgb(20, 20, 20));
+
         // ... and a box tracking the cursor (red while held, scroll resizes it).
         // The mouse is in real pixels; divide by s to place it in our scaled space.
         cursorSize = Math.max(12f, Math.min(160f, cursorSize + in.scrollY() * 6f));
@@ -462,6 +472,10 @@ public class Main {
         }
         if (demoImage2 != null) {
             demoImage2.close();
+        }
+        // Caller-owned custom font (close before the renderer, like the images).
+        if (customFont != null) {
+            customFont.close();
         }
         // Caller-owned offscreen targets (free their own images; before the
         // renderer). The canvas's Renderer2D is renderer-owned -- only the target

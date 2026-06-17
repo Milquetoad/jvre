@@ -224,9 +224,14 @@ public final class Font {
         return glyphs[c - FIRST_CHAR];
     }
 
-    /** Free the atlas texture. Package-private: the default font is renderer-owned
-     *  (closed by the Renderer); a public custom-font API will come later. */
-    void close() {
+    /**
+     * Free the atlas texture. Public because a font from {@link
+     * Renderer#loadFont} is CALLER-OWNED -- close it before the Renderer (it frees
+     * VMA memory the device owns), exactly like a {@link Texture} from {@code
+     * loadImage}. Do NOT close the built-in {@link Renderer#font()} -- that one is
+     * renderer-owned (closed by the Renderer).
+     */
+    public void close() {
         atlas.close();
     }
 

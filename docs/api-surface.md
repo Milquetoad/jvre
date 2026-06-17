@@ -46,9 +46,9 @@ and may change freely.
 
 ## Handles (opaque — you hold them, jvre makes them)
 Created via the `Renderer` (`createPipeline`, `createVertexBuffer`,
-`createIndexBuffer`, `createImage`, `loadImage`, `font`, `createRenderTarget`); the
-only method you call on them directly is `close()` (plus `Texture.width()` /
-`height()`):
+`createIndexBuffer`, `createImage`, `loadImage`, `font`, `loadFont`,
+`createRenderTarget`); the only method you call on them directly is `close()` (plus
+`Texture.width()` / `height()`):
 
 `Pipeline`, `Buffer`, `Texture`, `Font`, `RenderTarget`
 
@@ -68,7 +68,7 @@ the screen, then sample back: `target.texture()` (the result, a `Texture`),
 
 **Internal (not public API):** `Vk`, `Commands`, `Swapchain`, and the
 implementation methods of the handle types are package-private — reachable only
-within `jvre.core`. Render-to-texture / offscreen targets **landed** as the
-deliberate `RenderTarget` public API (above); custom-font loading and raw resource
-creation with custom flags will arrive the same way when those features land,
-rather than by leaking internals.
+within `jvre.core`. Render-to-texture / offscreen targets (the `RenderTarget` API)
+and custom-font loading (`Renderer.loadFont` + a public `Font.close()`) **landed**
+as deliberate additive public API; raw resource creation with custom flags will
+arrive the same way when that feature lands, rather than by leaking internals.

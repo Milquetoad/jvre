@@ -2,6 +2,14 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-17 — Public TTF font loading (`loadFont`) 🔤✅
+- **[[Roadmap|4b]]:** a sanctioned custom-font API so users aren't stuck with the built-in DejaVu. `renderer.loadFont(resourcePath)` / `loadFont(resourcePath, pixelHeight)` -> a `Font`, the mirror of `loadImage`. Small + additive: the SDF bake (`Font.load`, stb_truetype) and the public `Renderer2D.text(Font, ...)` already existed -- this just gave `Font` a public *creation* path. On branch `feat/public-font-loading`.
+- **Ownership:** a loaded font is **caller-owned** -> `Font.close()` promoted package-private -> **public** (frees the atlas; close before the Renderer, like a `loadImage` Texture). The built-in `renderer.font()` stays renderer-owned (don't close it) -- documented on both.
+- **Parity:** added `Renderer2D.lineHeight(Font, float)` to match the existing `textWidth(Font, ...)`, so a custom-font user can measure line spacing too. Factored the default-font `lineHeight(float)` through it.
+- **Why this was cheap:** the API audit (2026-06-16) had *deliberately* kept `Font` an opaque handle with `load`/`close` package-private, noting "a public custom-font API will come later." Tighten-now-widen-later paid off exactly as predicted -- widening was purely additive.
+- **Verified on the 4090:** two SDF bakes logged (built-in 48px + the custom 64px via `loadFont`), the custom-font line renders, **validation silent**, clean teardown (the caller-owned `close()` ran). Demo reuses the bundled DejaVu TTF (shipping a 2nd typeface is a licensing matter; any `.ttf` loads identically). Docs: a `loadFont` section in [[2d-graphics|the 2D guide]] + `api-surface.md`.
+- **Next**: [[Roadmap|4c]] -- rect/scissor clip (L2), the dynamic-scissor clip stack.
+
 ## 2026-06-16 — Render-to-texture: offscreen targets (Phase 4 begins) 🎯✅
 - **The first post-1.0 power-axis milestone ([[Roadmap|4a]]):** render into an image instead of the swapchain, then sample it back. The FOUNDATION for readback, post-processing, minimaps. Full write-up: [[Render to Texture and Offscreen Targets]]. On branch `feat/render-to-texture` (push/merge pending owner approval).
 - **`RenderTarget`** -- an offscreen color image (`COLOR_ATTACHMENT | SAMPLED`) + optional MSAA color + matching depth. The key idea: *an offscreen target is the swapchain minus the surface.* The polish decision that simplified everything -- it **matches the swapchain's format/depth/sample count**, so every already-baked pipeline renders into it unchanged, and it **inherits the renderer's MSAA** (render N-sample -> resolve into the 1-sample sampleable image). It *is-a* `Texture` (`target.texture()`), so `g.image(...)` + custom pipelines consume it free.

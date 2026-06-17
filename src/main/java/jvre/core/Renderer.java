@@ -304,17 +304,45 @@ public class Renderer {
         return Texture.load(device, commandPool, resourcePath, filter);
     }
 
+    /** The bake height for the built-in font + {@link #loadFont(String)} -- one
+     *  atlas size renders crisp at any text size (the SDF scales for free). */
+    private static final float DEFAULT_FONT_SIZE = 48f;
+
     /**
      * The built-in default font (DejaVu Sans), baked to an SDF atlas on first use.
-     * What {@link Renderer2D#text} draws with. Renderer-owned (lives as long as
-     * the device); loading custom fonts is a later convenience that will funnel
-     * through the same {@link Font#load}.
+     * What {@link Renderer2D#text} draws with. Renderer-owned (lives as long as the
+     * device -- do NOT close it). To use your own TTF instead, see {@link #loadFont}.
      */
     public Font font() {
         if (defaultFont == null) {
-            defaultFont = Font.load(device, commandPool, "/fonts/DejaVuSans.ttf", 48f);
+            defaultFont = Font.load(device, commandPool, "/fonts/DejaVuSans.ttf", DEFAULT_FONT_SIZE);
         }
         return defaultFont;
+    }
+
+    /**
+     * Load a custom TTF font FILE from the classpath ({@code resourcePath}, e.g.
+     * {@code "/fonts/Inter.ttf"}) and bake its SDF glyph atlas -- so you aren't
+     * limited to the built-in DejaVu Sans. Draw with it via {@link
+     * Renderer2D#text(Font, String, float, float, float, Color)}. The mirror of
+     * {@link #loadImage} for fonts (stb_truetype does the rasterization).
+     *
+     * <p>One bake size serves every render size (the SDF scales), so this uses a
+     * sensible default height; see {@link #loadFont(String, float)} to choose it.
+     * <b>Caller-owned</b>: {@code close()} the font before the Renderer.
+     */
+    public Font loadFont(String resourcePath) {
+        return loadFont(resourcePath, DEFAULT_FONT_SIZE);
+    }
+
+    /**
+     * {@link #loadFont(String)} with an explicit bake height in pixels. A larger
+     * height sharpens very large text and the tiniest SDF corners at some
+     * atlas-memory cost; the default (48px) suits typical UI/label sizes. Text still
+     * renders at whatever size you pass to {@code text(...)} -- this is only the bake.
+     */
+    public Font loadFont(String resourcePath, float pixelHeight) {
+        return Font.load(device, commandPool, resourcePath, pixelHeight);
     }
 
     /**

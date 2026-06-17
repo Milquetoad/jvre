@@ -99,7 +99,31 @@ g.text("Hello", boxX + (boxW - w) / 2f, y, 24f, color);
 ```
 
 The built-in font is `renderer.font()`; you pass a `Font` to the third `text`
-overload (and to `textWidth`) when you want a specific one.
+overload (and to `textWidth` / `lineHeight`) when you want a specific one.
+
+### Loading your own font
+
+To use a custom typeface, load a TTF from the classpath with
+`renderer.loadFont(...)` — the mirror of `loadImage` for fonts — and pass the
+returned `Font` to `text`:
+
+```java
+Font inter = renderer.loadFont("/fonts/Inter.ttf");        // default bake height
+Font interBig = renderer.loadFont("/fonts/Inter.ttf", 96f); // explicit bake height (px)
+
+g.text(inter, "Hello", x, y, 24f, color);
+float w = g.textWidth(inter, "Hello", 24f);
+```
+
+One bake renders crisp at any `text` size (the SDF scales for free); the bake
+height only affects very large text and the tiniest corners. A loaded `Font` is
+**yours to close** before the renderer:
+
+```java
+inter.close();
+```
+
+(Don't close `renderer.font()` — the built-in font is renderer-owned.)
 
 ## Images
 

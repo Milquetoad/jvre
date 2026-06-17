@@ -86,7 +86,9 @@ g.text("Hello", x, y, 24f, color);         // at 24 px
 g.text(font, "Hello", x, y, 24f, color);   // an explicit Font (see below)
 ```
 
-`(x, y)` is the **top-left** of the text box. `'\n'` starts a new line.
+`(x, y)` is the **top-left** of the text box. `'\n'` starts a new line. Text is
+**kerned** automatically — pairs like "AV" or "To" tuck together for even spacing,
+using the font's kern table (and `textWidth` measures the kerned width to match).
 
 To lay text out — centre a label, size a button, wrap lines — measure it without
 drawing:

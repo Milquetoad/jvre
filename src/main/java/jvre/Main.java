@@ -50,7 +50,10 @@ public class Main {
     // EFFECT chooses the Shadertoy fullscreen shader, or null falls back to the
     // 3D cube.
     private static final boolean DEMO_2D = true;
-    private static final String EFFECT = DEMO_2D ? null : "/demo/ripple.frag";
+    // The effect demo (DEMO_2D = false): channel.frag SAMPLES an input channel
+    // (iChannel0), fed the bundled test image -- the multi-channel binding. Swap to
+    // "/demo/ripple.frag" for the classic no-input effect. F5 live-reloads either.
+    private static final String EFFECT = DEMO_2D ? null : "/demo/channel.frag";
 
     // Render-to-texture proof (Roadmap 4a): when true, the L1 cube renders into an
     // OFFSCREEN target each frame, and the result is sampled back into the 2D scene
@@ -174,7 +177,15 @@ public class Main {
             // contribution is one fragment shader. It compiles RIGHT HERE, at
             // runtime (shaderc) -- bad GLSL fails on this line with the
             // shader's own line numbers, before any drawing starts.
-            renderer.setEffect(ShaderEffect.fromFragment(EFFECT));
+            ShaderEffect fx = ShaderEffect.fromFragment(EFFECT);
+            renderer.setEffect(fx);
+            // If the effect declares input channels (channel.frag samples iChannel0),
+            // feed channel 0 the bundled test image -- the multi-channel binding. A
+            // no-input effect (ripple.frag) reports 0 channels and skips this.
+            if (fx.channelCount() > 0) {
+                demoImage = renderer.loadImage("/demo/test-image.png");
+                renderer.setEffectChannel(0, demoImage);
+            }
         }
         if (DEMO_2D) {
             // The L2 altitude: ask the renderer for its 2D surface. From here the

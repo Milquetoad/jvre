@@ -39,10 +39,12 @@ public final class ShaderEffect {
 
     private final String name;
     private final byte[] fragmentSpirv;
+    private final int channelCount;   // declared iChannel inputs (0..MAX_EFFECT_CHANNELS)
 
-    private ShaderEffect(String name, byte[] fragmentSpirv) {
+    private ShaderEffect(String name, byte[] fragmentSpirv, int channelCount) {
         this.name = name;
         this.fragmentSpirv = fragmentSpirv;
+        this.channelCount = channelCount;
     }
 
     /**
@@ -67,17 +69,26 @@ public final class ShaderEffect {
     /** Compile a fragment shader from an in-memory GLSL string. */
     public static ShaderEffect fromFragmentSource(String glslSource, String name) {
         byte[] spirv = ShaderCompiler.compileFragment(glslSource, name);
-        // Enforce the v1 effect contract on the COMPILED module, before any
-        // Vulkan object exists: a shader that compiles but binds a resource or
-        // declares an oversized push block fails HERE, in jvre's terms, instead
-        // of detonating inside the effect pipeline (or silently, validation off).
-        ShaderReflection.checkEffectContract(spirv, name);
-        return new ShaderEffect(name, spirv);
+        // Enforce the effect contract on the COMPILED module, before any Vulkan
+        // object exists: a shader that compiles but binds a forbidden resource or
+        // declares an oversized push block fails HERE, in jvre's terms, instead of
+        // detonating inside the effect pipeline (or silently, validation off). The
+        // check also returns how many iChannel inputs the shader declares, so the
+        // renderer builds a matching sampler layout.
+        int channels = ShaderReflection.checkEffectContract(spirv, name);
+        return new ShaderEffect(name, spirv, channels);
     }
 
     /** The compiled SPIR-V -- consumed by the Renderer's effect pipeline. */
     byte[] fragmentSpirv() {
         return fragmentSpirv;
+    }
+
+    /** How many input channels (iChannel0..N-1) this effect samples -- the size of
+     *  the sampler layout the renderer builds. 0 for a classic no-input effect.
+     *  Useful for deciding which {@link Renderer#setEffectChannel} calls to make. */
+    public int channelCount() {
+        return channelCount;
     }
 
     /** A human-readable label (the resource path / caller-given name). */

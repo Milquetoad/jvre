@@ -39,12 +39,15 @@ public final class ShaderEffect {
 
     private final String name;
     private final byte[] fragmentSpirv;
-    private final int channelCount;   // declared iChannel inputs (0..MAX_EFFECT_CHANNELS)
+    // One VkImageViewType per declared iChannel, indexed by binding. Its length is
+    // the channel count; each entry says whether that channel is sampler2D / Cube /
+    // 3D, so the renderer binds a matching texture (and rejects a mismatch).
+    private final int[] channelViewTypes;
 
-    private ShaderEffect(String name, byte[] fragmentSpirv, int channelCount) {
+    private ShaderEffect(String name, byte[] fragmentSpirv, int[] channelViewTypes) {
         this.name = name;
         this.fragmentSpirv = fragmentSpirv;
-        this.channelCount = channelCount;
+        this.channelViewTypes = channelViewTypes;
     }
 
     /**
@@ -75,8 +78,8 @@ public final class ShaderEffect {
         // detonating inside the effect pipeline (or silently, validation off). The
         // check also returns how many iChannel inputs the shader declares, so the
         // renderer builds a matching sampler layout.
-        int channels = ShaderReflection.checkEffectContract(spirv, name);
-        return new ShaderEffect(name, spirv, channels);
+        int[] channelViewTypes = ShaderReflection.checkEffectContract(spirv, name);
+        return new ShaderEffect(name, spirv, channelViewTypes);
     }
 
     /** The compiled SPIR-V -- consumed by the Renderer's effect pipeline. */
@@ -88,7 +91,14 @@ public final class ShaderEffect {
      *  the sampler layout the renderer builds. 0 for a classic no-input effect.
      *  Useful for deciding which {@link Renderer#setEffectChannel} calls to make. */
     public int channelCount() {
-        return channelCount;
+        return channelViewTypes.length;
+    }
+
+    /** The {@code VkImageViewType} channel {@code i} declares (2D / cube / 3D) -- the
+     *  renderer uses it to bind a matching default and to reject a texture of the
+     *  wrong kind in {@link Renderer#setEffectChannel}. */
+    int channelViewType(int channel) {
+        return channelViewTypes[channel];
     }
 
     /** A human-readable label (the resource path / caller-given name). */

@@ -178,6 +178,12 @@ mesh:
       frame.draw(3);
   });
   ```
+  A texture channel can be a **cubemap** or a **3D volume**, not just a 2D image:
+  bind a `renderer.createCubemap(...)` to a `samplerCube` channel (skyboxes,
+  reflections) or a `renderer.createVolume(...)` to a `sampler3D` channel (volumes,
+  3D LUTs). The pipeline spec is the same `.texture(Stage.FRAGMENT)` — only the
+  shader's sampler kind and the texture you bind differ. See `jvre.demo.CubemapDemo`
+  / `VolumeDemo` (`gradlew runCubemap` / `runVolume`).
 - **Push constants** — add `.pushConstants(sizeBytes, Stage.FRAGMENT)`, and
   `frame.pushConstants(float[])` each frame (small, fast per-draw data).
 

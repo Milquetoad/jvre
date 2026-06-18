@@ -51,9 +51,9 @@ and may change freely.
 
 ## Handles (opaque — you hold them, jvre makes them)
 Created via the `Renderer` (`createPipeline`, `createVertexBuffer`,
-`createIndexBuffer`, `createImage`, `loadImage`, `font`, `loadFont`, `loadMsdfFont`,
-`createRenderTarget`); the only method you call on them directly is `close()` (plus
-`Texture.width()` / `height()`):
+`createIndexBuffer`, `createImage`, `loadImage`, `createCubemap`, `createVolume`,
+`font`, `loadFont`, `loadMsdfFont`, `createRenderTarget`); the only method you call
+on them directly is `close()` (plus `Texture.width()` / `height()`):
 
 `Pipeline`, `Buffer`, `Texture`, `Font`, `RenderTarget`
 

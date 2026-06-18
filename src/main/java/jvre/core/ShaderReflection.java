@@ -8,12 +8,20 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.IntBuffer;
 
+import java.util.Arrays;
+
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.memAlloc;
 import static org.lwjgl.system.MemoryUtil.memFree;
 import static org.lwjgl.util.spvc.Spv.SpvDecorationBinding;
 import static org.lwjgl.util.spvc.Spv.SpvDecorationDescriptorSet;
+import static org.lwjgl.util.spvc.Spv.SpvDim2D;
+import static org.lwjgl.util.spvc.Spv.SpvDim3D;
+import static org.lwjgl.util.spvc.Spv.SpvDimCube;
 import static org.lwjgl.util.spvc.Spvc.*;
+import static org.lwjgl.vulkan.VK10.VK_IMAGE_VIEW_TYPE_2D;
+import static org.lwjgl.vulkan.VK10.VK_IMAGE_VIEW_TYPE_3D;
+import static org.lwjgl.vulkan.VK10.VK_IMAGE_VIEW_TYPE_CUBE;
 
 /**
  * Reflects a compiled SPIR-V module (via SPIRV-Cross) to ENFORCE the
@@ -76,12 +84,16 @@ final class ShaderReflection {
 
     /**
      * Throw a clear, jvre-level error if the compiled fragment shader violates
-     * the effect contract; otherwise return the number of input CHANNELS it
-     * declares (0..{@value #MAX_EFFECT_CHANNELS}) -- {@code maxBinding + 1} over
-     * its {@code sampler2D} iChannels, so the renderer can build a matching
-     * sampler layout. 0 means a classic no-input effect.
+     * the effect contract; otherwise return one {@code VkImageViewType} per input
+     * CHANNEL it declares, indexed by binding (length = channel count,
+     * 0..{@value #MAX_EFFECT_CHANNELS}). Each entry is {@code VIEW_TYPE_2D},
+     * {@code _CUBE}, or {@code _3D} -- the dimensionality of the {@code samplerN}
+     * at that binding -- so the renderer can bind a MATCHING texture (and reject a
+     * mismatch in the user's terms). A gap (e.g. iChannel0 + iChannel2 declared,
+     * 1 skipped) defaults to {@code VIEW_TYPE_2D}. An empty array means a classic
+     * no-input effect.
      */
-    static int checkEffectContract(byte[] spirv, String name) {
+    static int[] checkEffectContract(byte[] spirv, String name) {
         // SPIR-V is a stream of 32-bit words. SPIRV-Cross wants them off-heap as
         // an IntBuffer; copy the bytes into a native buffer first (kept alive
         // until parsing is done, then freed).
@@ -113,7 +125,7 @@ final class ShaderReflection {
 
             rejectBoundResources(resources, name, context, stack);
             checkPushConstantSize(compiler, resources, name, context, stack);
-            return reflectChannelCount(compiler, resources, name, context, stack);
+            return reflectChannels(compiler, resources, name, context, stack);
         } finally {
             if (context != 0) {
                 spvc_context_destroy(context);  // frees the parsed IR + compiler too
@@ -161,19 +173,22 @@ final class ShaderReflection {
     }
 
     /**
-     * Count + validate the effect's input-channel samplers. Each {@code sampler2D}
-     * must live at descriptor set 0, binding 0..3 (the iChannel0..3 convention);
-     * anything else is rejected. Returns {@code maxBinding + 1} (0 if no samplers),
-     * so a shader using only iChannel0 and iChannel2 reports 3 -- the renderer
-     * default-binds the unused middle slot.
+     * Validate the effect's input-channel samplers and reflect their dimensionality.
+     * Each sampler must live at descriptor set 0, binding 0..3 (the iChannel0..3
+     * convention); anything else is rejected. Returns one {@code VkImageViewType}
+     * per channel indexed by binding, length {@code maxBinding + 1} (so a shader
+     * using only iChannel0 and iChannel2 returns length 3, the unused middle slot
+     * defaulting to 2D). Empty if no samplers.
      */
-    private static int reflectChannelCount(long compiler, long resources, String name,
-                                           long context, MemoryStack stack) {
+    private static int[] reflectChannels(long compiler, long resources, String name,
+                                         long context, MemoryStack stack) {
         SpvcReflectedResource.Buffer samplers =
                 listFor(resources, SPVC_RESOURCE_TYPE_SAMPLED_IMAGE, context, stack);
         if (samplers == null || samplers.remaining() == 0) {
-            return 0;
+            return new int[0];
         }
+        int[] byBinding = new int[MAX_EFFECT_CHANNELS];
+        Arrays.fill(byBinding, VK_IMAGE_VIEW_TYPE_2D);   // gaps default to 2D
         int maxBinding = -1;
         for (int i = 0; i < samplers.remaining(); i++) {
             SpvcReflectedResource r = samplers.get(i);
@@ -183,11 +198,27 @@ final class ShaderReflection {
                 throw new RuntimeException("Effect shader '" + name + "' declares a sampler '"
                         + r.nameString() + "' at set " + set + ", binding " + binding
                         + ", but effect input channels are iChannel0.." + (MAX_EFFECT_CHANNELS - 1)
-                        + " -- a sampler2D at set 0, binding 0.." + (MAX_EFFECT_CHANNELS - 1) + ".");
+                        + " -- a sampler at set 0, binding 0.." + (MAX_EFFECT_CHANNELS - 1) + ".");
             }
+            // The sampler's dimensionality (2D / cube / 3D) is part of the image
+            // base type -- reflect it so the renderer binds a matching texture.
+            long imageType = spvc_compiler_get_type_handle(compiler, r.base_type_id());
+            byBinding[binding] = viewTypeForDim(spvc_type_get_image_dimension(imageType),
+                    name, r.nameString());
             maxBinding = Math.max(maxBinding, binding);
         }
-        return maxBinding + 1;
+        return Arrays.copyOf(byBinding, maxBinding + 1);
+    }
+
+    /** Map a SPIR-V image {@code Dim} to the VkImageViewType jvre binds for it;
+     *  reject the dimensions jvre's channel system doesn't support (1D, rect, ...). */
+    private static int viewTypeForDim(int dim, String name, String sampler) {
+        if (dim == SpvDim2D)   return VK_IMAGE_VIEW_TYPE_2D;
+        if (dim == SpvDimCube) return VK_IMAGE_VIEW_TYPE_CUBE;
+        if (dim == SpvDim3D)   return VK_IMAGE_VIEW_TYPE_3D;
+        throw new RuntimeException("Effect shader '" + name + "' declares channel sampler '"
+                + sampler + "' with an unsupported dimensionality -- effect channels must be"
+                + " sampler2D, samplerCube, or sampler3D.");
     }
 
     // ------------------------------------------------------------------

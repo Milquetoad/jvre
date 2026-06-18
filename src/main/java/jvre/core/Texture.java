@@ -684,6 +684,10 @@ public class Texture {
     public int height() { return height; }
     int format() { return format; }
 
+    /** This texture's VkImageViewType (_2D, _CUBE, or _3D) -- how a shader reads it.
+     *  The renderer matches it against an effect channel's declared sampler kind. */
+    int viewType() { return viewType; }
+
     /** Destroy sampler + view, then the image (its slice returns to VMA's block). */
     public void close() {
         if (sampler != VK_NULL_HANDLE) {

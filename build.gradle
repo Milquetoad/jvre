@@ -278,6 +278,16 @@ tasks.register('runVolume', JavaExec) {
     classpath = sourceSets.main.runtimeClasspath + configurations.nativesRuntime
 }
 
+// Effect samplerCube iChannel demo (jvre.demo.EffectCubeDemo) -- WINDOWED (effects
+// render in the swapchain pass), frame-capped so it self-exits for a validation check.
+tasks.register('runEffectCube', JavaExec) {
+    description = 'Runs the effect samplerCube iChannel skybox (jvre.demo.EffectCubeDemo) -- windowed, frame-capped'
+    group = 'application'
+    dependsOn 'classes', 'compileShaders', 'processResources'
+    mainClass = 'jvre.demo.EffectCubeDemo'
+    classpath = sourceSets.main.runtimeClasspath + configurations.nativesRuntime
+}
+
 // Treat the generated .spv files as ordinary resources, built before them.
 sourceSets.main.resources.srcDir(shaderOutDir)
 tasks.named('processResources') { dependsOn 'compileShaders' }

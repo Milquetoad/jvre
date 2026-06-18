@@ -76,8 +76,30 @@ renderer.setEffectChannel(1, target.texture());     // or a RenderTarget's outpu
 [render target](render-to-texture.md)'s `texture()` makes a **post-processing
 pass** — the effect reads last pass's output. Channels you leave unset sample a 1×1
 default. `e.channelCount()` reports how many the shader declared (0 for a classic
-no-input effect). The contract guard only allows `sampler2D` at set 0, binding 0..3;
+no-input effect). The contract guard allows a sampler at set 0, binding 0..3;
 any other bound resource — a UBO, a sampler out of range — is still rejected.
+
+### Cubemap and 3D channels
+
+A channel can also be a **`samplerCube`** or a **`sampler3D`**, not just a
+`sampler2D` — for skyboxes, environment reflections, 3D LUTs, or raymarched volumes:
+
+```glsl
+layout(set = 0, binding = 0) uniform samplerCube iChannel0;   // sample with a direction
+layout(set = 0, binding = 1) uniform sampler3D   iChannel1;   // sample with vec3 (u,v,w)
+```
+
+```java
+Texture sky = renderer.createCubemap(sixFaces, faceSize);  // +X,-X,+Y,-Y,+Z,-Z
+Texture lut = renderer.createVolume(voxels, w, h, d);
+renderer.setEffectChannel(0, sky);
+renderer.setEffectChannel(1, lut);
+```
+
+jvre reflects each channel's declared kind, so binding a texture of the wrong kind
+(e.g. a 2D texture to a `samplerCube` channel) fails with a clear jvre-level error
+rather than a cryptic validation message. See `jvre.demo.EffectCubeDemo`
+(`gradlew runEffectCube`) for a samplerCube skybox effect.
 
 ## Loading the shader
 

@@ -24,7 +24,6 @@ import jvre.core.*;
 
 public class play {
     public static void main(String[] args) {
-        org.lwjgl.system.Configuration.STACK_SIZE.set(512);
         Window window = new Window(800, 600, "jvre via JBang");
         Instance instance = new Instance("play", true);
         Surface surface = new Surface(instance, window);
@@ -97,15 +96,9 @@ import jvre.core.Renderer2D;
 import jvre.core.RendererOptions;
 import jvre.core.Surface;
 import jvre.core.Window;
-import org.lwjgl.system.Configuration;
 
 public class Hello {
     public static void main(String[] args) {
-        // Some drivers expose enough extensions to overflow LWJGL's default 64 KB
-        // per-thread stack during setup; bump it before any Vulkan call. (Harmless
-        // if you never hit the limit.)
-        Configuration.STACK_SIZE.set(512);
-
         // --- set up: Window -> Instance -> Surface -> Renderer ---
         Window window = new Window(800, 600, "Hello jvre");
         Instance instance = new Instance("hello", /* validation */ true);

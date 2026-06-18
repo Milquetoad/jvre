@@ -23,6 +23,15 @@ import static org.lwjgl.system.MemoryUtil.NULL;
  */
 public class Window {
 
+    // Window is usually the first jvre object built, and it touches a MemoryStack in
+    // its constructor -- which creates the thread's stack at whatever size is set by
+    // then. So raise the stack size HERE too (at class-load, before that), not only in
+    // Instance: otherwise a 64 KB stack is already locked in before Instance loads.
+    // See NativeBootstrap.
+    static {
+        NativeBootstrap.ensureStackCapacity();
+    }
+
     private final long handle;
 
     // Native callbacks kept as fields so we can free them at shutdown (off-heap),

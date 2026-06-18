@@ -178,12 +178,9 @@ to surface errors in a tool rather than just print them.
 
 ```java
 import jvre.core.*;
-import org.lwjgl.system.Configuration;
 
 public class Effect {
     public static void main(String[] args) {
-        Configuration.STACK_SIZE.set(512);
-
         Window window = new Window(800, 600, "jvre effect");
         Instance instance = new Instance("effect", true);
         Surface surface = new Surface(instance, window);

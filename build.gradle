@@ -308,6 +308,16 @@ tasks.register('runKeyboard', JavaExec) {
     classpath = sourceSets.main.runtimeClasspath + configurations.nativesRuntime
 }
 
+// Regression probe (jvre.demo.StackProbe) for the "Out of stack space" crash --
+// boots the windowed renderer on the DEFAULT 64 KB stack (no STACK_SIZE bump).
+tasks.register('runStackProbe', JavaExec) {
+    description = 'Boots the windowed renderer on the default 64 KB stack (jvre.demo.StackProbe) -- device-extension overflow regression'
+    group = 'application'
+    dependsOn 'classes', 'compileShaders', 'processResources'
+    mainClass = 'jvre.demo.StackProbe'
+    classpath = sourceSets.main.runtimeClasspath + configurations.nativesRuntime
+}
+
 // Treat the generated .spv files as ordinary resources, built before them.
 sourceSets.main.resources.srcDir(shaderOutDir)
 tasks.named('processResources') { dependsOn 'compileShaders' }

@@ -350,15 +350,26 @@ public class Device {
         IntBuffer extCount = stack.ints(0);
         vkEnumerateDeviceExtensionProperties(device, (String) null, extCount, null);
 
+        // Allocate the count-sized properties buffer on the NATIVE HEAP, not the
+        // shared MemoryStack. A driver can report HUNDREDS of device extensions, each
+        // a VkExtensionProperties of ~260 bytes (a 256-char name + version); a few
+        // hundred overflows LWJGL's default 64 KB per-thread stack -> OutOfMemoryError
+        // ("Out of stack space") during device selection, on extension-rich drivers.
+        // The heap has no such limit. (This is why callers used to need
+        // Configuration.STACK_SIZE bumped -- now jvre handles it.) Freed below.
         VkExtensionProperties.Buffer available =
-                VkExtensionProperties.malloc(extCount.get(0), stack);
-        vkEnumerateDeviceExtensionProperties(device, (String) null, extCount, available);
+                VkExtensionProperties.malloc(extCount.get(0));
+        try {
+            vkEnumerateDeviceExtensionProperties(device, (String) null, extCount, available);
 
-        Set<String> required = new HashSet<>(Arrays.asList(DEVICE_EXTENSIONS));
-        for (VkExtensionProperties ext : available) {
-            required.remove(ext.extensionNameString());
+            Set<String> required = new HashSet<>(Arrays.asList(DEVICE_EXTENSIONS));
+            for (VkExtensionProperties ext : available) {
+                required.remove(ext.extensionNameString());
+            }
+            return required.isEmpty();
+        } finally {
+            available.free();
         }
-        return required.isEmpty();
     }
 
     /**

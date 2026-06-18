@@ -440,6 +440,24 @@ public class Renderer {
     }
 
     /**
+     * Load a TTF and bake a MULTI-channel (MSDF) font -- the opt-in crisp-corner
+     * upgrade over {@link #loadFont}. Single-channel SDF (the default) rounds off
+     * sharp glyph corners, worst when small-baked text is rendered large; MSDF's
+     * median-of-three reconstruction keeps them crisp, at ~4x the atlas memory.
+     * Worth it for large display text; the default SDF font is fine for UI sizes.
+     * Generated at runtime via {@code lwjgl-msdfgen} (fed stb_truetype outlines).
+     * <b>Caller-owned</b>: {@code close()} the font before the Renderer.
+     */
+    public Font loadMsdfFont(String resourcePath) {
+        return loadMsdfFont(resourcePath, DEFAULT_FONT_SIZE);
+    }
+
+    /** {@link #loadMsdfFont(String)} with an explicit bake height in pixels. */
+    public Font loadMsdfFont(String resourcePath, float pixelHeight) {
+        return Font.loadMsdf(device, commandPool, resourcePath, pixelHeight);
+    }
+
+    /**
      * Create an OFFSCREEN render target (render-to-texture): an image you render
      * INTO instead of the screen, then sample back as a {@link Texture} via {@code
      * target.texture()}. jvre injects the swapchain's color/depth formats + sample

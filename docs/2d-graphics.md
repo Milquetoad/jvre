@@ -127,6 +127,27 @@ inter.close();
 
 (Don't close `renderer.font()` — the built-in font is renderer-owned.)
 
+### Crisper corners: MSDF fonts
+
+Single-channel SDF text (the default) slightly **rounds sharp corners** — most
+visible on letter apexes (`A`, `V`, `W`) and angular glyphs when a small-baked
+atlas is rendered *large*. For crisp corners at display sizes, load the font as
+**MSDF** (multi-channel SDF — three distance fields whose median reconstructs the
+true corner). Same API, just a different loader:
+
+```java
+Font display = renderer.loadMsdfFont("/fonts/Inter.ttf");        // default bake height
+Font displayBig = renderer.loadMsdfFont("/fonts/Inter.ttf", 64f); // explicit bake height
+
+g.text(display, "HEADING", x, y, 96f, Color.WHITE);   // drawn exactly like any font
+```
+
+It's a drop-in `Font` — `text`, `textWidth`, `lineHeight` all work unchanged. The
+trade-off is memory: an MSDF atlas is RGBA (~4× an SDF atlas), so the default
+single-channel font stays the right choice for ordinary UI-size text; reach for
+MSDF when you're rendering big and want the edges sharp. (Generated at runtime from
+the font outline — no offline tooling.)
+
 ## Images
 
 Create a `Texture` once, then draw it as many times as you like. The easy way is

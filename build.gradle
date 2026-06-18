@@ -113,6 +113,14 @@ dependencies {
     // hand-parsing TrueType outlines. Native library -> has natives.
     implementation "org.lwjgl:lwjgl-stb"
 
+    // msdfgen (Chlumsky): the MULTI-channel signed distance field generator, used
+    // to bake the OPT-IN crisp-corner glyph atlas (the SDF path above rounds sharp
+    // corners; MSDF's median-of-3 reconstructs them). Same proven-library rationale
+    // as stb -- the alternative is hand-rolling msdfgen's edge-colouring + median
+    // algorithm (thousands of lines). Available in the LWJGL family since 3.3.4, so
+    // no version bump. Native library -> has natives.
+    implementation "org.lwjgl:lwjgl-msdfgen"
+
     // Native libraries for the HOST -- into the PRIVATE nativesRuntime config (not
     // runtimeOnly), so they stay off the published POM. Wired onto run + test
     // below. The BOM is re-declared here because a separate configuration doesn't
@@ -125,6 +133,7 @@ dependencies {
     nativesRuntime "org.lwjgl:lwjgl-shaderc::$lwjglNatives"
     nativesRuntime "org.lwjgl:lwjgl-spvc::$lwjglNatives"
     nativesRuntime "org.lwjgl:lwjgl-stb::$lwjglNatives"
+    nativesRuntime "org.lwjgl:lwjgl-msdfgen::$lwjglNatives"
 
     // JUnit 5 -- jvre's first unit tests arrive with ShaderCompiler: a pure
     // GLSL-in/SPIR-V-out function needing NO GPU, unlike nearly everything else
@@ -227,6 +236,15 @@ tasks.register('runReload', JavaExec) {
     group = 'application'
     dependsOn 'classes', 'compileShaders', 'processResources'
     mainClass = 'jvre.demo.ReloadDemo'
+    classpath = sourceSets.main.runtimeClasspath + configurations.nativesRuntime
+}
+
+// MSDF vs SDF text comparison (jvre.demo.MsdfDemo) -- headless, writes a PNG.
+tasks.register('runMsdf', JavaExec) {
+    description = 'Runs the MSDF vs SDF text demo (jvre.demo.MsdfDemo) -- headless, writes a PNG'
+    group = 'application'
+    dependsOn 'classes', 'compileShaders', 'processResources'
+    mainClass = 'jvre.demo.MsdfDemo'
     classpath = sourceSets.main.runtimeClasspath + configurations.nativesRuntime
 }
 

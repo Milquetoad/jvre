@@ -35,7 +35,8 @@ CLAUDE.md
 # Logs / misc
 *.log
 
-# Demo runtime output (readback screenshot, headless + channels renders)
+# Demo runtime output (readback screenshot, headless + channels + msdf renders)
 /jvre-canvas.png
 /jvre-headless.png
 /jvre-channels.png
+/jvre-msdf.png

@@ -493,6 +493,9 @@ public final class Renderer2D {
         }
         useTexture(font.atlas());
         float[] c = color.linearRGBA();
+        // MSDF fonts carry a 4-channel atlas read by mode 6 (median reconstruction);
+        // single-channel SDF fonts use mode 3. Same quad geometry either way.
+        float mode = font.isMsdf() ? MODE_MSDF_TEXT : MODE_TEXT;
         float scale = font.scaleFor(size);
         float startX = x;
         float penX = x;
@@ -521,12 +524,12 @@ public final class Renderer2D {
                 float qy = baseline + g.yoff * scale;
                 float qw = g.w * scale;
                 float qh = g.h * scale;
-                textVertex(qx,      qy,      c, g.u0, g.v0);
-                textVertex(qx + qw, qy,      c, g.u1, g.v0);
-                textVertex(qx + qw, qy + qh, c, g.u1, g.v1);
-                textVertex(qx + qw, qy + qh, c, g.u1, g.v1);
-                textVertex(qx,      qy + qh, c, g.u0, g.v1);
-                textVertex(qx,      qy,      c, g.u0, g.v0);
+                textVertex(qx,      qy,      c, g.u0, g.v0, mode);
+                textVertex(qx + qw, qy,      c, g.u1, g.v0, mode);
+                textVertex(qx + qw, qy + qh, c, g.u1, g.v1, mode);
+                textVertex(qx + qw, qy + qh, c, g.u1, g.v1, mode);
+                textVertex(qx,      qy + qh, c, g.u0, g.v1, mode);
+                textVertex(qx,      qy,      c, g.u0, g.v0, mode);
             }
             penX += g.advance * scale;
         }
@@ -586,9 +589,10 @@ public final class Renderer2D {
         return font.lineHeight() * font.scaleFor(size);
     }
 
-    /** Append one SDF-text vertex (mode 3, carrying an atlas UV; SDF box fields unused). */
-    private void textVertex(float px, float py, float[] c, float u, float v) {
-        emit(px, py, c, 0f, 0f, 0f, 0f, 0f, u, v, MODE_TEXT);
+    /** Append one text vertex carrying an atlas UV (SDF box fields unused). {@code
+     *  mode} is 3 (single-channel SDF) or 6 (MSDF), chosen per the font. */
+    private void textVertex(float px, float py, float[] c, float u, float v, float mode) {
+        emit(px, py, c, 0f, 0f, 0f, 0f, 0f, u, v, mode);
     }
 
     /**
@@ -914,6 +918,7 @@ public final class Renderer2D {
     private static final float MODE_TEXT    = 3f;  // SDF text (samples the glyph atlas distance at uv)
     private static final float MODE_ELLIPSE = 4f;  // SDF ellipse fill (half = the radii)
     private static final float MODE_RING    = 5f;  // SDF ellipse ring/stroke (half = centerline radii, cornerRadius = halfThickness)
+    private static final float MODE_MSDF_TEXT = 6f; // MSDF text (median of the atlas RGB distances)
 
     /** Append a FLAT-shape vertex: full coverage, flat color (SDF/uv fields unused). */
     private void vertex(float px, float py, float[] c) {

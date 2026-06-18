@@ -206,6 +206,24 @@ public class Texture {
     }
 
     /**
+     * Build a 4-CHANNEL (RGBA8) texture with a LINEAR sampler -- the L2 MSDF text
+     * glyph atlas. Each texel holds an msdfgen multi-channel distance (R, G, B; A
+     * unused/255). Critically the format is R8G8B8A8_<b>UNORM</b>, not _SRGB: the
+     * channels are signed DISTANCES interpreted in linear space (msdfgen's own
+     * rule -- "like the alpha channel, not as sRGB"); an sRGB curve would corrupt
+     * the median reconstruction. RGBA (not RGB888) because three-channel sampled
+     * formats aren't universally supported, RGBA8 is. LINEAR filtering lets the
+     * shader interpolate the field between texels for a clean edge. Same staging
+     * upload as the others. See {@link Font#loadMsdf} and shape2d.frag mode 6.
+     */
+    static Texture createMsdfAtlas(Device device, long commandPool,
+                                          byte[] rgba, int width, int height) {
+        return upload(device, commandPool, rgba, width, height,
+                VK_FORMAT_R8G8B8A8_UNORM, 4,
+                TextureOptions.builder().filter(Filter.LINEAR).wrap(WrapMode.CLAMP).build());
+    }
+
+    /**
      * Build a sampleable color image we RENDER INTO rather than upload pixels into
      * -- the {@link RenderTarget}'s presentable/sampled surface. The difference
      * from {@link #create} is all in the usage and the (absent) data path:

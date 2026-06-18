@@ -1,7 +1,7 @@
 # Public API surface
 
-The complete set of public types in `jvre.core` — the surface jvre commits to. At
-1.0 this becomes a semver compatibility promise, so it is kept **deliberately
+The complete set of public types in `jvre.core` — the surface jvre commits to. As
+of 1.0 this is a semver compatibility promise, so it is kept **deliberately
 small**: everything here is intended for users; everything *not* here is internal
 and may change freely.
 
@@ -10,7 +10,7 @@ and may change freely.
 > in any minor release. The reverse — making a public thing private or changing a
 > signature — is *breaking* and forces a major version. So a minimal surface is
 > what *preserves* freedom to grow: it leaves every door open to add well-designed
-> public API later, exactly when a feature lands. (Audit: 2026-06-16.)
+> public API later, exactly when a feature lands. (Audit: 2026-06-18.)
 
 ## Setup
 | Type | Role |
@@ -33,8 +33,10 @@ and may change freely.
 ## Shader effects
 | Type | Role |
 |---|---|
-| `ShaderEffect` | a fullscreen fragment-shader effect |
+| `ShaderEffect` | a fullscreen fragment-shader effect; up to 4 Shadertoy-style input channels (`iChannel0..3`, via `Renderer.setEffectChannel`), and live hot-reload (re-call `Renderer.setEffect`) |
 | `ShaderCompiler` | runtime GLSL → SPIR-V (for custom pipelines) |
+| `ShaderCompileException` | thrown on a failed runtime compile; carries the structured diagnostics |
+| `ShaderDiagnostic` | one parsed compiler message (name, line, severity, message) |
 
 ## L1 — the escape hatch
 | Type | Role |
@@ -49,7 +51,7 @@ and may change freely.
 
 ## Handles (opaque — you hold them, jvre makes them)
 Created via the `Renderer` (`createPipeline`, `createVertexBuffer`,
-`createIndexBuffer`, `createImage`, `loadImage`, `font`, `loadFont`,
+`createIndexBuffer`, `createImage`, `loadImage`, `font`, `loadFont`, `loadMsdfFont`,
 `createRenderTarget`); the only method you call on them directly is `close()` (plus
 `Texture.width()` / `height()`):
 

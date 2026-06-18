@@ -163,6 +163,40 @@ public class Texture {
     }
 
     /**
+     * Build a 3D VOLUME texture from {@code width} x {@code height} x {@code depth}
+     * voxels -- the {@code sampler3D} input for volumetric data, 3D colour LUTs, and
+     * raymarched fields. Unlike a cubemap (6 flat layers), this is a genuine 3D
+     * IMAGE: a third extent dimension, read through a {@code VIEW_TYPE_3D} view and
+     * sampled with a 3D coordinate {@code (u,v,w)} in [0,1] -- the GPU trilinearly
+     * filters across all three axes.
+     *
+     * <p>The voxels are laid out SLICE-MAJOR (all of z=0, then z=1, ...), row-major
+     * within each slice, R8G8B8A8 (4 bytes/voxel). They stage contiguously and copy
+     * in one shot (the copy's {@code imageExtent.depth} pulls consecutive slices from
+     * the buffer). Stored sRGB, matching the colour texture paths.
+     */
+    static Texture createVolume(Device device, long commandPool, byte[] voxels,
+                                int width, int height, int depth, TextureOptions opts) {
+        long bytes = (long) width * height * depth * 4;
+        if (voxels.length != bytes) {
+            throw new IllegalArgumentException("Expected " + bytes + " bytes for a "
+                    + width + "x" + height + "x" + depth + " RGBA volume, got " + voxels.length);
+        }
+
+        Buffer staging = new Buffer(device, voxels.length, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
+        staging.uploadBytes(voxels);
+
+        Texture texture = new Texture(device, width, height, depth, VK_FORMAT_R8G8B8A8_SRGB,
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                1, 1, VK_IMAGE_TYPE_3D, VK_IMAGE_VIEW_TYPE_3D, 0);
+        texture.uploadFrom(commandPool, staging);
+        texture.createViewAndSampler(opts);
+
+        staging.close();
+        return texture;
+    }
+
+    /**
      * Load + decode an image FILE from the classpath ({@code resourcePath}, e.g.
      * {@code "/images/sprite.png"}) into a sampleable texture. Decoding is done by
      * stb_image (the same stb family that bakes the font atlas) -- PNG, JPEG, BMP,

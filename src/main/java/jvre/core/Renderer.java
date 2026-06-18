@@ -451,6 +451,27 @@ public class Renderer {
     }
 
     /**
+     * Create a 3D VOLUME texture from {@code width} x {@code height} x {@code depth}
+     * voxels -- a {@code sampler3D} you can bind as a pipeline texture channel or an
+     * effect {@code iChannel} for volumetric data, 3D colour LUTs, and raymarched
+     * fields. A shader samples it with a 3D coordinate {@code (u,v,w)} in [0,1]
+     * ({@code texture(vol, vec3(...))}), trilinearly filtered across all three axes.
+     *
+     * <p>Voxels are laid out SLICE-MAJOR (all of z=0, then z=1, ...), row-major
+     * within each slice, R8G8B8A8. Sampling defaults to {@link Filter#LINEAR} with
+     * edge clamp. The caller OWNS the result -- {@code close()} it before the Renderer.
+     */
+    public Texture createVolume(byte[] voxels, int width, int height, int depth) {
+        return createVolume(voxels, width, height, depth, TextureOptions.builder()
+                .filter(Filter.LINEAR).wrap(WrapMode.CLAMP).build());
+    }
+
+    /** {@link #createVolume(byte[], int, int, int)} with full sampler {@link TextureOptions}. */
+    public Texture createVolume(byte[] voxels, int width, int height, int depth, TextureOptions options) {
+        return Texture.createVolume(device, commandPool, voxels, width, height, depth, options);
+    }
+
+    /**
      * Load + decode an image FILE from the classpath ({@code resourcePath}, e.g.
      * {@code "/images/sprite.png"}) into a drawable image -- PNG/JPEG/BMP/TGA/...
      * via stb_image. The convenience over {@link #createImage}: you don't decode

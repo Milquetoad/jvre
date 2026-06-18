@@ -86,6 +86,14 @@ public class Renderer {
     // sample the 1x1 default. Re-pointed by setEffectChannel; written into the
     // effect pipeline's descriptor set each frame.
     private final Texture[] effectChannels = new Texture[ShaderReflection.MAX_EFFECT_CHANNELS];
+    // A dynamic (CPU-updatable) texture bound to a channel, parallel to
+    // effectChannels: a non-null slot here wins, resolving to that frame's own copy.
+    private final DynamicTexture[] effectDynChannels =
+            new DynamicTexture[ShaderReflection.MAX_EFFECT_CHANNELS];
+
+    // Every DynamicTexture created here -- so the frame loop can record each one's
+    // pending CPU->GPU upload at the top of the command buffer (no-op if not dirty).
+    private final java.util.List<DynamicTexture> dynamicTextures = new java.util.ArrayList<>();
 
     // jvre's own fullscreen-triangle vertex shader (build-time compiled, like
     // all internal shaders) -- shared by every effect.
@@ -275,6 +283,11 @@ public class Renderer {
             }
         }
         Commands.oneShot(device, commandPool, cmd -> {
+            // Dynamic-texture uploads first (slot 0 headless; oneShot fully completes
+            // before the next render(), so a single slot is hazard-free here).
+            for (DynamicTexture dyn : dynamicTextures) {
+                dyn.recordIfDirty(cmd, 0);
+            }
             for (Canvas canvas : canvases) {
                 if (canvas.r2d().floatCount() > 0) {
                     recordTargetPass(cmd, canvas.target(),
@@ -352,6 +365,28 @@ public class Renderer {
                     + " createVolume for sampler3D).");
         }
         effectChannels[channel] = texture;
+        effectDynChannels[channel] = null;   // a static binding supersedes any dynamic one
+    }
+
+    /**
+     * Bind a {@link DynamicTexture} (CPU-updatable) to an effect input channel --
+     * the live-data path (keyboard, audio, procedural). Each frame the channel
+     * samples that frame's own copy, so {@link DynamicTexture#update} never races the
+     * GPU. A dynamic texture is 2D, so the channel must be a {@code sampler2D}.
+     */
+    public void setEffectChannel(int channel, DynamicTexture dynamic) {
+        if (channel < 0 || channel >= effectChannels.length) {
+            throw new IllegalArgumentException("effect channel " + channel
+                    + " out of range (iChannel0.." + (effectChannels.length - 1) + ")");
+        }
+        if (dynamic != null && effect != null && channel < effect.channelCount()
+                && effect.channelViewType(channel) != VK_IMAGE_VIEW_TYPE_2D) {
+            throw new IllegalArgumentException("effect channel iChannel" + channel
+                    + " is declared as " + samplerKind(effect.channelViewType(channel))
+                    + " but a DynamicTexture is sampler2D -- dynamic cube/3D channels"
+                    + " are not supported.");
+        }
+        effectDynChannels[channel] = dynamic;
     }
 
     /** A user-facing GLSL sampler name for a VkImageViewType (for channel errors). */
@@ -518,6 +553,22 @@ public class Renderer {
     /** {@link #createVolume(byte[], int, int, int)} with full sampler {@link TextureOptions}. */
     public Texture createVolume(byte[] voxels, int width, int height, int depth, TextureOptions options) {
         return Texture.createVolume(device, commandPool, voxels, width, height, depth, options);
+    }
+
+    /**
+     * Create a DYNAMIC (CPU-updatable) texture: rewrite its pixels each frame with
+     * {@link DynamicTexture#update}, then bind it as a channel with
+     * {@link #setEffectChannel(int, DynamicTexture)} or {@code frame.texture(channel,
+     * dyn)}. The mechanism for feeding a shader live CPU data -- audio spectra,
+     * procedural fields, a keyboard-state texture. Internally double-buffered per
+     * frame-in-flight so updating never races the GPU. The caller OWNS it --
+     * {@code close()} it before the Renderer.
+     */
+    public DynamicTexture createDynamicTexture(int width, int height) {
+        DynamicTexture dyn = new DynamicTexture(device, commandPool, width, height,
+                MAX_FRAMES_IN_FLIGHT);
+        dynamicTextures.add(dyn);
+        return dyn;
     }
 
     /**
@@ -1377,6 +1428,15 @@ public class Renderer {
             Vk.check(vkBeginCommandBuffer(cmd, beginInfo),
                     "Failed to begin the command buffer");
 
+            // ---- Dynamic-texture uploads, before any pass ----
+            // Push each updated DynamicTexture's pixels into THIS slot's copy (the
+            // copy + barriers are recorded here, ordered before any draw that samples
+            // it). Safe: this slot's fence was waited in drawFrame, so its previous
+            // use is done. A no-op for textures not updated this frame.
+            for (DynamicTexture dyn : dynamicTextures) {
+                dyn.recordIfDirty(cmd, currentFrame);
+            }
+
             // ---- Offscreen render-to-texture passes, FIRST ----
             // Each renders into its own image and ends in SHADER_READ_ONLY, so the
             // swapchain pass below (or a later target) can sample it. The swapchain
@@ -1497,8 +1557,14 @@ public class Renderer {
                 // like a custom pipeline's draw, fence-guarded for this frame's slot.
                 if (effectPipeline.hasDescriptorSet()) {
                     for (int c = 0; c < effect.channelCount(); c++) {
-                        Texture ch = effectChannels[c] != null ? effectChannels[c]
-                                : defaultTextureForViewType(effect.channelViewType(c));
+                        Texture ch;
+                        if (effectDynChannels[c] != null) {
+                            ch = effectDynChannels[c].frameTexture(currentFrame);   // this frame's copy
+                        } else if (effectChannels[c] != null) {
+                            ch = effectChannels[c];
+                        } else {
+                            ch = defaultTextureForViewType(effect.channelViewType(c));
+                        }
                         effectPipeline.uploadTexture(currentFrame, c, ch);
                     }
                     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,

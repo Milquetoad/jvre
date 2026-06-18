@@ -101,6 +101,26 @@ jvre reflects each channel's declared kind, so binding a texture of the wrong ki
 rather than a cryptic validation message. See `jvre.demo.EffectCubeDemo`
 (`gradlew runEffectCube`) for a samplerCube skybox effect.
 
+### Live CPU data: dynamic channels
+
+For data that changes every frame — an audio spectrum, procedural noise, or
+keyboard state — bind a **`DynamicTexture`** instead of a static one. You rewrite
+its pixels each frame and the channel samples the fresh data:
+
+```java
+DynamicTexture data = renderer.createDynamicTexture(256, 1);
+renderer.setEffectChannel(0, data);   // bind once
+while (open) {
+    data.update(buildPixels());       // new pixels each frame (R8G8B8A8)
+    renderer.drawFrame();
+}
+```
+
+It's double-buffered per frame-in-flight internally, so updating never races the
+GPU. `jvre.demo.KeyboardDemo` (`gradlew runKeyboard`) builds the Shadertoy
+keyboard-channel convention (a 256×3 state texture) on top of this — note that the
+key→column map is the *app's* to define, not jvre's.
+
 ## Loading the shader
 
 Two ways to create an effect:

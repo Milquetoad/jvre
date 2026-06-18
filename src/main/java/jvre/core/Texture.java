@@ -4,8 +4,10 @@ import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.util.vma.VmaAllocationCreateInfo;
 import org.lwjgl.vulkan.VkBufferImageCopy;
+import org.lwjgl.vulkan.VkClearColorValue;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDependencyInfo;
+import org.lwjgl.vulkan.VkImageSubresourceRange;
 import org.lwjgl.vulkan.VkFormatProperties;
 import org.lwjgl.vulkan.VkImageBlit;
 import org.lwjgl.vulkan.VkImageCreateInfo;
@@ -329,6 +331,95 @@ public class Texture {
                         | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
         texture.createViewAndSampler(TextureOptions.builder().filter(filter).wrap(WrapMode.CLAMP).build());
         return texture;
+    }
+
+    /**
+     * Build an UPDATABLE 2D texture -- a sampleable image whose pixels you rewrite
+     * from the CPU each frame ({@link DynamicTexture}'s per-frame backing). Unlike
+     * {@link #create} (upload once at birth), this image stays {@code TRANSFER_DST}-
+     * capable so {@link #recordUpdate} can re-fill it. The format is R8G8B8A8_UNORM
+     * (the values are DATA -- e.g. keyboard state -- not sRGB colour). It is born
+     * cleared to zero and already in SHADER_READ_ONLY, so it is safe to bind/sample
+     * before the first update.
+     */
+    static Texture createUpdatable(Device device, long commandPool, int width, int height,
+                                   TextureOptions opts) {
+        Texture texture = new Texture(device, width, height, VK_FORMAT_R8G8B8A8_UNORM,
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+        // Bring it from UNDEFINED to a defined, sampleable state (cleared to 0), so a
+        // bind before the first update is valid (no UNDEFINED-layout descriptor).
+        Commands.oneShot(device, commandPool, cmd -> {
+            try (MemoryStack stack = stackPush()) {
+                texture.transition(cmd, stack, VK_IMAGE_LAYOUT_UNDEFINED,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE,
+                        VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                VkClearColorValue clear = VkClearColorValue.calloc(stack);   // all zeros
+                VkImageSubresourceRange range = VkImageSubresourceRange.calloc(stack)
+                        .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1)
+                        .baseArrayLayer(0).layerCount(1);
+                vkCmdClearColorImage(cmd, texture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        clear, range);
+                texture.transition(cmd, stack, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+            }
+        });
+        texture.createViewAndSampler(opts);
+        return texture;
+    }
+
+    /**
+     * Record (into an EXISTING command buffer) a re-fill of this updatable texture
+     * from {@code staging}: SHADER_READ_ONLY -&gt; TRANSFER_DST, copy the staged
+     * pixels in, TRANSFER_DST -&gt; SHADER_READ_ONLY. Recorded inline at the top of a
+     * frame's command buffer (no extra submit/stall), so the copy is ordered BEFORE
+     * the fragment shader that samples it, on the same timeline. The caller guarantees
+     * no in-flight frame is still reading THIS image (it uses per-frame-in-flight
+     * copies -- the fence on the slot covers it).
+     */
+    void recordUpdate(VkCommandBuffer cmd, Buffer staging) {
+        try (MemoryStack stack = stackPush()) {
+            transition(cmd, stack, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
+                    VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+
+            VkBufferImageCopy.Buffer region = VkBufferImageCopy.calloc(1, stack);
+            region.bufferOffset(0).bufferRowLength(0).bufferImageHeight(0);
+            region.imageSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                    .mipLevel(0).baseArrayLayer(0).layerCount(1);
+            region.imageOffset().x(0).y(0).z(0);
+            region.imageExtent().width(width).height(height).depth(1);
+            vkCmdCopyBufferToImage(cmd, staging.handle(), image,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region);
+
+            transition(cmd, stack, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+        }
+    }
+
+    /** One base-level (1 mip, 1 layer) image-layout transition on this image, in the
+     *  synchronization2 spelling -- shared by the updatable-texture path. */
+    private void transition(VkCommandBuffer cmd, MemoryStack stack, int oldLayout, int newLayout,
+                            long srcStage, long srcAccess, long dstStage, long dstAccess) {
+        VkImageMemoryBarrier2.Buffer barrier = VkImageMemoryBarrier2.calloc(1, stack);
+        barrier.sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2);
+        barrier.image(image);
+        barrier.srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+        barrier.dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+        barrier.oldLayout(oldLayout).newLayout(newLayout);
+        barrier.srcStageMask(srcStage).srcAccessMask(srcAccess);
+        barrier.dstStageMask(dstStage).dstAccessMask(dstAccess);
+        barrier.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                .baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
+        VkDependencyInfo depInfo = VkDependencyInfo.calloc(stack);
+        depInfo.sType(VK_STRUCTURE_TYPE_DEPENDENCY_INFO);
+        depInfo.pImageMemoryBarriers(barrier);
+        vkCmdPipelineBarrier2(cmd, depInfo);
     }
 
     /** The shared staging upload: stage the pixels, create the image in {@code

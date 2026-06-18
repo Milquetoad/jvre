@@ -2,6 +2,12 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-18 — ShaderEffect live-reload (Batch 4 closed) 🔁✅
+- **Closed the last Batch 4 thread** by dogfooding the [[Roadmap|hot-rebuild hook]]: `Renderer.setEffect` is now safe to call again while an effect is running -- that IS shader live-reload. When an effect is already installed, the new fragment shader is swapped into the existing pipeline IN PLACE via `Pipeline.reloadShaders` (which drains the GPU first), instead of the old close-then-rebuild -- which could free a pipeline a frame was still reading (a latent mid-loop hazard, now gone).
+- **The error story falls out for free:** the new `ShaderEffect` re-compiles + re-runs the SPIRV-Cross effect-contract guard at *creation*, so a broken live edit throws THERE (with line numbers, via the Batch 4 structured diagnostics) -- the caller catches it and just doesn't install it, so the running effect keeps going. No new API: the existing `setEffect` gained the behavior.
+- **Demo:** `Main` wires it to **F5** -- run the effect demo, edit `ripple.frag`, press F5, see it swap with no restart/flicker. Docs in `shader-effects.md`.
+- **Verification honesty:** effects render in the swapchain pass (windowed only -- the headless `render()` has no effect seam), so this is an OWNER-eyeball via F5, not a headless PNG. The reload MECHANISM itself is the same hook already proven headless red->blue ([[Roadmap|ReloadDemo]]); the fullscreen-effect pipeline re-bakes through the identical `kind=FULLSCREEN_EFFECT` path `buildEffectPipeline` uses. Build green, validation silent on compile.
+
 ## 2026-06-18 — MSDF text: runtime multi-channel glyphs, shipped 🔤✨
 - **Built the MSDF path the spike recommended** (same day): an OPT-IN crisp-corner font alongside the default single-channel SDF. [[Roadmap|MSDF]] now DONE. Branch `feat/msdf-text` (bundled with the spike commit per owner's "hold the push, bundle bigger").
 - **No version bump:** `org.lwjgl:lwjgl-msdfgen` resolves at jvre's current 3.3.4, so it dropped in as just another LWJGL module + its host natives.

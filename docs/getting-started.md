@@ -11,7 +11,7 @@ magic comments at the top of the file:
 
 ```java
 //JAVA 21
-//DEPS io.github.milquetoad:jvre:1.1.0
+//DEPS io.github.milquetoad:jvre:1.2.0
 //DEPS org.lwjgl:lwjgl:3.3.4:natives-windows
 //DEPS org.lwjgl:lwjgl-glfw:3.3.4:natives-windows
 //DEPS org.lwjgl:lwjgl-vma:3.3.4:natives-windows
@@ -61,7 +61,7 @@ repositories {
 }
 
 dependencies {
-    implementation 'io.github.milquetoad:jvre:1.1.0'
+    implementation 'io.github.milquetoad:jvre:1.2.0'
 
     // jvre does NOT bundle platform natives -- you choose them for your OS.
     // Add the matching natives classifier for the LWJGL modules jvre uses.

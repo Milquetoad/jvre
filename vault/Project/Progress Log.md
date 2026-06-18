@@ -2,6 +2,13 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-18 — 1.2.0 release milestone: Batch 6 shipped 📦✅
+- **Cut the 1.2.0 line** (owner builds + uploads to Maven Central). [[jvre-definition-of-done|Semver]]: Batch 6 is all backward-compatible additions over 1.1 -> MINOR. New public surface: `TargetFormat.HDR_FLOAT32`, `Renderer.createCubemap`/`createVolume`/`createDynamicTexture`, the `DynamicTexture` handle, cube/3D effect iChannels (+ dimensionality-aware contract guard). No breaks.
+- **Version bumped** `1.1.0 -> 1.2.0` in `build.gradle` + every consumer coordinate (`README.md`, `docs/getting-started.md` JBang `//DEPS` + Gradle block). Status lines (`README.md`, `docs/README.md`) -> 1.2.
+- **README "what works today" refreshed:** `ShaderEffect` channels now span sampler2D/Cube/3D + dynamic; a new "Texture channels" bullet (cubemaps, 3D volumes, dynamic textures); RTT note now says 16- AND 32-bit HDR float.
+- **Staleness swept:** no `1.1.0` refs remain outside the vault; `api-surface.md` already carries every Batch 6 type (added during the feature PRs) -- `DynamicTexture` handle, `HDR_FLOAT32`, `createCubemap`/`createVolume`/`createDynamicTexture`. Audit date 2026-06-18 (same day, surface grew additively). Build green.
+- **Owner step:** `gradlew centralBundle -PsignArtifacts` -> `build/central-bundle-1.2.0.zip`, upload via the Central Portal.
+
 ## 2026-06-18 — Batch 6d: dynamic channel textures + keyboard demo ⌨️✅ (Batch 6 DONE)
 - **The last Batch 6 item, and the genuinely-new primitive of the batch:** a CPU-updatable texture. `Renderer.createDynamicTexture(w, h)` -> `DynamicTexture.update(byte[])` each frame, bound as a channel via `setEffectChannel(i, dyn)` (effect) or `frame.texture(i, dyn)` (L1). The mechanism for feeding a shader live CPU data -- audio, procedural fields, keyboard state.
 - **The hazard this closes** (the reason it isn't just a Texture): a plain Texture is filled once, so sampling it forever is safe. A texture that changes EVERY frame races itself -- with 2 frames in flight, the GPU samples frame N-1's pixels while the CPU wants to write frame N's. Solved the same way as the per-frame UBOs: **one image PER frame-in-flight slot**. Each frame writes + samples its OWN copy; the renderer applies the pending pixels after that slot's fence (the safe point) and records the staging->image copy at the TOP of the frame's command buffer -- inline, no extra submit/stall, ordered before the draws that sample it.

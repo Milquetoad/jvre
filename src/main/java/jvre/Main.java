@@ -359,8 +359,28 @@ public class Main {
         if (canvasTarget != null) {
             System.out.println("Press F2 to save a PNG screenshot of the L2 canvas (render-to-texture readback).");
         }
+        if (EFFECT != null) {
+            System.out.println("Press F5 to LIVE-RELOAD the effect shader (edit "
+                    + EFFECT + " and press F5 -- no restart).");
+        }
         while (!window.shouldClose()) {
             window.pollEvents();
+
+            // F5: live-reload the effect from its source file. Re-compiles + re-runs
+            // the effect-contract check at ShaderEffect creation, so a broken edit
+            // throws HERE -- we print it and KEEP the running shader (the new effect
+            // is never installed). A good edit swaps in place via setEffect's
+            // hot-rebuild. The whole point of the Batch 4 reload hook, dogfooded.
+            if (EFFECT != null && window.input().keyPressed(Key.F5)) {
+                try {
+                    renderer.setEffect(ShaderEffect.fromFragment(EFFECT));
+                    System.out.println("Effect reloaded: " + EFFECT);
+                } catch (RuntimeException e) {
+                    System.out.println("Effect reload failed (keeping the running shader):\n"
+                            + e.getMessage());
+                }
+            }
+
             // Offscreen pass: render the cube into its target BEFORE drawFrame
             // records it (and the main pass that samples it). Immediate mode --
             // enqueued every frame, like the shape batch.

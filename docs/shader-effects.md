@@ -75,6 +75,27 @@ sampler or declares an oversized push-constant block is **rejected with a clear
 explanation**. The contract is deliberately tiny in v1 (just resolution / mouse /
 time); richer inputs are a future extension.
 
+## Live-reload
+
+`setEffect` is **safe to call again while an effect is running** — that's live
+reload. Re-load the shader and set it again, e.g. from a key press or a file watch:
+
+```java
+if (window.input().keyPressed(Key.F5)) {
+    try {
+        renderer.setEffect(ShaderEffect.fromFragment("/effects/ripple.frag"));
+    } catch (RuntimeException e) {
+        System.out.println(e.getMessage());   // broken edit -> keep the running shader
+    }
+}
+```
+
+The new `ShaderEffect` re-compiles and re-checks the contract *at creation*, so a
+broken edit throws there — catch it and the **running effect keeps going** (the bad
+one is never installed). A good edit is swapped into the live pipeline **in place**
+(it drains the GPU first, so it's safe mid-loop) — no restart, no flicker. The
+bundled demo wires exactly this to **F5**.
+
 ## A complete effect program
 
 ```java

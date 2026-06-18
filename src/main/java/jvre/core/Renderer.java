@@ -291,10 +291,28 @@ public class Renderer {
      * via runtime shaderc); here it gets a pipeline against the current
      * swapchain. Its built-in uniforms (uResolution/uMouse/uTime) are filled
      * automatically every frame -- no further calls needed.
+     *
+     * <p><b>Safe to call again mid-loop -- this is shader LIVE-RELOAD.</b> When an
+     * effect is already showing, the new fragment shader is swapped into the
+     * existing pipeline IN PLACE (via the {@link Pipeline#reloadShaders hot-rebuild
+     * hook}, which drains the GPU first), instead of the old close-then-rebuild that
+     * could free a pipeline still in flight. So a file-watch callback can do
+     * {@code renderer.setEffect(ShaderEffect.fromFragment(path))} on every save:
+     * the new {@link ShaderEffect} re-compiles + re-checks the effect contract at
+     * creation, so a broken edit throws THERE (and you keep the running effect by
+     * not calling this), and a good one reloads live.
      */
     public void setEffect(ShaderEffect effect) {
+        boolean reloading = this.effect != null && effectPipeline != null;
         this.effect = effect;
-        buildEffectPipeline();
+        if (reloading) {
+            // Live-reload: swap the fragment shader in place. The fullscreen vertex
+            // shader is unchanged; only the user's fragment bytes differ.
+            effectPipeline.reloadShaders(Pipeline.readResource(FULLSCREEN_VERT),
+                    effect.fragmentSpirv());
+        } else {
+            buildEffectPipeline();
+        }
     }
 
     private void buildEffectPipeline() {

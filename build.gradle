@@ -210,6 +210,16 @@ tasks.register('runHdr', JavaExec) {
     classpath = sourceSets.main.runtimeClasspath + configurations.nativesRuntime
 }
 
+// Run the channels/effect-chain demo (jvre.demo.ChannelsDemo) -- headless, multi-
+// input post-processing (a pass samples two targets), writes a PNG.
+tasks.register('runChannels', JavaExec) {
+    description = 'Runs the multi-input texture-channels demo (jvre.demo.ChannelsDemo) -- headless, writes a PNG'
+    group = 'application'
+    dependsOn 'classes', 'compileShaders', 'processResources'
+    mainClass = 'jvre.demo.ChannelsDemo'
+    classpath = sourceSets.main.runtimeClasspath + configurations.nativesRuntime
+}
+
 // Treat the generated .spv files as ordinary resources, built before them.
 sourceSets.main.resources.srcDir(shaderOutDir)
 tasks.named('processResources') { dependsOn 'compileShaders' }

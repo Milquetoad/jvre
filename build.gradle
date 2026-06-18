@@ -220,6 +220,16 @@ tasks.register('runChannels', JavaExec) {
     classpath = sourceSets.main.runtimeClasspath + configurations.nativesRuntime
 }
 
+// Run the shader hot-rebuild demo (jvre.demo.ReloadDemo) -- headless: render,
+// reloadShaders() in place, render again, prove the output changed.
+tasks.register('runReload', JavaExec) {
+    description = 'Runs the shader hot-rebuild demo (jvre.demo.ReloadDemo) -- headless, no PNG'
+    group = 'application'
+    dependsOn 'classes', 'compileShaders', 'processResources'
+    mainClass = 'jvre.demo.ReloadDemo'
+    classpath = sourceSets.main.runtimeClasspath + configurations.nativesRuntime
+}
+
 // Treat the generated .spv files as ordinary resources, built before them.
 sourceSets.main.resources.srcDir(shaderOutDir)
 tasks.named('processResources') { dependsOn 'compileShaders' }

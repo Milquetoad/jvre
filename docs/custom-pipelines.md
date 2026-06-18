@@ -189,6 +189,51 @@ depth-tested, back-face-culled, tumbling cube driven by a `Camera` and a
 fragment-stage push constant — is the demo's `setSceneRenderer` block in
 [`Main.java`](../src/main/java/jvre/Main.java).
 
+## Live-reloading shaders
+
+You can swap new shader code into a pipeline **in place**, without recreating it or
+re-wiring your scene renderer — the foundation of shader live-reload (recompile on
+file save, see the change instantly):
+
+```java
+// From a file-watch callback, say. GLSL source overload (compiles for you):
+pipeline.reloadShaders(newVertexGlsl, newFragmentGlsl);
+// ...or hand it SPIR-V you compiled yourself:
+pipeline.reloadShaders(vSpirv, fSpirv);
+```
+
+Your `Pipeline` reference stays valid — the bound lambda keeps drawing — because the
+rebuild happens *inside* the same object. Two rules:
+
+- The reloaded shader must keep the **same resource interface** as the original
+  `PipelineSpec` (same UBO size, same texture channels, same push range). Only the
+  shader *body* may change. Changing the interface needs a fresh `createPipeline`.
+- It's **not** a hot-path call — it drains the GPU before rebuilding, so call it
+  *between* frames, not inside your scene renderer.
+
+If the new GLSL fails to compile, `reloadShaders` throws `ShaderCompileException`
+and **leaves the running pipeline untouched** — a broken edit never takes down the
+last good version.
+
+## Compile errors are structured
+
+`ShaderCompiler` (and the GLSL `reloadShaders` overload) don't just throw a string —
+a failed compile throws `ShaderCompileException`, which carries shaderc's log parsed
+into `ShaderDiagnostic` records so tooling can act on it (jump-to-line, an overlay):
+
+```java
+try {
+    pipeline.reloadShaders(vs, editedFrag);
+} catch (ShaderCompileException e) {
+    for (ShaderDiagnostic d : e.errors()) {   // .diagnostics() includes warnings too
+        System.out.println(d.line() + ": " + d.message());   // d.severity(), d.raw()
+    }
+}
+```
+
+`e.rawLog()` is always the unmodified shaderc text, so nothing is lost even if the
+message shape is one the parser didn't recognise.
+
 ## Lifetime
 
 Pipelines and buffers/textures you create are **yours to close**, before the

@@ -1,6 +1,10 @@
 package jvre.core;
 
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.lwjgl.util.shaderc.Shaderc.*;
 
@@ -60,9 +64,10 @@ public final class ShaderCompiler {
                     != shaderc_compilation_status_success) {
                 // The error log carries the user's line numbers -- the reason
                 // jvre does NOT inject a preamble around user source (it would
-                // shift every line reference in here).
-                throw new RuntimeException("Shader compilation failed for " + name + ":\n"
-                        + shaderc_result_get_error_message(result));
+                // shift every line reference in here). Parse it into structured
+                // diagnostics so tooling gets (line, severity, message), not a blob.
+                String log = shaderc_result_get_error_message(result);
+                throw new ShaderCompileException(name, parseLog(log, name), log);
             }
 
             // Copy out of shaderc's native buffer before releasing it.
@@ -76,6 +81,62 @@ public final class ShaderCompiler {
             }
             shaderc_compile_options_release(options);
             shaderc_compiler_release(compiler);
+        }
+    }
+
+    // shaderc/glslang's usual message shape: "name:line: error: message". The name
+    // can itself contain colons (a path), so the line number is the FIRST run of
+    // digits flanked by colons -- we anchor on ":<digits>: <severity>:".
+    private static final Pattern DIAGNOSTIC = Pattern.compile(
+            "^(?<name>.*?):(?<line>\\d+):\\s*(?<sev>error|warning):\\s*(?<msg>.*)$",
+            Pattern.CASE_INSENSITIVE);
+
+    // The older glslang shape some toolchains emit: "ERROR: name:line: message".
+    private static final Pattern DIAGNOSTIC_PREFIXED = Pattern.compile(
+            "^(?<sev>error|warning):\\s*(?<name>.*?):(?<line>\\d+):\\s*(?<msg>.*)$",
+            Pattern.CASE_INSENSITIVE);
+
+    /**
+     * Turn shaderc's free-text error log into structured {@link ShaderDiagnostic}s.
+     * Best-effort and LOSSLESS: every line that matches a known shape becomes a
+     * typed diagnostic; summary lines ("1 error generated.") are skipped; and if
+     * NOTHING parsed, the whole log is returned as a single UNKNOWN diagnostic so a
+     * caller is never left with an empty list when a compile actually failed.
+     */
+    private static List<ShaderDiagnostic> parseLog(String log, String name) {
+        List<ShaderDiagnostic> out = new ArrayList<>();
+        for (String line : log.split("\\R")) {   // split on any line terminator
+            if (line.isBlank()) {
+                continue;
+            }
+            Matcher m = DIAGNOSTIC.matcher(line);
+            if (!m.matches()) {
+                m = DIAGNOSTIC_PREFIXED.matcher(line);
+            }
+            if (m.matches()) {
+                ShaderDiagnostic.Severity sev = m.group("sev").equalsIgnoreCase("warning")
+                        ? ShaderDiagnostic.Severity.WARNING
+                        : ShaderDiagnostic.Severity.ERROR;
+                int ln = parseLineNumber(m.group("line"));
+                out.add(new ShaderDiagnostic(m.group("name").trim(), ln, sev,
+                        m.group("msg").trim(), line));
+            }
+            // A line that matched no pattern is a summary/blank -- intentionally
+            // dropped from the structured list; the raw log still carries it.
+        }
+        if (out.isEmpty()) {
+            // Unrecognized format: keep the whole log so the failure is never silent.
+            out.add(new ShaderDiagnostic(name, -1, ShaderDiagnostic.Severity.UNKNOWN,
+                    log.strip(), log.strip()));
+        }
+        return out;
+    }
+
+    private static int parseLineNumber(String digits) {
+        try {
+            return Integer.parseInt(digits);
+        } catch (NumberFormatException e) {
+            return -1;   // unreachable given the \d+ group, but never throw from a parser
         }
     }
 }

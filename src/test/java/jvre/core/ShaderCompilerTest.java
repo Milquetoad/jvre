@@ -54,6 +54,45 @@ class ShaderCompilerTest {
     }
 
     @Test
+    void brokenShaderYieldsStructuredDiagnostics() {
+        // The syntax error sits on line 5 (the stray '}' that closes a still-open
+        // call) -- a real shaderc/glslang report we parse, not a message we invent.
+        String broken = """
+                #version 450
+                layout(location = 0) out vec4 outColor;
+                void main() {
+                    outColor = vec4(1.0
+                }
+                """;
+
+        ShaderCompileException e = assertThrows(ShaderCompileException.class,
+                () -> ShaderCompiler.compileFragment(broken, "broken.frag"));
+
+        assertEquals("broken.frag", e.shaderName());
+        assertFalse(e.diagnostics().isEmpty(), "a failed compile must carry diagnostics");
+        assertFalse(e.errors().isEmpty(), "the failure must surface at least one ERROR");
+
+        // The structure is the whole point: a real, parsed line number (not -1) and
+        // an ERROR severity -- proof the regex matched this machine's shaderc format.
+        ShaderDiagnostic err = e.errors().get(0);
+        assertEquals(ShaderDiagnostic.Severity.ERROR, err.severity());
+        assertTrue(err.line() > 0, "line should be parsed, was " + err.line()
+                + " (raw: " + err.raw() + ")");
+        assertFalse(err.message().isBlank(), "message text should survive parsing");
+    }
+
+    @Test
+    void unparsableLogStillProducesADiagnostic() {
+        // Defensive: even if shaderc ever changed its message shape, a failed
+        // compile must never hand back an empty diagnostics list.
+        String broken = "this is not glsl at all";
+        ShaderCompileException e = assertThrows(ShaderCompileException.class,
+                () -> ShaderCompiler.compileFragment(broken, "garbage.frag"));
+        assertFalse(e.diagnostics().isEmpty());
+        assertFalse(e.rawLog().isBlank(), "the raw log is always preserved");
+    }
+
+    @Test
     void compilesValidVertexShader() {
         // The fullscreen-triangle trick, as a vertex shader -- the exact shader
         // ShaderEffect's pipeline will use (3 verts from gl_VertexIndex, no

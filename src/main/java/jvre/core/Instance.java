@@ -35,6 +35,14 @@ import static org.lwjgl.vulkan.VK13.VK_API_VERSION_1_3;
  */
 public class Instance {
 
+    // Raise the LWJGL MemoryStack size before this class (or LWJGL's VkInstance
+    // constructor it invokes) touches a stack -- otherwise device-extension
+    // enumeration overflows the default 64 KB on extension-rich drivers. Runs at
+    // class-load, before the constructor body. See NativeBootstrap.
+    static {
+        NativeBootstrap.ensureStackCapacity();
+    }
+
     private static final String VALIDATION_LAYER = "VK_LAYER_KHRONOS_validation";
 
     private final boolean validation;
@@ -175,16 +183,25 @@ public class Instance {
             IntBuffer layerCount = stack.ints(0);
             vkEnumerateInstanceLayerProperties(layerCount, null);
 
+            // Heap-allocate the count-sized buffer (not the shared 64 KB MemoryStack):
+            // each VkLayerProperties is ~520 bytes (two 256-char strings), and a system
+            // with many installed layers (overlays, capture tools, SDK layers) could
+            // overflow the stack -- the same hazard the device-extension enumeration
+            // hit. Freed below. Belt-and-suspenders with the device-extension fix.
             VkLayerProperties.Buffer availableLayers =
-                    VkLayerProperties.malloc(layerCount.get(0), stack);
-            vkEnumerateInstanceLayerProperties(layerCount, availableLayers);
+                    VkLayerProperties.malloc(layerCount.get(0));
+            try {
+                vkEnumerateInstanceLayerProperties(layerCount, availableLayers);
 
-            for (VkLayerProperties layer : availableLayers) {
-                if (VALIDATION_LAYER.equals(layer.layerNameString())) {
-                    return true;
+                for (VkLayerProperties layer : availableLayers) {
+                    if (VALIDATION_LAYER.equals(layer.layerNameString())) {
+                        return true;
+                    }
                 }
+                return false;
+            } finally {
+                availableLayers.free();
             }
-            return false;
         }
     }
 

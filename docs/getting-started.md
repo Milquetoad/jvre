@@ -11,7 +11,7 @@ magic comments at the top of the file:
 
 ```java
 //JAVA 21
-//DEPS io.github.milquetoad:jvre:1.2.0
+//DEPS io.github.milquetoad:jvre:1.2.1
 //DEPS org.lwjgl:lwjgl:3.3.4:natives-windows
 //DEPS org.lwjgl:lwjgl-glfw:3.3.4:natives-windows
 //DEPS org.lwjgl:lwjgl-vma:3.3.4:natives-windows
@@ -24,7 +24,6 @@ import jvre.core.*;
 
 public class play {
     public static void main(String[] args) {
-        org.lwjgl.system.Configuration.STACK_SIZE.set(512);
         Window window = new Window(800, 600, "jvre via JBang");
         Instance instance = new Instance("play", true);
         Surface surface = new Surface(instance, window);
@@ -61,7 +60,7 @@ repositories {
 }
 
 dependencies {
-    implementation 'io.github.milquetoad:jvre:1.2.0'
+    implementation 'io.github.milquetoad:jvre:1.2.1'
 
     // jvre does NOT bundle platform natives -- you choose them for your OS.
     // Add the matching natives classifier for the LWJGL modules jvre uses.
@@ -97,15 +96,9 @@ import jvre.core.Renderer2D;
 import jvre.core.RendererOptions;
 import jvre.core.Surface;
 import jvre.core.Window;
-import org.lwjgl.system.Configuration;
 
 public class Hello {
     public static void main(String[] args) {
-        // Some drivers expose enough extensions to overflow LWJGL's default 64 KB
-        // per-thread stack during setup; bump it before any Vulkan call. (Harmless
-        // if you never hit the limit.)
-        Configuration.STACK_SIZE.set(512);
-
         // --- set up: Window -> Instance -> Surface -> Renderer ---
         Window window = new Window(800, 600, "Hello jvre");
         Instance instance = new Instance("hello", /* validation */ true);

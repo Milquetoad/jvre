@@ -127,6 +127,11 @@ one is never installed). A good edit is swapped into the live pipeline **in plac
 (it drains the GPU first, so it's safe mid-loop) — no restart, no flicker. The
 bundled demo wires exactly this to **F5**.
 
+A failed compile throws `ShaderCompileException` (a `RuntimeException`), which
+carries the parsed compiler output as `ShaderDiagnostic` records (name, line,
+severity, message) in addition to the formatted `getMessage()` — handy if you want
+to surface errors in a tool rather than just print them.
+
 ## A complete effect program
 
 ```java

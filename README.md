@@ -9,7 +9,7 @@ A general-purpose rendering framework written **from scratch in Java on top of [
 1. **Learn graphics from first principles** — understand every layer, from the Vulkan instance up to a full render loop, with no engine hiding the details.
 2. **Ship a real, reusable framework** — a coherent, documented, cross-platform library, delivered with the polish of a professional product (the finish line is a stable 1.0 on Maven Central).
 
-> **Status: 1.0 — released on Maven Central.** Both API altitudes below are built, and the [public API](docs/api-surface.md) is now a semver compatibility promise. Continued capability growth (the full fully-fledged feature set) is planned post-1.0 — see the [roadmap](vault/Project/Roadmap.md).
+> **Status: 1.1 — on Maven Central.** Both API altitudes below are built, and the [public API](docs/api-surface.md) is a semver compatibility promise. 1.1 adds backward-compatible capability over 1.0 (render-to-texture, headless rendering, HDR targets, MSDF text, runtime fonts, shader hot-reload, effect input channels, sampler config). Continued capability growth (the full fully-fledged feature set) is planned — see the [roadmap](vault/Project/Roadmap.md).
 
 ## Two altitudes, one engine
 
@@ -69,7 +69,7 @@ repositories {
 }
 
 dependencies {
-    implementation 'io.github.milquetoad:jvre:1.0.0'
+    implementation 'io.github.milquetoad:jvre:1.1.0'
 
     // jvre does NOT bundle platform natives -- you choose them for your OS.
     // Add the natives classifier for the LWJGL modules jvre uses:
@@ -81,6 +81,7 @@ dependencies {
     runtimeOnly("org.lwjgl:lwjgl-shaderc:$lwjgl:$natives")
     runtimeOnly("org.lwjgl:lwjgl-spvc:$lwjgl:$natives")
     runtimeOnly("org.lwjgl:lwjgl-stb:$lwjgl:$natives")
+    runtimeOnly("org.lwjgl:lwjgl-msdfgen:$lwjgl:$natives")
 }
 ```
 
@@ -116,12 +117,17 @@ The full Vulkan substrate and both API altitudes are built and run cleanly
 - **Modern Vulkan core** — dynamic rendering + synchronization2 (Vulkan 1.3),
   scored GPU selection with an override, VMA-managed memory, a resizable swapchain
   with 2 frames in flight, and **MSAA**.
-- **L2 `Renderer2D`** — fills, strokes, text (SDF glyphs), and images, with an
-  analytic SDF render path (crisp curves at any size) and a transform stack.
+- **L2 `Renderer2D`** — fills, strokes, text (SDF *and* MSDF glyphs, with runtime
+  font loading), and images (configurable sampling), with an analytic SDF render
+  path (crisp curves at any size) and a transform stack.
 - **`ShaderEffect`** — runtime-compiled fullscreen fragment-shader effects, with a
-  contract guard.
+  contract guard, structured compile diagnostics, live hot-reload, and Shadertoy-style
+  input channels (`iChannel0..3`).
 - **L1 escape hatch** — user-defined pipelines (your geometry + shaders + uniforms
-  + textures), index buffers, and a `Camera` helper for 3D.
+  + textures), index buffers, a `Camera` helper for 3D, and **render-to-texture**
+  (offscreen targets, incl. HDR float formats — render into one, then sample it back).
+- **Headless rendering** — drive the renderer with no window and read pixels back
+  out (offscreen render + `readPixels`).
 - **Interactivity & capability knobs** — a per-frame input snapshot, `time()`/`dt()`,
   and creation-time vsync / MSAA / GPU options.
 - **Delivery** — cross-platform CI (Windows + Linux), GPG-signed and published to
@@ -130,8 +136,8 @@ The full Vulkan substrate and both API altitudes are built and run cleanly
 The **post-1.0 feature roadmap** (jvre is built out toward a fully-fledged
 framework) lives in **[`vault/Project/Roadmap.md`](vault/Project/Roadmap.md)**; the
 dated build diary is [`vault/Project/Progress Log.md`](vault/Project/Progress%20Log.md).
-Planned post-1.0: render-to-texture, instancing, compute, ray/path tracing, and
-the catalogued L2 refinements.
+Planned: instancing, compute, ray/path tracing, and the remaining catalogued L2
+refinements.
 
 ## Contributing
 

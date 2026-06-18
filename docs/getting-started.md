@@ -11,13 +11,14 @@ magic comments at the top of the file:
 
 ```java
 //JAVA 21
-//DEPS io.github.milquetoad:jvre:1.0.0
+//DEPS io.github.milquetoad:jvre:1.1.0
 //DEPS org.lwjgl:lwjgl:3.3.4:natives-windows
 //DEPS org.lwjgl:lwjgl-glfw:3.3.4:natives-windows
 //DEPS org.lwjgl:lwjgl-vma:3.3.4:natives-windows
 //DEPS org.lwjgl:lwjgl-shaderc:3.3.4:natives-windows
 //DEPS org.lwjgl:lwjgl-spvc:3.3.4:natives-windows
 //DEPS org.lwjgl:lwjgl-stb:3.3.4:natives-windows
+//DEPS org.lwjgl:lwjgl-msdfgen:3.3.4:natives-windows
 
 import jvre.core.*;
 
@@ -60,7 +61,7 @@ repositories {
 }
 
 dependencies {
-    implementation 'io.github.milquetoad:jvre:1.0.0'
+    implementation 'io.github.milquetoad:jvre:1.1.0'
 
     // jvre does NOT bundle platform natives -- you choose them for your OS.
     // Add the matching natives classifier for the LWJGL modules jvre uses.
@@ -72,6 +73,7 @@ dependencies {
     runtimeOnly("org.lwjgl:lwjgl-shaderc:$lwjgl:$natives")
     runtimeOnly("org.lwjgl:lwjgl-spvc:$lwjgl:$natives")
     runtimeOnly("org.lwjgl:lwjgl-stb:$lwjgl:$natives")
+    runtimeOnly("org.lwjgl:lwjgl-msdfgen:$lwjgl:$natives")
 }
 ```
 

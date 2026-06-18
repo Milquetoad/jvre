@@ -428,6 +428,29 @@ public class Renderer {
     }
 
     /**
+     * Create a CUBEMAP texture from 6 square faces -- a {@code samplerCube} you can
+     * bind as a pipeline texture channel or an effect {@code iChannel} for skyboxes,
+     * environment reflections, and probes. A shader samples it with a 3D DIRECTION
+     * vector ({@code texture(cube, dir)}); the hardware resolves which face + texel
+     * the ray hits and filters across face seams.
+     *
+     * <p>The faces are given in Vulkan's fixed order -- {@code +X, -X, +Y, -Y, +Z,
+     * -Z} -- each {@code size} x {@code size} pixels, R8G8B8A8 (row-major). Sampling
+     * defaults to {@link Filter#LINEAR} with edge clamp (the right default for a
+     * smooth environment map). The caller OWNS the result -- {@code close()} it
+     * before the Renderer.
+     */
+    public Texture createCubemap(byte[][] faces, int size) {
+        return createCubemap(faces, size, TextureOptions.builder()
+                .filter(Filter.LINEAR).wrap(WrapMode.CLAMP).build());
+    }
+
+    /** {@link #createCubemap(byte[][], int)} with full sampler {@link TextureOptions}. */
+    public Texture createCubemap(byte[][] faces, int size, TextureOptions options) {
+        return Texture.createCubemap(device, commandPool, faces, size, options);
+    }
+
+    /**
      * Load + decode an image FILE from the classpath ({@code resourcePath}, e.g.
      * {@code "/images/sprite.png"}) into a drawable image -- PNG/JPEG/BMP/TGA/...
      * via stb_image. The convenience over {@link #createImage}: you don't decode

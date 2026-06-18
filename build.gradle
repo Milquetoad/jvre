@@ -258,6 +258,16 @@ tasks.register('runFloat32', JavaExec) {
     classpath = sourceSets.main.runtimeClasspath + configurations.nativesRuntime
 }
 
+// Cubemap (samplerCube) channel verification (jvre.demo.CubemapDemo) -- headless,
+// samples a 6-face cube along two directions and asserts the face colours.
+tasks.register('runCubemap', JavaExec) {
+    description = 'Runs the cubemap channel check (jvre.demo.CubemapDemo) -- headless, asserts a pass'
+    group = 'application'
+    dependsOn 'classes', 'compileShaders', 'processResources'
+    mainClass = 'jvre.demo.CubemapDemo'
+    classpath = sourceSets.main.runtimeClasspath + configurations.nativesRuntime
+}
+
 // Treat the generated .spv files as ordinary resources, built before them.
 sourceSets.main.resources.srcDir(shaderOutDir)
 tasks.named('processResources') { dependsOn 'compileShaders' }

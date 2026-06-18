@@ -248,6 +248,16 @@ tasks.register('runMsdf', JavaExec) {
     classpath = sourceSets.main.runtimeClasspath + configurations.nativesRuntime
 }
 
+// 32-bit float render-target verification (jvre.demo.Float32Demo) -- headless,
+// stores a value beyond 16-bit-float range and proves it survived finite.
+tasks.register('runFloat32', JavaExec) {
+    description = 'Runs the 32-bit float render-target check (jvre.demo.Float32Demo) -- headless, asserts a pass'
+    group = 'application'
+    dependsOn 'classes', 'compileShaders', 'processResources'
+    mainClass = 'jvre.demo.Float32Demo'
+    classpath = sourceSets.main.runtimeClasspath + configurations.nativesRuntime
+}
+
 // Treat the generated .spv files as ordinary resources, built before them.
 sourceSets.main.resources.srcDir(shaderOutDir)
 tasks.named('processResources') { dependsOn 'compileShaders' }

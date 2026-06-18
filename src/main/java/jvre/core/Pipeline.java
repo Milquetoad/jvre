@@ -61,9 +61,22 @@ import static org.lwjgl.vulkan.VK13.VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_
 public class Pipeline {
 
     private final Device device;
-    private final long descriptorSetLayout;  // the SHAPE of the shader's bound resources
-    private final long layout;               // VkPipelineLayout (set layout + push range)
-    private final long handle;               // VkPipeline
+    // Not final: a shader hot-rebuild (reloadShaders) swaps in freshly baked GPU
+    // objects in place, so the user's Pipeline reference -- captured in a scene
+    // renderer lambda -- keeps working across a live reload.
+    private long descriptorSetLayout;        // the SHAPE of the shader's bound resources
+    private long layout;                     // VkPipelineLayout (set layout + push range)
+    private long handle;                     // VkPipeline
+
+    // The bake INPUTS, remembered so reloadShaders can re-bake everything-but-the-
+    // shader-bytes identically (same formats, same fixed-function, same interface).
+    private final Kind kind;
+    private final PipelineSpec spec;         // null for the built-in kinds
+    private final String label;
+    private final int colorFormat;
+    private final int depthFormat;
+    private final int sampleCount;
+    private int frames = 0;                  // frames-in-flight (set by fromSpec; for resource realloc)
 
     // CUSTOM-pipeline managed resources (the L1 escape hatch's bound uniforms).
     // When the spec declared a UBO, jvre owns a per-frame-in-flight UBO buffer +
@@ -118,6 +131,7 @@ public class Pipeline {
                                     int sampleCount, PipelineSpec spec, int framesInFlight) {
         Pipeline p = new Pipeline(device, colorFormat, depthFormat, sampleCount,
                 spec.vertexSpirv, spec.fragmentSpirv, Kind.CUSTOM, spec.label, spec);
+        p.frames = framesInFlight;   // remembered so reloadShaders can re-allocate resources
         if (spec.uniformBufferSize > 0 || spec.textureCount() > 0) {
             p.allocateResources(framesInFlight, spec);
         }
@@ -166,6 +180,12 @@ public class Pipeline {
                      byte[] vertSpirv, byte[] fragSpirv, Kind kind, String label,
                      PipelineSpec spec) {
         this.device = device;
+        this.kind = kind;
+        this.spec = spec;
+        this.label = label;
+        this.colorFormat = colorFormat;
+        this.depthFormat = depthFormat;
+        this.sampleCount = sampleCount;
 
         try (MemoryStack stack = stackPush()) {
             // ---- Shader modules: SPIR-V handed to the driver ----
@@ -715,14 +735,81 @@ public class Pipeline {
         }
     }
 
+    /**
+     * Hot-rebuild this pipeline with new shader SPIR-V, IN PLACE -- the foundation
+     * of shader live-reload (re-compile a shader on file save, see it without
+     * restarting). Everything else is re-baked identically from the remembered
+     * inputs: the same attachment formats, vertex layout, blend/depth/cull state,
+     * and -- crucially -- the same resource INTERFACE. So the reloaded shader must
+     * keep the original {@link PipelineSpec}'s bound resources (same UBO size,
+     * same texture channels, same push range); only the shader BODY may change.
+     * (Changing the interface needs a fresh {@link Renderer#createPipeline}.)
+     *
+     * <p>This is NOT a hot-path call (it rebuilds a pipeline and waits for the GPU
+     * to drain first, so no in-flight frame is still referencing the old handle).
+     * Call it between frames -- e.g. from your file-watch callback.
+     *
+     * <p>Implementation: bake a fresh sibling through the normal path, then adopt
+     * its GPU handles and destroy the old ones. Reusing the constructor keeps the
+     * 400-line bake in ONE place rather than duplicating it for reload. The old
+     * per-frame descriptor sets/UBOs go too -- harmless, since immediate-mode
+     * callers rewrite uniforms/textures every frame anyway.
+     */
+    public void reloadShaders(byte[] vertSpirv, byte[] fragSpirv) {
+        // Bake the replacement BEFORE touching our own objects: if the new shader
+        // fails to compile into a pipeline, we throw and leave THIS pipeline intact
+        // (a broken live edit shouldn't crash the still-running good version).
+        Pipeline next = new Pipeline(device, colorFormat, depthFormat, sampleCount,
+                vertSpirv, fragSpirv, kind, label, spec);
+        if (spec != null && (spec.uniformBufferSize > 0 || spec.textureCount() > 0)) {
+            next.allocateResources(frames, spec);
+        }
+
+        // The GPU may still be reading the old pipeline from an in-flight command
+        // buffer. Drain before destroying it (reload is rare; the stall is fine).
+        vkDeviceWaitIdle(device.handle());
+        destroyGpuObjects();
+
+        // Adopt the freshly baked objects. `next` is intentionally NOT closed --
+        // we've taken ownership of its handles; letting it be GC'd frees nothing.
+        this.handle = next.handle;
+        this.layout = next.layout;
+        this.descriptorSetLayout = next.descriptorSetLayout;
+        this.uniformBuffers = next.uniformBuffers;
+        this.uniformSets = next.uniformSets;
+        this.uniformPool = next.uniformPool;
+        this.pushStageFlags = next.pushStageFlags;
+    }
+
+    /**
+     * Convenience: hot-rebuild from GLSL SOURCE -- compile both stages via {@link
+     * ShaderCompiler}, then {@link #reloadShaders(byte[], byte[])}. A compile error
+     * throws {@link ShaderCompileException} (with line-level diagnostics) and leaves
+     * the running pipeline untouched -- exactly the live-reload story.
+     */
+    public void reloadShaders(String vertGlsl, String fragGlsl) {
+        reloadShaders(ShaderCompiler.compileVertex(vertGlsl, label + ".vert"),
+                ShaderCompiler.compileFragment(fragGlsl, label + ".frag"));
+    }
+
     public void close() {
+        destroyGpuObjects();
+    }
+
+    /** Destroy every GPU object this pipeline owns (its VkPipeline, layout, set
+     *  layout, and any per-frame UBO buffers + descriptor pool). Shared by {@link
+     *  #close} and {@link #reloadShaders} (which then adopts freshly baked ones). */
+    private void destroyGpuObjects() {
         if (uniformBuffers != null) {
             for (Buffer b : uniformBuffers) {
                 b.close();
             }
+            uniformBuffers = null;
         }
         if (uniformPool != VK_NULL_HANDLE) {   // frees its descriptor sets too
             vkDestroyDescriptorPool(device.handle(), uniformPool, null);
+            uniformPool = VK_NULL_HANDLE;
+            uniformSets = null;
         }
         vkDestroyPipeline(device.handle(), handle, null);
         vkDestroyPipelineLayout(device.handle(), layout, null);

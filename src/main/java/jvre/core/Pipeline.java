@@ -76,7 +76,8 @@ public class Pipeline {
     private final int colorFormat;
     private final int depthFormat;
     private final int sampleCount;
-    private int frames = 0;                  // frames-in-flight (set by fromSpec; for resource realloc)
+    private final int effectChannels;        // FULLSCREEN_EFFECT iChannel count (0 otherwise)
+    private int frames = 0;                  // frames-in-flight (set by fromSpec/fullscreenEffect; for resource realloc)
 
     // CUSTOM-pipeline managed resources (the L1 escape hatch's bound uniforms).
     // When the spec declared a UBO, jvre owns a per-frame-in-flight UBO buffer +
@@ -87,6 +88,9 @@ public class Pipeline {
     private long[] uniformSets;              // [frame in flight]
     private long uniformPool = VK_NULL_HANDLE;
     private int pushStageFlags = 0;          // the push-constant stage (CUSTOM)
+    // The descriptor binding the FIRST texture channel sits at: 1 for CUSTOM (UBO
+    // takes binding 0), 0 for a FULLSCREEN_EFFECT (iChannel0 = binding 0, no UBO).
+    private int textureBindingBase = 1;
 
     /**
      * Which of jvre's three pipeline shapes this is. The kinds differ only in a
@@ -117,7 +121,7 @@ public class Pipeline {
                     String vertResource, String fragResource) {
         this(device, colorFormat, depthFormat, sampleCount,
                 readResource(vertResource), readResource(fragResource),
-                Kind.SCENE, vertResource + " + " + fragResource, null);
+                Kind.SCENE, vertResource + " + " + fragResource, null, 0);
     }
 
     /**
@@ -130,7 +134,7 @@ public class Pipeline {
     static Pipeline fromSpec(Device device, int colorFormat, int depthFormat,
                                     int sampleCount, PipelineSpec spec, int framesInFlight) {
         Pipeline p = new Pipeline(device, colorFormat, depthFormat, sampleCount,
-                spec.vertexSpirv, spec.fragmentSpirv, Kind.CUSTOM, spec.label, spec);
+                spec.vertexSpirv, spec.fragmentSpirv, Kind.CUSTOM, spec.label, spec, 0);
         p.frames = framesInFlight;   // remembered so reloadShaders can re-allocate resources
         if (spec.uniformBufferSize > 0 || spec.textureCount() > 0) {
             p.allocateResources(framesInFlight, spec);
@@ -148,16 +152,22 @@ public class Pipeline {
      *   - cull NONE (a single known triangle -- no winding question at all);
      *   - depth test/write OFF (nothing 3D; the depth attachment FORMAT is
      *     still declared because the render pass instance carries one);
-     *   - no descriptor set layout (v1 effects bind no resources);
+     *   - a descriptor set layout of {@code channelCount} samplers (iChannel0..N-1
+     *     at bindings 0..N-1) -- or NONE when an effect declares no inputs;
      *   - a 20-byte fragment push range (uResolution, uMouse, uTime) instead
      *     of the scene's 4 bytes of time;
      *   - no blending (the effect writes every pixel, opaquely).
      */
     static Pipeline fullscreenEffect(Device device, int colorFormat, int depthFormat,
                                             int sampleCount, byte[] vertSpirv, byte[] fragSpirv,
-                                            String label) {
-        return new Pipeline(device, colorFormat, depthFormat, sampleCount,
-                vertSpirv, fragSpirv, Kind.FULLSCREEN_EFFECT, label, null);
+                                            String label, int channelCount, int framesInFlight) {
+        Pipeline p = new Pipeline(device, colorFormat, depthFormat, sampleCount,
+                vertSpirv, fragSpirv, Kind.FULLSCREEN_EFFECT, label, null, channelCount);
+        if (channelCount > 0) {
+            p.frames = framesInFlight;   // remembered so reloadShaders can re-allocate
+            p.allocateEffectChannels(framesInFlight, channelCount);
+        }
+        return p;
     }
 
     /**
@@ -173,12 +183,12 @@ public class Pipeline {
                                     int sampleCount, String vertResource, String fragResource) {
         return new Pipeline(device, colorFormat, depthFormat, sampleCount,
                 readResource(vertResource), readResource(fragResource),
-                Kind.SHAPES_2D, vertResource + " + " + fragResource, null);
+                Kind.SHAPES_2D, vertResource + " + " + fragResource, null, 0);
     }
 
     private Pipeline(Device device, int colorFormat, int depthFormat, int sampleCount,
                      byte[] vertSpirv, byte[] fragSpirv, Kind kind, String label,
-                     PipelineSpec spec) {
+                     PipelineSpec spec, int effectChannels) {
         this.device = device;
         this.kind = kind;
         this.spec = spec;
@@ -186,6 +196,10 @@ public class Pipeline {
         this.colorFormat = colorFormat;
         this.depthFormat = depthFormat;
         this.sampleCount = sampleCount;
+        this.effectChannels = effectChannels;
+        // A FULLSCREEN_EFFECT's iChannel samplers start at binding 0 (no UBO); the
+        // CUSTOM path keeps binding 0 for its UBO, so its textures start at 1.
+        this.textureBindingBase = (kind == Kind.FULLSCREEN_EFFECT) ? 0 : 1;
 
         try (MemoryStack stack = stackPush()) {
             // ---- Shader modules: SPIR-V handed to the driver ----
@@ -432,11 +446,30 @@ public class Pipeline {
             // are instances of this shape, pointing at real buffers/images.
             // Identically-defined layouts are compatible, so sets survive a
             // pipeline rebuild (the resize format-change path).
-            if (kind == Kind.FULLSCREEN_EFFECT
+            if ((kind == Kind.FULLSCREEN_EFFECT && effectChannels == 0)
                     || (kind == Kind.CUSTOM && spec.uniformBufferSize == 0 && spec.textureCount() == 0)) {
-                // The effect's whole interface is the push block; a CUSTOM pipeline
-                // with no declared resources binds nothing. Either way, no layout.
+                // A no-input effect's whole interface is the push block; a CUSTOM
+                // pipeline with no declared resources binds nothing. No layout.
                 descriptorSetLayout = VK_NULL_HANDLE;
+            } else if (kind == Kind.FULLSCREEN_EFFECT) {
+                // An effect with iChannel inputs: N COMBINED_IMAGE_SAMPLER bindings
+                // at 0..N-1 (iChannel0..N-1), all fragment stage. No UBO -- the
+                // effect's scalar inputs ride the push block.
+                VkDescriptorSetLayoutBinding.Buffer bindings =
+                        VkDescriptorSetLayoutBinding.calloc(effectChannels, stack);
+                for (int c = 0; c < effectChannels; c++) {
+                    bindings.get(c).binding(c)
+                            .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                            .descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
+                }
+                VkDescriptorSetLayoutCreateInfo setLayoutInfo =
+                        VkDescriptorSetLayoutCreateInfo.calloc(stack);
+                setLayoutInfo.sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
+                setLayoutInfo.pBindings(bindings);
+                LongBuffer pSetLayout = stack.longs(VK_NULL_HANDLE);
+                Vk.check(vkCreateDescriptorSetLayout(device.handle(), setLayoutInfo, null, pSetLayout),
+                        "Failed to create the effect channel descriptor set layout");
+                descriptorSetLayout = pSetLayout.get(0);
             } else if (kind == Kind.CUSTOM) {
                 // User-defined: UBO @ binding 0 (if declared) + one sampler per texture
                 // CHANNEL at bindings 1..N (in declaration order), each at its stage.
@@ -636,7 +669,8 @@ public class Pipeline {
     }
 
     /** Point this frame's descriptor set's texture CHANNEL {@code channel} (binding
-     *  {@code 1 + channel}) at {@code tex} (view + sampler). */
+     *  {@code textureBindingBase + channel} -- 1+ for CUSTOM, 0+ for an effect's
+     *  iChannels) at {@code tex} (view + sampler). */
     void uploadTexture(int frame, int channel, Texture tex) {
         try (MemoryStack stack = stackPush()) {
             VkDescriptorImageInfo.Buffer imgInfo = VkDescriptorImageInfo.calloc(1, stack);
@@ -646,7 +680,7 @@ public class Pipeline {
             VkWriteDescriptorSet.Buffer w = VkWriteDescriptorSet.calloc(1, stack);
             w.get(0).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
             w.get(0).dstSet(uniformSets[frame]);
-            w.get(0).dstBinding(1 + channel);
+            w.get(0).dstBinding(textureBindingBase + channel);
             w.get(0).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
             w.get(0).descriptorCount(1);
             w.get(0).pImageInfo(imgInfo);
@@ -736,6 +770,49 @@ public class Pipeline {
     }
 
     /**
+     * Allocate the per-frame descriptor sets for a FULLSCREEN_EFFECT's iChannel
+     * inputs -- {@code channelCount} COMBINED_IMAGE_SAMPLER bindings (0..N-1), no
+     * UBO. The sets are left UNWRITTEN; the Renderer points each channel at a
+     * texture (or a default) every frame via {@link #uploadTexture}, then binds
+     * the set before the effect draw (update-before-bind). Mirrors {@link
+     * #allocateResources} minus the UBO, with the texture binding base at 0.
+     */
+    private void allocateEffectChannels(int frames, int channelCount) {
+        try (MemoryStack stack = stackPush()) {
+            VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(1, stack);
+            poolSizes.get(0).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                    .descriptorCount(frames * channelCount);
+
+            VkDescriptorPoolCreateInfo poolInfo = VkDescriptorPoolCreateInfo.calloc(stack);
+            poolInfo.sType(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO);
+            poolInfo.pPoolSizes(poolSizes);
+            poolInfo.maxSets(frames);
+            LongBuffer pPool = stack.longs(VK_NULL_HANDLE);
+            Vk.check(vkCreateDescriptorPool(device.handle(), poolInfo, null, pPool),
+                    "Failed to create the effect channel descriptor pool");
+            uniformPool = pPool.get(0);
+
+            LongBuffer layouts = stack.mallocLong(frames);
+            for (int i = 0; i < frames; i++) {
+                layouts.put(descriptorSetLayout);
+            }
+            layouts.flip();
+            VkDescriptorSetAllocateInfo allocInfo = VkDescriptorSetAllocateInfo.calloc(stack);
+            allocInfo.sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO);
+            allocInfo.descriptorPool(uniformPool);
+            allocInfo.pSetLayouts(layouts);
+            LongBuffer pSets = stack.mallocLong(frames);
+            Vk.check(vkAllocateDescriptorSets(device.handle(), allocInfo, pSets),
+                    "Failed to allocate effect channel descriptor sets");
+
+            uniformSets = new long[frames];
+            for (int i = 0; i < frames; i++) {
+                uniformSets[i] = pSets.get(i);   // written per frame via uploadTexture
+            }
+        }
+    }
+
+    /**
      * Hot-rebuild this pipeline with new shader SPIR-V, IN PLACE -- the foundation
      * of shader live-reload (re-compile a shader on file save, see it without
      * restarting). Everything else is re-baked identically from the remembered
@@ -760,9 +837,12 @@ public class Pipeline {
         // fails to compile into a pipeline, we throw and leave THIS pipeline intact
         // (a broken live edit shouldn't crash the still-running good version).
         Pipeline next = new Pipeline(device, colorFormat, depthFormat, sampleCount,
-                vertSpirv, fragSpirv, kind, label, spec);
+                vertSpirv, fragSpirv, kind, label, spec, effectChannels);
         if (spec != null && (spec.uniformBufferSize > 0 || spec.textureCount() > 0)) {
             next.allocateResources(frames, spec);
+        }
+        if (kind == Kind.FULLSCREEN_EFFECT && effectChannels > 0) {
+            next.allocateEffectChannels(frames, effectChannels);
         }
 
         // The GPU may still be reading the old pipeline from an in-flight command

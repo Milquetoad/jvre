@@ -11,6 +11,8 @@ import java.nio.IntBuffer;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.memAlloc;
 import static org.lwjgl.system.MemoryUtil.memFree;
+import static org.lwjgl.util.spvc.Spv.SpvDecorationBinding;
+import static org.lwjgl.util.spvc.Spv.SpvDecorationDescriptorSet;
 import static org.lwjgl.util.spvc.Spvc.*;
 
 /**
@@ -27,11 +29,13 @@ import static org.lwjgl.util.spvc.Spvc.*;
  * robust against the optimizer -- we reflect the SAME optimized bytes jvre hands
  * to vkCreateShaderModule, so the reflection matches exactly what will run:
  *
- *   1. NO descriptor-bound resources. The effect pipeline is built with NO
- *      descriptor set layout (v1 effects bind nothing), so any UBO / sampler /
- *      storage buffer / image the shader declares is a guaranteed mismatch.
- *      Binding decorations are part of the shader interface and survive
- *      optimization -- a reliable signal.
+ *   1. NO descriptor-bound resources EXCEPT input-channel samplers. A {@code
+ *      sampler2D} at set 0, binding 0..3 is an iChannel0..3 input (the renderer
+ *      builds a matching sampler layout and feeds it). Any OTHER bound resource
+ *      (UBO, storage buffer, storage image, separate image/sampler, ...) -- or a
+ *      sampler outside set 0 / binding 0..3 -- is a guaranteed pipeline mismatch
+ *      and is rejected. Binding decorations are part of the shader interface and
+ *      survive optimization -- a reliable signal.
  *   2. The push_constant block must be <= 20 bytes. jvre's pipeline declares a
  *      20-byte fragment push range (vec2 uResolution, vec2 uMouse, float uTime)
  *      and pushes exactly that each frame. A larger block means the shader reads
@@ -49,14 +53,18 @@ final class ShaderReflection {
     /** jvre's builtin effect push block: vec2 + vec2 + float = 20 bytes. */
     private static final int EFFECT_PUSH_BYTES = 5 * Float.BYTES;
 
+    /** The most input channels an effect may declare -- Shadertoy's iChannel0..3. */
+    static final int MAX_EFFECT_CHANNELS = 4;
+
     /**
-     * SPIRV-Cross resource categories that imply a descriptor binding -- every
-     * one of them is forbidden for a v1 effect (the pipeline binds no sets).
+     * SPIRV-Cross resource categories that imply a descriptor binding the effect
+     * pipeline can't satisfy -- every one is forbidden. {@code SAMPLED_IMAGE}
+     * (a {@code sampler2D}) is deliberately ABSENT: those are the allowed
+     * iChannel inputs, validated separately ({@link #reflectChannelCount}).
      */
     private static final int[] BOUND_RESOURCE_TYPES = {
             SPVC_RESOURCE_TYPE_UNIFORM_BUFFER,
             SPVC_RESOURCE_TYPE_STORAGE_BUFFER,
-            SPVC_RESOURCE_TYPE_SAMPLED_IMAGE,
             SPVC_RESOURCE_TYPE_SEPARATE_IMAGE,
             SPVC_RESOURCE_TYPE_SEPARATE_SAMPLERS,
             SPVC_RESOURCE_TYPE_STORAGE_IMAGE,
@@ -68,9 +76,12 @@ final class ShaderReflection {
 
     /**
      * Throw a clear, jvre-level error if the compiled fragment shader violates
-     * the effect contract. Returns quietly on success.
+     * the effect contract; otherwise return the number of input CHANNELS it
+     * declares (0..{@value #MAX_EFFECT_CHANNELS}) -- {@code maxBinding + 1} over
+     * its {@code sampler2D} iChannels, so the renderer can build a matching
+     * sampler layout. 0 means a classic no-input effect.
      */
-    static void checkEffectContract(byte[] spirv, String name) {
+    static int checkEffectContract(byte[] spirv, String name) {
         // SPIR-V is a stream of 32-bit words. SPIRV-Cross wants them off-heap as
         // an IntBuffer; copy the bytes into a native buffer first (kept alive
         // until parsing is done, then freed).
@@ -102,6 +113,7 @@ final class ShaderReflection {
 
             rejectBoundResources(resources, name, context, stack);
             checkPushConstantSize(compiler, resources, name, context, stack);
+            return reflectChannelCount(compiler, resources, name, context, stack);
         } finally {
             if (context != 0) {
                 spvc_context_destroy(context);  // frees the parsed IR + compiler too
@@ -146,6 +158,36 @@ final class ShaderReflection {
                     + "-byte push_constant block, but jvre fills only the 20-byte built-in block"
                     + " (vec2 uResolution, vec2 uMouse, float uTime). Trim it to 20 bytes or fewer.");
         }
+    }
+
+    /**
+     * Count + validate the effect's input-channel samplers. Each {@code sampler2D}
+     * must live at descriptor set 0, binding 0..3 (the iChannel0..3 convention);
+     * anything else is rejected. Returns {@code maxBinding + 1} (0 if no samplers),
+     * so a shader using only iChannel0 and iChannel2 reports 3 -- the renderer
+     * default-binds the unused middle slot.
+     */
+    private static int reflectChannelCount(long compiler, long resources, String name,
+                                           long context, MemoryStack stack) {
+        SpvcReflectedResource.Buffer samplers =
+                listFor(resources, SPVC_RESOURCE_TYPE_SAMPLED_IMAGE, context, stack);
+        if (samplers == null || samplers.remaining() == 0) {
+            return 0;
+        }
+        int maxBinding = -1;
+        for (int i = 0; i < samplers.remaining(); i++) {
+            SpvcReflectedResource r = samplers.get(i);
+            int set = spvc_compiler_get_decoration(compiler, r.id(), SpvDecorationDescriptorSet);
+            int binding = spvc_compiler_get_decoration(compiler, r.id(), SpvDecorationBinding);
+            if (set != 0 || binding < 0 || binding >= MAX_EFFECT_CHANNELS) {
+                throw new RuntimeException("Effect shader '" + name + "' declares a sampler '"
+                        + r.nameString() + "' at set " + set + ", binding " + binding
+                        + ", but effect input channels are iChannel0.." + (MAX_EFFECT_CHANNELS - 1)
+                        + " -- a sampler2D at set 0, binding 0.." + (MAX_EFFECT_CHANNELS - 1) + ".");
+            }
+            maxBinding = Math.max(maxBinding, binding);
+        }
+        return maxBinding + 1;
     }
 
     // ------------------------------------------------------------------

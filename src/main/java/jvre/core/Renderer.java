@@ -82,6 +82,10 @@ public class Renderer {
     // formats + the sample count, which only the renderer knows.
     private ShaderEffect effect;
     private Pipeline effectPipeline;
+    // The textures bound to the effect's input channels (iChannel0..3). null slots
+    // sample the 1x1 default. Re-pointed by setEffectChannel; written into the
+    // effect pipeline's descriptor set each frame.
+    private final Texture[] effectChannels = new Texture[ShaderReflection.MAX_EFFECT_CHANNELS];
 
     // jvre's own fullscreen-triangle vertex shader (build-time compiled, like
     // all internal shaders) -- shared by every effect.
@@ -303,9 +307,13 @@ public class Renderer {
      * not calling this), and a good one reloads live.
      */
     public void setEffect(ShaderEffect effect) {
-        boolean reloading = this.effect != null && effectPipeline != null;
+        // Reload IN PLACE only when the interface is unchanged -- same channel count
+        // means the same descriptor layout, so the hot-rebuild hook applies. A
+        // different channel count is a layout change -> full rebuild.
+        boolean reloadInPlace = this.effect != null && effectPipeline != null
+                && this.effect.channelCount() == effect.channelCount();
         this.effect = effect;
-        if (reloading) {
+        if (reloadInPlace) {
             // Live-reload: swap the fragment shader in place. The fullscreen vertex
             // shader is unchanged; only the user's fragment bytes differ.
             effectPipeline.reloadShaders(Pipeline.readResource(FULLSCREEN_VERT),
@@ -315,14 +323,33 @@ public class Renderer {
         }
     }
 
+    /**
+     * Bind a texture to one of the running effect's input CHANNELS (iChannel0..3 --
+     * the Shadertoy convention). The channel must be one the effect's shader
+     * declares ({@code layout(set=0, binding=N) uniform sampler2D iChannelN;}).
+     * Channels left unset sample a 1x1 default. Re-pointable any frame -- feed an
+     * effect a {@link RenderTarget}'s {@code texture()} for a post-processing pass.
+     */
+    public void setEffectChannel(int channel, Texture texture) {
+        if (channel < 0 || channel >= effectChannels.length) {
+            throw new IllegalArgumentException("effect channel " + channel
+                    + " out of range (iChannel0.." + (effectChannels.length - 1) + ")");
+        }
+        effectChannels[channel] = texture;
+    }
+
     private void buildEffectPipeline() {
         if (effectPipeline != null) {
             effectPipeline.close();
         }
+        int channels = effect.channelCount();
+        if (channels > 0) {
+            ensureDefaultTexture();   // unset channels fall back to the 1x1 default
+        }
         effectPipeline = Pipeline.fullscreenEffect(device,
                 formats.colorFormat(), formats.depthFormat(), formats.sampleCount(),
                 Pipeline.readResource(FULLSCREEN_VERT), effect.fragmentSpirv(),
-                "fullscreen + " + effect.name());
+                "fullscreen + " + effect.name(), channels, MAX_FRAMES_IN_FLIGHT);
     }
 
     // ------------------------------------------------------------------
@@ -342,11 +369,19 @@ public class Renderer {
             // The 1x1 white default the image/text shapes' descriptor sets fall back
             // to. Shared by every batch. Built before the first ShapeBatch (whose
             // descriptor prep binds it for flat/SDF runs).
-            defaultWhiteTexture = Texture.create(device, commandPool,
-                    new byte[] { (byte) 255, (byte) 255, (byte) 255, (byte) 255 }, 1, 1);
+            ensureDefaultTexture();
             mainBatch = new ShapeBatch();
         }
         return renderer2D;
+    }
+
+    /** Create the shared 1x1 opaque-white default texture on first need (the L2
+     *  shape fallback, and the unset-effect-channel fallback). Idempotent. */
+    private void ensureDefaultTexture() {
+        if (defaultWhiteTexture == null) {
+            defaultWhiteTexture = Texture.create(device, commandPool,
+                    new byte[] { (byte) 255, (byte) 255, (byte) 255, (byte) 255 }, 1, 1);
+        }
     }
 
     /**
@@ -1357,12 +1392,25 @@ public class Renderer {
             // L1 custom-geometry scene and/or the L2 shapes (both may run); else
             // just the clear (no built-in geometry).
             if (effectPipeline != null) {
-                // ---- ShaderEffect: 3 vertices, ZERO buffers ----
-                // No vertex buffer, no index buffer, no descriptor sets -- the
-                // vertex shader fabricates the fullscreen triangle from
-                // gl_VertexIndex, and the effect's whole interface is the
-                // 20-byte builtin push block, filled here without being asked.
+                // ---- ShaderEffect: 3 vertices, ZERO vertex buffers ----
+                // No vertex/index buffer -- the vertex shader fabricates the
+                // fullscreen triangle from gl_VertexIndex. The effect's scalar
+                // inputs ride the 20-byte builtin push block (filled here unasked);
+                // its iChannel0..N inputs (if any) are a per-frame sampler set.
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, effectPipeline.handle());
+
+                // iChannels: point each declared channel at its bound texture (or
+                // the 1x1 default), then bind the set -- update-before-bind, exactly
+                // like a custom pipeline's draw, fence-guarded for this frame's slot.
+                if (effectPipeline.hasDescriptorSet()) {
+                    for (int c = 0; c < effect.channelCount(); c++) {
+                        Texture ch = effectChannels[c] != null ? effectChannels[c] : defaultWhiteTexture;
+                        effectPipeline.uploadTexture(currentFrame, c, ch);
+                    }
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            effectPipeline.layout(), 0,
+                            stack.longs(effectPipeline.uniformSet(currentFrame)), null);
+                }
 
                 DoubleBuffer mx = stack.mallocDouble(1);
                 DoubleBuffer my = stack.mallocDouble(1);

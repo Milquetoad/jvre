@@ -34,6 +34,55 @@ class ShaderReflectionTest {
                 """;
         ShaderEffect effect = ShaderEffect.fromFragmentSource(ok, "ok.frag");
         assertEquals("ok.frag", effect.name());
+        assertEquals(0, effect.channelCount(), "a no-input effect has 0 channels");
+    }
+
+    @Test
+    void acceptsEffectInputChannels() {
+        // sampler2D at set 0, binding 0..3 = iChannel0..3 -- the allowed inputs.
+        // The shader uses iChannel0 and iChannel2 (a gap at 1); channelCount is
+        // maxBinding + 1 = 3, so the renderer default-binds the unused slot.
+        String channels = """
+                #version 450
+                layout(location = 0) out vec4 outColor;
+                layout(set = 0, binding = 0) uniform sampler2D iChannel0;
+                layout(set = 0, binding = 2) uniform sampler2D iChannel2;
+                void main() {
+                    vec2 uv = gl_FragCoord.xy * 0.001;
+                    outColor = texture(iChannel0, uv) + texture(iChannel2, uv);
+                }
+                """;
+        ShaderEffect e = ShaderEffect.fromFragmentSource(channels, "channels.frag");
+        assertEquals(3, e.channelCount(), "maxBinding(2) + 1");
+    }
+
+    @Test
+    void rejectsASamplerOutOfChannelRange() {
+        // A sampler beyond iChannel3 (binding 4) is not a valid input channel.
+        String tooHigh = """
+                #version 450
+                layout(location = 0) out vec4 outColor;
+                layout(set = 0, binding = 4) uniform sampler2D iChannel4;
+                void main() { outColor = texture(iChannel4, gl_FragCoord.xy); }
+                """;
+        RuntimeException e = assertThrows(RuntimeException.class,
+                () -> ShaderEffect.fromFragmentSource(tooHigh, "toohigh.frag"));
+        assertTrue(e.getMessage().contains("iChannel"), e.getMessage());
+    }
+
+    @Test
+    void rejectsAUniformBuffer() {
+        // A UBO is still forbidden -- the effect pipeline has no UBO binding (its
+        // scalar inputs ride the push block). Only sampler channels are allowed.
+        String ubo = """
+                #version 450
+                layout(location = 0) out vec4 outColor;
+                layout(set = 0, binding = 0) uniform U { vec4 color; } u;
+                void main() { outColor = u.color; }
+                """;
+        RuntimeException e = assertThrows(RuntimeException.class,
+                () -> ShaderEffect.fromFragmentSource(ubo, "ubo.frag"));
+        assertTrue(e.getMessage().contains("uniform buffer"), e.getMessage());
     }
 
     @Test
@@ -48,24 +97,6 @@ class ShaderReflectionTest {
                 }
                 """;
         assertNotNull(ShaderEffect.fromFragmentSource(noPush, "nopush.frag"));
-    }
-
-    @Test
-    void rejectsAShaderThatBindsASampler() {
-        // Compiles cleanly, but the effect pipeline has no descriptor set layout
-        // -- this sampler would detonate at draw. Caught here instead.
-        String sampler = """
-                #version 450
-                layout(location = 0) out vec4 outColor;
-                layout(set = 0, binding = 0) uniform sampler2D tex;
-                void main() {
-                    outColor = texture(tex, gl_FragCoord.xy);
-                }
-                """;
-        RuntimeException e = assertThrows(RuntimeException.class,
-                () -> ShaderEffect.fromFragmentSource(sampler, "sampler.frag"));
-        assertTrue(e.getMessage().contains("sampler.frag"), e.getMessage());
-        assertTrue(e.getMessage().contains("sampler"), e.getMessage());
     }
 
     @Test

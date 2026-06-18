@@ -49,6 +49,36 @@ A common first move is to make aspect-correct, centred coordinates:
 vec2 p = (gl_FragCoord.xy * 2.0 - pc.uResolution) / pc.uResolution.y; // y in [-1,1]
 ```
 
+## Input channels (textures)
+
+An effect can also **sample textures** — the Shadertoy `iChannel0..3` convention.
+Declare a `sampler2D` at set 0, binding *N* for `iChannelN` (up to 4 channels), and
+feed each one a texture from Java:
+
+```glsl
+layout(set = 0, binding = 0) uniform sampler2D iChannel0;   // binding N = iChannelN
+// ... iChannel1 at binding 1, etc.
+
+void main() {
+    vec2 uv = gl_FragCoord.xy / pc.uResolution;
+    outColor = texture(iChannel0, uv);
+}
+```
+
+```java
+ShaderEffect e = ShaderEffect.fromFragment("/effects/feedback.frag");
+renderer.setEffect(e);
+renderer.setEffectChannel(0, myImage);              // bind iChannel0
+renderer.setEffectChannel(1, target.texture());     // or a RenderTarget's output
+```
+
+`setEffectChannel` is re-pointable any frame, so feeding a channel a
+[render target](render-to-texture.md)'s `texture()` makes a **post-processing
+pass** — the effect reads last pass's output. Channels you leave unset sample a 1×1
+default. `e.channelCount()` reports how many the shader declared (0 for a classic
+no-input effect). The contract guard only allows `sampler2D` at set 0, binding 0..3;
+any other bound resource — a UBO, a sampler out of range — is still rejected.
+
 ## Loading the shader
 
 Two ways to create an effect:
@@ -70,10 +100,11 @@ line numbers — *before* any frame is drawn.
 
 jvre validates the compiled shader against the contract at creation time, so a
 mistake fails loudly and early instead of detonating deep inside Vulkan (or, worse,
-silently with validation off). An effect that compiles but, say, binds a texture
-sampler or declares an oversized push-constant block is **rejected with a clear
-explanation**. The contract is deliberately tiny in v1 (just resolution / mouse /
-time); richer inputs are a future extension.
+silently with validation off). An effect that compiles but, say, binds a UBO, a
+storage image, or a sampler outside the `iChannel0..3` range — or declares an
+oversized push-constant block — is **rejected with a clear explanation**. The
+allowed interface is the built-in push block plus up to four `sampler2D` input
+channels (above).
 
 ## Live-reload
 

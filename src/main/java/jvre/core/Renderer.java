@@ -113,6 +113,11 @@ public class Renderer {
     // drawn (the shader's sampler is referenced statically, so SOMETHING must be
     // bound even when no shape samples it). White also = the neutral tint. Shared.
     private Texture defaultWhiteTexture;
+    // 1x1 white defaults for the non-2D effect-channel kinds (a samplerCube / sampler3D
+    // iChannel left unset still needs a bound texture of the MATCHING view type, or
+    // validation rejects the draw). Lazily created when such a channel is declared.
+    private Texture defaultWhiteCube;
+    private Texture defaultWhiteVolume;
     // The built-in font (DejaVu Sans), baked to an SDF atlas on first text use.
     private Font defaultFont;
 
@@ -335,7 +340,25 @@ public class Renderer {
             throw new IllegalArgumentException("effect channel " + channel
                     + " out of range (iChannel0.." + (effectChannels.length - 1) + ")");
         }
+        // Friendly dimensionality check: if the running effect declares this channel,
+        // the texture's kind must match the shader's sampler (a 2D texture on a
+        // samplerCube channel would otherwise be a cryptic validation-layer error).
+        if (texture != null && effect != null && channel < effect.channelCount()
+                && texture.viewType() != effect.channelViewType(channel)) {
+            throw new IllegalArgumentException("effect channel iChannel" + channel
+                    + " is declared as " + samplerKind(effect.channelViewType(channel))
+                    + " but the bound texture is " + samplerKind(texture.viewType())
+                    + " -- bind a matching texture (e.g. createCubemap for samplerCube,"
+                    + " createVolume for sampler3D).");
+        }
         effectChannels[channel] = texture;
+    }
+
+    /** A user-facing GLSL sampler name for a VkImageViewType (for channel errors). */
+    private static String samplerKind(int viewType) {
+        if (viewType == VK_IMAGE_VIEW_TYPE_CUBE) return "samplerCube";
+        if (viewType == VK_IMAGE_VIEW_TYPE_3D)   return "sampler3D";
+        return "sampler2D";
     }
 
     private void buildEffectPipeline() {
@@ -343,8 +366,10 @@ public class Renderer {
             effectPipeline.close();
         }
         int channels = effect.channelCount();
-        if (channels > 0) {
-            ensureDefaultTexture();   // unset channels fall back to the 1x1 default
+        for (int c = 0; c < channels; c++) {
+            // Pre-create the 1x1 default matching each channel's kind (2D/cube/3D),
+            // so an unset channel always has a bindable texture of the right view type.
+            defaultTextureForViewType(effect.channelViewType(c));
         }
         effectPipeline = Pipeline.fullscreenEffect(device,
                 formats.colorFormat(), formats.depthFormat(), formats.sampleCount(),
@@ -382,6 +407,30 @@ public class Renderer {
             defaultWhiteTexture = Texture.create(device, commandPool,
                     new byte[] { (byte) 255, (byte) 255, (byte) 255, (byte) 255 }, 1, 1);
         }
+    }
+
+    /** The 1x1 white default texture matching an effect channel's declared view type
+     *  (2D / cube / 3D), created on first need. An unset cube/3D iChannel must bind a
+     *  texture of its OWN kind, not the flat 2D white, or validation rejects the draw. */
+    private Texture defaultTextureForViewType(int viewType) {
+        byte[] white = { (byte) 255, (byte) 255, (byte) 255, (byte) 255 };
+        if (viewType == VK_IMAGE_VIEW_TYPE_CUBE) {
+            if (defaultWhiteCube == null) {
+                defaultWhiteCube = Texture.createCubemap(device, commandPool,
+                        new byte[][] { white, white, white, white, white, white }, 1,
+                        TextureOptions.builder().filter(Filter.NEAREST).wrap(WrapMode.CLAMP).build());
+            }
+            return defaultWhiteCube;
+        }
+        if (viewType == VK_IMAGE_VIEW_TYPE_3D) {
+            if (defaultWhiteVolume == null) {
+                defaultWhiteVolume = Texture.createVolume(device, commandPool, white, 1, 1, 1,
+                        TextureOptions.builder().filter(Filter.NEAREST).wrap(WrapMode.CLAMP).build());
+            }
+            return defaultWhiteVolume;
+        }
+        ensureDefaultTexture();
+        return defaultWhiteTexture;
     }
 
     /**
@@ -425,6 +474,50 @@ public class Renderer {
      *  (filter + wrap mode). */
     public Texture createImage(byte[] rgbaPixels, int width, int height, TextureOptions options) {
         return Texture.create(device, commandPool, rgbaPixels, width, height, options);
+    }
+
+    /**
+     * Create a CUBEMAP texture from 6 square faces -- a {@code samplerCube} you can
+     * bind as a pipeline texture channel or an effect {@code iChannel} for skyboxes,
+     * environment reflections, and probes. A shader samples it with a 3D DIRECTION
+     * vector ({@code texture(cube, dir)}); the hardware resolves which face + texel
+     * the ray hits and filters across face seams.
+     *
+     * <p>The faces are given in Vulkan's fixed order -- {@code +X, -X, +Y, -Y, +Z,
+     * -Z} -- each {@code size} x {@code size} pixels, R8G8B8A8 (row-major). Sampling
+     * defaults to {@link Filter#LINEAR} with edge clamp (the right default for a
+     * smooth environment map). The caller OWNS the result -- {@code close()} it
+     * before the Renderer.
+     */
+    public Texture createCubemap(byte[][] faces, int size) {
+        return createCubemap(faces, size, TextureOptions.builder()
+                .filter(Filter.LINEAR).wrap(WrapMode.CLAMP).build());
+    }
+
+    /** {@link #createCubemap(byte[][], int)} with full sampler {@link TextureOptions}. */
+    public Texture createCubemap(byte[][] faces, int size, TextureOptions options) {
+        return Texture.createCubemap(device, commandPool, faces, size, options);
+    }
+
+    /**
+     * Create a 3D VOLUME texture from {@code width} x {@code height} x {@code depth}
+     * voxels -- a {@code sampler3D} you can bind as a pipeline texture channel or an
+     * effect {@code iChannel} for volumetric data, 3D colour LUTs, and raymarched
+     * fields. A shader samples it with a 3D coordinate {@code (u,v,w)} in [0,1]
+     * ({@code texture(vol, vec3(...))}), trilinearly filtered across all three axes.
+     *
+     * <p>Voxels are laid out SLICE-MAJOR (all of z=0, then z=1, ...), row-major
+     * within each slice, R8G8B8A8. Sampling defaults to {@link Filter#LINEAR} with
+     * edge clamp. The caller OWNS the result -- {@code close()} it before the Renderer.
+     */
+    public Texture createVolume(byte[] voxels, int width, int height, int depth) {
+        return createVolume(voxels, width, height, depth, TextureOptions.builder()
+                .filter(Filter.LINEAR).wrap(WrapMode.CLAMP).build());
+    }
+
+    /** {@link #createVolume(byte[], int, int, int)} with full sampler {@link TextureOptions}. */
+    public Texture createVolume(byte[] voxels, int width, int height, int depth, TextureOptions options) {
+        return Texture.createVolume(device, commandPool, voxels, width, height, depth, options);
     }
 
     /**
@@ -1404,7 +1497,8 @@ public class Renderer {
                 // like a custom pipeline's draw, fence-guarded for this frame's slot.
                 if (effectPipeline.hasDescriptorSet()) {
                     for (int c = 0; c < effect.channelCount(); c++) {
-                        Texture ch = effectChannels[c] != null ? effectChannels[c] : defaultWhiteTexture;
+                        Texture ch = effectChannels[c] != null ? effectChannels[c]
+                                : defaultTextureForViewType(effect.channelViewType(c));
                         effectPipeline.uploadTexture(currentFrame, c, ch);
                     }
                     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -1810,6 +1904,12 @@ public class Renderer {
         }
         if (defaultWhiteTexture != null) {
             defaultWhiteTexture.close();
+        }
+        if (defaultWhiteCube != null) {
+            defaultWhiteCube.close();
+        }
+        if (defaultWhiteVolume != null) {
+            defaultWhiteVolume.close();
         }
         if (defaultFont != null) {
             defaultFont.close();

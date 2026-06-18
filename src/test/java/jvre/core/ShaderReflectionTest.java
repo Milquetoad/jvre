@@ -3,6 +3,9 @@ package jvre.core;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.lwjgl.vulkan.VK10.VK_IMAGE_VIEW_TYPE_2D;
+import static org.lwjgl.vulkan.VK10.VK_IMAGE_VIEW_TYPE_3D;
+import static org.lwjgl.vulkan.VK10.VK_IMAGE_VIEW_TYPE_CUBE;
 
 /**
  * Tests the Ring 3 effect-contract guard: a user fragment shader that COMPILES
@@ -54,6 +57,29 @@ class ShaderReflectionTest {
                 """;
         ShaderEffect e = ShaderEffect.fromFragmentSource(channels, "channels.frag");
         assertEquals(3, e.channelCount(), "maxBinding(2) + 1");
+    }
+
+    @Test
+    void reflectsChannelDimensionality() {
+        // A channel can be sampler2D, samplerCube, or sampler3D; reflection records
+        // each one's view type so the renderer binds a matching texture.
+        String mixed = """
+                #version 450
+                layout(location = 0) out vec4 outColor;
+                layout(set = 0, binding = 0) uniform sampler2D   iChannel0;
+                layout(set = 0, binding = 1) uniform samplerCube iChannel1;
+                layout(set = 0, binding = 2) uniform sampler3D   iChannel2;
+                void main() {
+                    outColor = texture(iChannel0, gl_FragCoord.xy * 0.001)
+                             + texture(iChannel1, vec3(0.0, 0.0, 1.0))
+                             + texture(iChannel2, vec3(0.5));
+                }
+                """;
+        ShaderEffect e = ShaderEffect.fromFragmentSource(mixed, "mixed.frag");
+        assertEquals(3, e.channelCount());
+        assertEquals(VK_IMAGE_VIEW_TYPE_2D, e.channelViewType(0), "iChannel0 = sampler2D");
+        assertEquals(VK_IMAGE_VIEW_TYPE_CUBE, e.channelViewType(1), "iChannel1 = samplerCube");
+        assertEquals(VK_IMAGE_VIEW_TYPE_3D, e.channelViewType(2), "iChannel2 = sampler3D");
     }
 
     @Test

@@ -190,6 +190,20 @@ split-screen clamp vs. Reinhard, so you can see the highlight detail the float
 buffer preserved. (`readPixels` is 8-bit only; tone-map an HDR target to an LDR one
 before reading it back.)
 
+### 16-bit vs 32-bit float
+
+`TargetFormat.HDR` is **16-bit** float per channel — the display-oriented choice:
+half the bandwidth, plenty of range and precision for tone-mapping/bloom, and the
+width real HDR swapchains use. **Prefer it** for post-processing.
+
+`TargetFormat.HDR_FLOAT32` is **32-bit** float per channel — the precision/data
+choice. It costs twice the bandwidth, so it's overkill for display, but it's the
+right call when you need *exact* values: accumulation buffers (e.g. progressive
+path-tracing that sums many samples), position/normal G-buffers, or any target
+whose numbers you depend on. (One caveat: 32-bit float is guaranteed as a colour
+attachment and sampled image, but colour *blending* into it is not guaranteed on
+every GPU — render opaque into one, or check support, if you blend.)
+
 ## Lifetime
 
 ```java

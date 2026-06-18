@@ -46,14 +46,14 @@ and may change freely.
 | `Cull`, `Stage` | fixed-function + shader-stage enums |
 | `SceneRenderer`, `FrameRenderer` | record draws against a jvre-owned facade |
 | `Camera` | Vulkan-correct view + projection matrices |
-| `TargetFormat` | a render target's colour format — `DEFAULT` (LDR) or `HDR` (float); for `createRenderTarget` + `createPipeline(spec, target)` |
+| `TargetFormat` | a render target's colour format — `DEFAULT` (LDR), `HDR` (16-bit float), or `HDR_FLOAT32` (32-bit float); for `createRenderTarget` + `createPipeline(spec, target)` |
 | `Device` | the raw-Vulkan escape: exposes `VkPhysicalDevice` / `VkDevice` / `VkQueue` for anything jvre doesn't yet wrap |
 
 ## Handles (opaque — you hold them, jvre makes them)
 Created via the `Renderer` (`createPipeline`, `createVertexBuffer`,
-`createIndexBuffer`, `createImage`, `loadImage`, `font`, `loadFont`, `loadMsdfFont`,
-`createRenderTarget`); the only method you call on them directly is `close()` (plus
-`Texture.width()` / `height()`):
+`createIndexBuffer`, `createImage`, `loadImage`, `createCubemap`, `createVolume`,
+`font`, `loadFont`, `loadMsdfFont`, `createRenderTarget`); the only method you call
+on them directly is `close()` (plus `Texture.width()` / `height()`):
 
 `Pipeline`, `Buffer`, `Texture`, `Font`, `RenderTarget`
 

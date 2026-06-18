@@ -70,8 +70,12 @@ public class Texture {
     private final long allocation;  // VmaAllocation -- our slice of a VMA-owned block
     private final int width;
     private final int height;
+    private final int depth;    // extent depth: 1 for 2D/cube, N for a 3D volume
     private final int format;   // VkFormat the texels are stored as
     private final int mipLevels; // 1 = no mip chain; >1 = a generated mip pyramid
+    private final int arrayLayers; // 1 for plain 2D/3D; 6 for a cubemap (its 6 faces)
+    private final int imageType;   // VK_IMAGE_TYPE_2D (flat / cube faces) or _3D (volume)
+    private final int viewType;    // how a shader reads it: _2D, _CUBE, or _3D
     private long view = VK_NULL_HANDLE;     // VkImageView -- the typed lens shaders read through
     private long sampler = VK_NULL_HANDLE;  // VkSampler  -- how shaders filter + address it
 
@@ -111,6 +115,85 @@ public class Texture {
         // R8G8B8A8_SRGB (4 bytes/texel, GPU linearizes on sample). The sprite/image path.
         return upload(device, commandPool, pixels, width, height,
                 VK_FORMAT_R8G8B8A8_SRGB, 4, opts);
+    }
+
+    /**
+     * Build a CUBEMAP from 6 square faces -- the {@code samplerCube} input for
+     * environment maps, skyboxes, and reflection probes. A cubemap is, mechanically,
+     * a 6-layer 2D image array tagged {@code CUBE_COMPATIBLE} and read through a
+     * {@code VIEW_TYPE_CUBE} view: the sampler takes a 3D DIRECTION vector (not a UV)
+     * and the hardware picks the face + texel the ray hits, filtering across face
+     * seams for you.
+     *
+     * <p>The faces are given in Vulkan's fixed layer order -- {@code +X, -X, +Y, -Y,
+     * +Z, -Z} -- each {@code size} x {@code size}, R8G8B8A8 (4 bytes/texel). They are
+     * staged CONTIGUOUSLY and copied in one shot (each face = one array layer). Cube
+     * faces are colour, so the format is sRGB, matching {@link #create}.
+     */
+    static Texture createCubemap(Device device, long commandPool, byte[][] faces,
+                                 int size, TextureOptions opts) {
+        if (faces.length != 6) {
+            throw new IllegalArgumentException("A cubemap needs exactly 6 faces (+X,-X,+Y,-Y,+Z,-Z), got "
+                    + faces.length);
+        }
+        int faceBytes = size * size * 4;
+        // Concatenate the 6 faces into one staging blob, in layer order. The single
+        // copy in uploadFrom (layerCount 6) then fills all faces at once.
+        byte[] all = new byte[6 * faceBytes];
+        for (int f = 0; f < 6; f++) {
+            if (faces[f].length != faceBytes) {
+                throw new IllegalArgumentException("Cubemap face " + f + " is " + faces[f].length
+                        + " bytes; expected " + faceBytes + " (" + size + "x" + size + " RGBA)");
+            }
+            System.arraycopy(faces[f], 0, all, f * faceBytes, faceBytes);
+        }
+
+        Buffer staging = new Buffer(device, all.length, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
+        staging.uploadBytes(all);
+
+        Texture texture = new Texture(device, size, size, 1, VK_FORMAT_R8G8B8A8_SRGB,
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                1, 6, VK_IMAGE_TYPE_2D, VK_IMAGE_VIEW_TYPE_CUBE,
+                VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT);
+        texture.uploadFrom(commandPool, staging);
+        texture.createViewAndSampler(opts);
+
+        staging.close();
+        return texture;
+    }
+
+    /**
+     * Build a 3D VOLUME texture from {@code width} x {@code height} x {@code depth}
+     * voxels -- the {@code sampler3D} input for volumetric data, 3D colour LUTs, and
+     * raymarched fields. Unlike a cubemap (6 flat layers), this is a genuine 3D
+     * IMAGE: a third extent dimension, read through a {@code VIEW_TYPE_3D} view and
+     * sampled with a 3D coordinate {@code (u,v,w)} in [0,1] -- the GPU trilinearly
+     * filters across all three axes.
+     *
+     * <p>The voxels are laid out SLICE-MAJOR (all of z=0, then z=1, ...), row-major
+     * within each slice, R8G8B8A8 (4 bytes/voxel). They stage contiguously and copy
+     * in one shot (the copy's {@code imageExtent.depth} pulls consecutive slices from
+     * the buffer). Stored sRGB, matching the colour texture paths.
+     */
+    static Texture createVolume(Device device, long commandPool, byte[] voxels,
+                                int width, int height, int depth, TextureOptions opts) {
+        long bytes = (long) width * height * depth * 4;
+        if (voxels.length != bytes) {
+            throw new IllegalArgumentException("Expected " + bytes + " bytes for a "
+                    + width + "x" + height + "x" + depth + " RGBA volume, got " + voxels.length);
+        }
+
+        Buffer staging = new Buffer(device, voxels.length, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
+        staging.uploadBytes(voxels);
+
+        Texture texture = new Texture(device, width, height, depth, VK_FORMAT_R8G8B8A8_SRGB,
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                1, 1, VK_IMAGE_TYPE_3D, VK_IMAGE_VIEW_TYPE_3D, 0);
+        texture.uploadFrom(commandPool, staging);
+        texture.createViewAndSampler(opts);
+
+        staging.close();
+        return texture;
     }
 
     /**
@@ -294,21 +377,45 @@ public class Texture {
     }
 
     Texture(Device device, int width, int height, int format, int usage, int mipLevels) {
+        // The common 2D case: depth 1, one array layer, a plain 2D image + view.
+        this(device, width, height, 1, format, usage, mipLevels, 1,
+                VK_IMAGE_TYPE_2D, VK_IMAGE_VIEW_TYPE_2D, 0);
+    }
+
+    /**
+     * The canonical image constructor, general enough for every kind jvre makes:
+     * a flat 2D texture, a 6-face CUBEMAP (arrayLayers 6 + the cube-compatible
+     * flag + a CUBE view), or a 3D VOLUME (depth &gt; 1 + a 3D image/view). The
+     * 2D convenience constructors above feed it the flat defaults.
+     *
+     * <p>The three "shape" knobs are not independent -- they come in valid sets:
+     * a cube is {@code (depth 1, layers 6, IMAGE_TYPE_2D, VIEW_TYPE_CUBE, CUBE_COMPATIBLE)};
+     * a volume is {@code (depth N, layers 1, IMAGE_TYPE_3D, VIEW_TYPE_3D, 0)}. The
+     * factories ({@link #createCubemap}, {@link #createVolume}) supply the right set,
+     * so callers never assemble an invalid combination by hand.
+     */
+    Texture(Device device, int width, int height, int depth, int format, int usage,
+            int mipLevels, int arrayLayers, int imageType, int viewType, int createFlags) {
         this.device = device;
         this.width = width;
         this.height = height;
+        this.depth = depth;
         this.format = format;
         this.mipLevels = mipLevels;
+        this.arrayLayers = arrayLayers;
+        this.imageType = imageType;
+        this.viewType = viewType;
 
         try (MemoryStack stack = stackPush()) {
             // ---- 1. The image object: picture description + tiling + usage ----
             VkImageCreateInfo imageInfo = VkImageCreateInfo.calloc(stack);
             imageInfo.sType(VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO);
-            imageInfo.imageType(VK_IMAGE_TYPE_2D);          // a flat 2D picture (1D / 3D also exist)
+            imageInfo.flags(createFlags);                   // e.g. CUBE_COMPATIBLE for a cubemap
+            imageInfo.imageType(imageType);                 // 2D (flat / cube faces) or 3D (volume)
             imageInfo.format(format);                       // texel layout, e.g. R8G8B8A8_SRGB
-            imageInfo.extent().width(width).height(height).depth(1);  // depth 1 == 2D
+            imageInfo.extent().width(width).height(height).depth(depth);  // depth>1 == a 3D volume
             imageInfo.mipLevels(mipLevels);                 // 1 = no chain; >1 = mip pyramid
-            imageInfo.arrayLayers(1);                       // one image (not an array / atlas-layer set)
+            imageInfo.arrayLayers(arrayLayers);             // 1 = one image; 6 = a cubemap's faces
             imageInfo.tiling(VK_IMAGE_TILING_OPTIMAL);      // driver's private swizzle; NOT CPU-mappable
             imageInfo.initialLayout(VK_IMAGE_LAYOUT_UNDEFINED);  // contents undefined; transition before use
             imageInfo.usage(usage);                         // TRANSFER_DST | SAMPLED for a sampled texture
@@ -357,7 +464,7 @@ public class Texture {
                 barrier.dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
                 barrier.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT);
                 barrier.subresourceRange().baseArrayLayer(0);
-                barrier.subresourceRange().layerCount(1);
+                barrier.subresourceRange().layerCount(arrayLayers);   // all 6 faces for a cubemap
 
                 VkDependencyInfo depInfo = VkDependencyInfo.calloc(stack);
                 depInfo.sType(VK_STRUCTURE_TYPE_DEPENDENCY_INFO);
@@ -385,9 +492,12 @@ public class Texture {
                 region.imageSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT);
                 region.imageSubresource().mipLevel(0);
                 region.imageSubresource().baseArrayLayer(0);
-                region.imageSubresource().layerCount(1);
+                // One copy moves every layer/slice at once: the staging buffer holds
+                // them contiguously (face 0 | face 1 | ... for a cube; slice 0 | ...
+                // for a volume), so layerCount/depth pull consecutive buffer regions.
+                region.imageSubresource().layerCount(arrayLayers);
                 region.imageOffset().x(0).y(0).z(0);
-                region.imageExtent().width(width).height(height).depth(1);
+                region.imageExtent().width(width).height(height).depth(depth);
                 vkCmdCopyBufferToImage(cmd, staging.handle(), image,
                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region);
 
@@ -505,13 +615,13 @@ public class Texture {
             VkImageViewCreateInfo viewInfo = VkImageViewCreateInfo.calloc(stack);
             viewInfo.sType(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);
             viewInfo.image(image);
-            viewInfo.viewType(VK_IMAGE_VIEW_TYPE_2D);
+            viewInfo.viewType(viewType);                         // _2D, _CUBE, or _3D
             viewInfo.format(format);
             viewInfo.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT);
             viewInfo.subresourceRange().baseMipLevel(0);
             viewInfo.subresourceRange().levelCount(mipLevels);   // the whole pyramid
             viewInfo.subresourceRange().baseArrayLayer(0);
-            viewInfo.subresourceRange().layerCount(1);
+            viewInfo.subresourceRange().layerCount(arrayLayers); // 6 for a cube view
 
             LongBuffer pView = stack.longs(VK_NULL_HANDLE);
             Vk.check(vkCreateImageView(device.handle(), viewInfo, null, pView),
@@ -573,6 +683,10 @@ public class Texture {
     public int width()  { return width; }
     public int height() { return height; }
     int format() { return format; }
+
+    /** This texture's VkImageViewType (_2D, _CUBE, or _3D) -- how a shader reads it.
+     *  The renderer matches it against an effect channel's declared sampler kind. */
+    int viewType() { return viewType; }
 
     /** Destroy sampler + view, then the image (its slice returns to VMA's block). */
     public void close() {

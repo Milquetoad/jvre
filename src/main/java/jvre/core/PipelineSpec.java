@@ -32,8 +32,9 @@ public final class PipelineSpec {
     final Stage uniformStage;
     final int pushSize;            // 0 = no push constants
     final Stage pushStage;
-    final boolean hasTexture;      // a combined image sampler at binding 1
-    final Stage textureStage;
+    // One combined-image-sampler per declared texture CHANNEL, at bindings 1..N (in
+    // order). Empty = no textures. textureStages.get(c) is channel c's shader stage.
+    final java.util.List<Stage> textureStages;
 
     private PipelineSpec(Builder b) {
         this.vertexSpirv = b.vertexSpirv;
@@ -48,8 +49,12 @@ public final class PipelineSpec {
         this.uniformStage = b.uniformStage;
         this.pushSize = b.pushSize;
         this.pushStage = b.pushStage;
-        this.hasTexture = b.hasTexture;
-        this.textureStage = b.textureStage;
+        this.textureStages = java.util.List.copyOf(b.textureStages);
+    }
+
+    /** Number of texture channels declared (bindings 1..N). */
+    int textureCount() {
+        return textureStages.size();
     }
 
     public static Builder builder() {
@@ -69,8 +74,7 @@ public final class PipelineSpec {
         private Stage uniformStage = Stage.VERTEX;
         private int pushSize = 0;
         private Stage pushStage = Stage.FRAGMENT;
-        private boolean hasTexture = false;
-        private Stage textureStage = Stage.FRAGMENT;
+        private final java.util.List<Stage> textureStages = new java.util.ArrayList<>();
 
         /** Vertex-shader SPIR-V (e.g. {@code ShaderCompiler.compileVertex(src, name)}). */
         public Builder vertexShader(byte[] spirv) {
@@ -129,11 +133,18 @@ public final class PipelineSpec {
             return this;
         }
 
-        /** Declare a texture (combined image sampler) at binding 1, visible to
-         *  {@code stage}; supply it each frame with {@code FrameRenderer.texture(...)}. */
+        /**
+         * Declare a texture CHANNEL (combined image sampler), visible to {@code
+         * stage}. ADDITIVE: each call adds the next channel, at bindings 1, 2, 3, ...
+         * in call order -- so one call is a single texture at binding 1 (a shader's
+         * {@code layout(binding=1) sampler2D}), two calls are bindings 1 and 2 (e.g.
+         * Shadertoy-style {@code iChannel0}/{@code iChannel1}), etc. Supply each
+         * channel every frame with {@code FrameRenderer.texture(channel, ...)} (channel
+         * 0 is {@code texture(...)}). This is what makes multi-input post-processing /
+         * effect CHAINS work -- a pass samples several targets at once.
+         */
         public Builder texture(Stage stage) {
-            this.hasTexture = true;
-            this.textureStage = stage;
+            this.textureStages.add(stage);
             return this;
         }
 

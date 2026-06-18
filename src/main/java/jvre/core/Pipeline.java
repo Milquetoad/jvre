@@ -118,7 +118,7 @@ public class Pipeline {
                                     int sampleCount, PipelineSpec spec, int framesInFlight) {
         Pipeline p = new Pipeline(device, colorFormat, depthFormat, sampleCount,
                 spec.vertexSpirv, spec.fragmentSpirv, Kind.CUSTOM, spec.label, spec);
-        if (spec.uniformBufferSize > 0 || spec.hasTexture) {
+        if (spec.uniformBufferSize > 0 || spec.textureCount() > 0) {
             p.allocateResources(framesInFlight, spec);
         }
         return p;
@@ -413,14 +413,14 @@ public class Pipeline {
             // Identically-defined layouts are compatible, so sets survive a
             // pipeline rebuild (the resize format-change path).
             if (kind == Kind.FULLSCREEN_EFFECT
-                    || (kind == Kind.CUSTOM && spec.uniformBufferSize == 0 && !spec.hasTexture)) {
+                    || (kind == Kind.CUSTOM && spec.uniformBufferSize == 0 && spec.textureCount() == 0)) {
                 // The effect's whole interface is the push block; a CUSTOM pipeline
                 // with no declared resources binds nothing. Either way, no layout.
                 descriptorSetLayout = VK_NULL_HANDLE;
             } else if (kind == Kind.CUSTOM) {
-                // User-defined: UBO @ binding 0 (if declared) + sampler @ binding 1
-                // (if declared), each at its stage.
-                int n = (spec.uniformBufferSize > 0 ? 1 : 0) + (spec.hasTexture ? 1 : 0);
+                // User-defined: UBO @ binding 0 (if declared) + one sampler per texture
+                // CHANNEL at bindings 1..N (in declaration order), each at its stage.
+                int n = (spec.uniformBufferSize > 0 ? 1 : 0) + spec.textureCount();
                 VkDescriptorSetLayoutBinding.Buffer bindings =
                         VkDescriptorSetLayoutBinding.calloc(n, stack);
                 int idx = 0;
@@ -430,10 +430,10 @@ public class Pipeline {
                             .descriptorCount(1).stageFlags(spec.uniformStage.vk);
                     idx++;
                 }
-                if (spec.hasTexture) {
-                    bindings.get(idx).binding(1)
+                for (int c = 0; c < spec.textureCount(); c++) {
+                    bindings.get(idx).binding(1 + c)
                             .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-                            .descriptorCount(1).stageFlags(spec.textureStage.vk);
+                            .descriptorCount(1).stageFlags(spec.textureStages.get(c).vk);
                     idx++;
                 }
 
@@ -615,8 +615,9 @@ public class Pipeline {
         uniformBuffers[frame].uploadFloats(data);
     }
 
-    /** Point this frame's descriptor set's binding 1 at {@code tex} (view + sampler). */
-    void uploadTexture(int frame, Texture tex) {
+    /** Point this frame's descriptor set's texture CHANNEL {@code channel} (binding
+     *  {@code 1 + channel}) at {@code tex} (view + sampler). */
+    void uploadTexture(int frame, int channel, Texture tex) {
         try (MemoryStack stack = stackPush()) {
             VkDescriptorImageInfo.Buffer imgInfo = VkDescriptorImageInfo.calloc(1, stack);
             imgInfo.imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -625,7 +626,7 @@ public class Pipeline {
             VkWriteDescriptorSet.Buffer w = VkWriteDescriptorSet.calloc(1, stack);
             w.get(0).sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
             w.get(0).dstSet(uniformSets[frame]);
-            w.get(0).dstBinding(1);
+            w.get(0).dstBinding(1 + channel);
             w.get(0).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
             w.get(0).descriptorCount(1);
             w.get(0).pImageInfo(imgInfo);
@@ -655,15 +656,18 @@ public class Pipeline {
             }
         }
         try (MemoryStack stack = stackPush()) {
-            int n = (hasUbo ? 1 : 0) + (spec.hasTexture ? 1 : 0);
+            int textures = spec.textureCount();
+            int n = (hasUbo ? 1 : 0) + (textures > 0 ? 1 : 0);
             VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(n, stack);
             int pi = 0;
             if (hasUbo) {
                 poolSizes.get(pi).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(frames);
                 pi++;
             }
-            if (spec.hasTexture) {
-                poolSizes.get(pi).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(frames);
+            if (textures > 0) {
+                // One sampler descriptor per channel per frame.
+                poolSizes.get(pi).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                        .descriptorCount(frames * textures);
                 pi++;
             }
 

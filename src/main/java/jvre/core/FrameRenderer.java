@@ -61,11 +61,18 @@ public final class FrameRenderer {
         bound.uploadUniform(frame, data);
     }
 
-    /** Set the bound pipeline's texture for this frame (it declared one via {@link
-     *  PipelineSpec#builder texture}). */
+    /** Set the bound pipeline's first texture channel (channel 0, binding 1) for this
+     *  frame -- the single-texture case. */
     public void texture(Texture tex) {
+        texture(0, tex);
+    }
+
+    /** Set texture CHANNEL {@code channel} (binding {@code 1 + channel}) for this
+     *  frame -- for a pipeline that declared multiple textures (each {@link
+     *  PipelineSpec.Builder#texture}). Set every declared channel each frame. */
+    public void texture(int channel, Texture tex) {
         requireBound("texture");
-        bound.uploadTexture(frame, tex);
+        bound.uploadTexture(frame, channel, tex);
     }
 
     /** Set the bound pipeline's push constants for this draw (it declared a range). */

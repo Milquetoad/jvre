@@ -45,8 +45,9 @@ import static org.lwjgl.vulkan.VK10.*;
  * Off (1x): just {@code color} + {@code depth}, no resolve.
  *
  * <p>Caller-owned (like {@link Texture} and {@link Pipeline}): {@code close()} it
- * before the Renderer. The full-screen attachments use VMA DEDICATED_MEMORY, the
- * same call the depth/MSAA targets in {@link Swapchain} make.
+ * before the Renderer. The attachments let VMA choose dedicated-vs-pooled by size
+ * (forcing dedicated warns for SMALL targets) -- unlike the always-large {@link
+ * Swapchain} attachments, which dedicate explicitly.
  */
 public class RenderTarget {
 
@@ -145,7 +146,8 @@ public class RenderTarget {
 
             VmaAllocationCreateInfo allocInfo = VmaAllocationCreateInfo.calloc(stack);
             allocInfo.usage(VMA_MEMORY_USAGE_AUTO);
-            allocInfo.flags(VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT);  // full-screen attachment
+            // No forced DEDICATED flag: it's wasteful (and best-practices-warns) for
+            // SMALL targets; VMA pools small ones and auto-dedicates large ones.
 
             LongBuffer pImage = stack.longs(VK_NULL_HANDLE);
             PointerBuffer pAllocation = stack.mallocPointer(1);
@@ -177,7 +179,7 @@ public class RenderTarget {
 
             VmaAllocationCreateInfo allocInfo = VmaAllocationCreateInfo.calloc(stack);
             allocInfo.usage(VMA_MEMORY_USAGE_AUTO);
-            allocInfo.flags(VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT);
+            // No forced DEDICATED (see the color target): VMA decides per size.
 
             LongBuffer pImage = stack.longs(VK_NULL_HANDLE);
             PointerBuffer pAllocation = stack.mallocPointer(1);

@@ -35,6 +35,7 @@ CLAUDE.md
 # Logs / misc
 *.log
 
-# Demo runtime output (the F2 readback screenshot + the headless render)
+# Demo runtime output (readback screenshot, headless + channels renders)
 /jvre-canvas.png
 /jvre-headless.png
+/jvre-channels.png

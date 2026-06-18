@@ -153,6 +153,31 @@ mesh:
   `frame.bindIndexBuffer(buf)` + `frame.drawIndexed(count)`.
 - **Textures** — add `.texture(Stage.FRAGMENT)` to the spec (a
   `sampler2D` at `binding = 1`), and `frame.texture(tex)` each frame.
+- **Multiple texture channels** — `.texture(...)` is *additive*: each call adds the
+  next `sampler2D` channel, at `binding = 1`, `2`, `3`, … in call order. Write each
+  one with the channel overload `frame.texture(channel, tex)` (channel 0 = binding
+  1). This is how an effect/post-processing pass samples several inputs at once —
+  e.g. blend two offscreen [render targets](render-to-texture.md):
+
+  ```glsl
+  layout(set = 0, binding = 1) uniform sampler2D ch0;   // first  .texture()
+  layout(set = 0, binding = 2) uniform sampler2D ch1;   // second .texture()
+  ```
+  ```java
+  Pipeline blend = renderer.createPipeline(PipelineSpec.builder()
+          .vertexShader(vs).fragmentShader(fs).vertexLayout(layout)
+          .texture(Stage.FRAGMENT)      // channel 0 -> binding 1
+          .texture(Stage.FRAGMENT)      // channel 1 -> binding 2
+          .label("blend").build());
+
+  renderer.drawToTarget(out, frame -> {
+      frame.bind(blend);
+      frame.texture(0, a.texture());    // channel 0 = target A
+      frame.texture(1, b.texture());    // channel 1 = target B
+      frame.bindVertexBuffer(tri);
+      frame.draw(3);
+  });
+  ```
 - **Push constants** — add `.pushConstants(sizeBytes, Stage.FRAGMENT)`, and
   `frame.pushConstants(float[])` each frame (small, fast per-draw data).
 

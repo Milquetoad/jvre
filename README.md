@@ -9,7 +9,7 @@ A general-purpose rendering framework written **from scratch in Java on top of [
 1. **Learn graphics from first principles** — understand every layer, from the Vulkan instance up to a full render loop, with no engine hiding the details.
 2. **Ship a real, reusable framework** — a coherent, documented, cross-platform library, delivered with the polish of a professional product (the finish line is a stable 1.0 on Maven Central).
 
-> **Status: 1.1 — on Maven Central.** Both API altitudes below are built, and the [public API](docs/api-surface.md) is a semver compatibility promise. 1.1 adds backward-compatible capability over 1.0 (render-to-texture, headless rendering, HDR targets, MSDF text, runtime fonts, shader hot-reload, effect input channels, sampler config). Continued capability growth (the full fully-fledged feature set) is planned — see the [roadmap](vault/Project/Roadmap.md).
+> **Status: 1.2 — on Maven Central.** Both API altitudes below are built, and the [public API](docs/api-surface.md) is a semver compatibility promise. Growth since 1.0 is backward-compatible: 1.1 added render-to-texture, headless rendering, HDR targets, MSDF text, runtime fonts, shader hot-reload, effect input channels, and sampler config; **1.2 adds 32-bit float targets, cubemap + 3D-volume channels, and dynamic (CPU-updatable) channel textures.** Continued capability growth (the full fully-fledged feature set) is planned — see the [roadmap](vault/Project/Roadmap.md).
 
 ## Two altitudes, one engine
 
@@ -69,7 +69,7 @@ repositories {
 }
 
 dependencies {
-    implementation 'io.github.milquetoad:jvre:1.1.0'
+    implementation 'io.github.milquetoad:jvre:1.2.0'
 
     // jvre does NOT bundle platform natives -- you choose them for your OS.
     // Add the natives classifier for the LWJGL modules jvre uses:
@@ -122,10 +122,15 @@ The full Vulkan substrate and both API altitudes are built and run cleanly
   path (crisp curves at any size) and a transform stack.
 - **`ShaderEffect`** — runtime-compiled fullscreen fragment-shader effects, with a
   contract guard, structured compile diagnostics, live hot-reload, and Shadertoy-style
-  input channels (`iChannel0..3`).
+  input channels (`iChannel0..3`) — `sampler2D`, `samplerCube`, `sampler3D`, or a
+  **dynamic (CPU-updatable)** texture for live data.
+- **Texture channels** — bind 2D images, **cubemaps** (`createCubemap`), **3D volumes**
+  (`createVolume`), or **dynamic textures** (`createDynamicTexture`, rewritten per
+  frame) as inputs to effects or custom pipelines.
 - **L1 escape hatch** — user-defined pipelines (your geometry + shaders + uniforms
   + textures), index buffers, a `Camera` helper for 3D, and **render-to-texture**
-  (offscreen targets, incl. HDR float formats — render into one, then sample it back).
+  (offscreen targets, incl. 16- and 32-bit HDR float formats — render into one, then
+  sample it back).
 - **Headless rendering** — drive the renderer with no window and read pixels back
   out (offscreen render + `readPixels`).
 - **Interactivity & capability knobs** — a per-frame input snapshot, `time()`/`dt()`,

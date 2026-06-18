@@ -52,10 +52,17 @@ and may change freely.
 ## Handles (opaque — you hold them, jvre makes them)
 Created via the `Renderer` (`createPipeline`, `createVertexBuffer`,
 `createIndexBuffer`, `createImage`, `loadImage`, `createCubemap`, `createVolume`,
-`font`, `loadFont`, `loadMsdfFont`, `createRenderTarget`); the only method you call
-on them directly is `close()` (plus `Texture.width()` / `height()`):
+`createDynamicTexture`, `font`, `loadFont`, `loadMsdfFont`, `createRenderTarget`);
+the only method you call on them directly is `close()` (plus `Texture.width()` /
+`height()`, and `DynamicTexture.update()`):
 
-`Pipeline`, `Buffer`, `Texture`, `Font`, `RenderTarget`
+`Pipeline`, `Buffer`, `Texture`, `DynamicTexture`, `Font`, `RenderTarget`
+
+`DynamicTexture` (CPU-updatable) is a texture whose pixels you rewrite each frame
+with `update(byte[])`, then bind as a channel (`setEffectChannel(i, dyn)` or
+`frame.texture(i, dyn)`) — for live data like audio spectra or a keyboard-state
+texture. Internally double-buffered per frame-in-flight so updating never races the
+GPU.
 
 `RenderTarget` (render-to-texture) is an offscreen image you render into instead of
 the screen, then sample back: `target.texture()` (the result, a `Texture`),

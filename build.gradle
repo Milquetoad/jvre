@@ -288,6 +288,26 @@ tasks.register('runEffectCube', JavaExec) {
     classpath = sourceSets.main.runtimeClasspath + configurations.nativesRuntime
 }
 
+// Dynamic (CPU-updatable) texture verification (jvre.demo.DynamicTextureDemo) --
+// headless: update->render->update->render, asserts the pixels changed.
+tasks.register('runDynamicTexture', JavaExec) {
+    description = 'Runs the dynamic-texture check (jvre.demo.DynamicTextureDemo) -- headless, asserts a pass'
+    group = 'application'
+    dependsOn 'classes', 'compileShaders', 'processResources'
+    mainClass = 'jvre.demo.DynamicTextureDemo'
+    classpath = sourceSets.main.runtimeClasspath + configurations.nativesRuntime
+}
+
+// Shadertoy keyboard-channel demo (jvre.demo.KeyboardDemo) -- WINDOWED + interactive
+// (a DynamicTexture fed from Input). Pass --args="<frames>" to self-exit for a check.
+tasks.register('runKeyboard', JavaExec) {
+    description = 'Runs the keyboard-channel demo (jvre.demo.KeyboardDemo) -- windowed, interactive'
+    group = 'application'
+    dependsOn 'classes', 'compileShaders', 'processResources'
+    mainClass = 'jvre.demo.KeyboardDemo'
+    classpath = sourceSets.main.runtimeClasspath + configurations.nativesRuntime
+}
+
 // Treat the generated .spv files as ordinary resources, built before them.
 sourceSets.main.resources.srcDir(shaderOutDir)
 tasks.named('processResources') { dependsOn 'compileShaders' }

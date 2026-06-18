@@ -75,6 +75,14 @@ public final class FrameRenderer {
         bound.uploadTexture(frame, channel, tex);
     }
 
+    /** Set a texture channel to a {@link DynamicTexture} (CPU-updatable) -- resolves
+     *  to this frame's own copy, so updating it never races the GPU. The renderer
+     *  records its pending upload at the top of the frame. */
+    public void texture(int channel, DynamicTexture dyn) {
+        requireBound("texture");
+        bound.uploadTexture(frame, channel, dyn.frameTexture(frame));
+    }
+
     /** Set the bound pipeline's push constants for this draw (it declared a range). */
     public void pushConstants(float[] data) {
         requireBound("pushConstants");

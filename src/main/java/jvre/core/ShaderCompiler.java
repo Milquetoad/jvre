@@ -53,10 +53,21 @@ public final class ShaderCompiler {
             // version (same honesty as VMA's vulkanApiVersion).
             shaderc_compile_options_set_target_env(options,
                     shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_3);
-            // Optimize for performance -- what glslc does with -O. User shaders
-            // are compiled once at load, not per frame; spend the time.
+            // NO shaderc-side optimization (level zero). Three reasons specific to
+            // jvre, and the perf upside is marginal:
+            //   1. The effect CONTRACT GUARD + channel-count reflection read THESE
+            //      exact bytes. A performance pass runs dead-code elimination, which
+            //      can STRIP a declared-but-unused iChannel sampler or shrink the push
+            //      block -- desyncing the descriptor layout jvre builds from what the
+            //      user actually wrote. Level zero keeps the declared interface intact.
+            //   2. Faster live-reload (the Batch-4 edit -> F5 loop) and inspectable,
+            //      source-faithful SPIR-V (closer to what a Shadertoy author expects).
+            //   3. The GPU DRIVER re-optimizes the SPIR-V at pipeline creation anyway,
+            //      so an optimization here is largely redundant on desktop.
+            // (An explicit opt-level lever can be added additively later if a consumer
+            // genuinely needs the smaller/faster module -- see the roadmap.)
             shaderc_compile_options_set_optimization_level(options,
-                    shaderc_optimization_level_performance);
+                    shaderc_optimization_level_zero);
 
             result = shaderc_compile_into_spv(compiler, source, kind, name, "main", options);
 

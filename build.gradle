@@ -23,7 +23,7 @@ plugins {
 // (io.github.<user>), published to Maven Central. From 1.0.0 the public API
 // (see docs/api-surface.md) is a semver compatibility promise.
 group = 'io.github.milquetoad'
-version = '1.2.3'   // PATCH: force no FP contraction on compiled shaders (no API change)
+version = '1.3.0'   // MINOR: window icon + custom cursors + cursor mode (backward-compatible additions)
 
 repositories {
     mavenCentral()

@@ -9,7 +9,7 @@ A general-purpose rendering framework written **from scratch in Java on top of [
 1. **Learn graphics from first principles** — understand every layer, from the Vulkan instance up to a full render loop, with no engine hiding the details.
 2. **Ship a real, reusable framework** — a coherent, documented, cross-platform library, delivered with the polish of a professional product (the finish line is a stable 1.0 on Maven Central).
 
-> **Status: 1.2 — on Maven Central.** Both API altitudes below are built, and the [public API](docs/api-surface.md) is a semver compatibility promise. Growth since 1.0 is backward-compatible: 1.1 added render-to-texture, headless rendering, HDR targets, MSDF text, runtime fonts, shader hot-reload, effect input channels, and sampler config; **1.2 adds 32-bit float targets, cubemap + 3D-volume channels, and dynamic (CPU-updatable) channel textures.** Continued capability growth (the full fully-fledged feature set) is planned — see the [roadmap](vault/Project/Roadmap.md).
+> **Status: 1.3 — on Maven Central.** Both API altitudes below are built, and the [public API](docs/api-surface.md) is a semver compatibility promise. Growth since 1.0 is backward-compatible: 1.1 added render-to-texture, headless rendering, HDR targets, MSDF text, runtime fonts, shader hot-reload, effect input channels, and sampler config; 1.2 added 32-bit float targets, cubemap + 3D-volume channels, and dynamic (CPU-updatable) channel textures; **1.3 adds a window icon, custom image cursors, and cursor mode (hide / mouselook lock).** Continued capability growth (the full fully-fledged feature set) is planned — see the [roadmap](vault/Project/Roadmap.md).
 
 ## Two altitudes, one engine
 
@@ -69,7 +69,7 @@ repositories {
 }
 
 dependencies {
-    implementation 'io.github.milquetoad:jvre:1.2.3'
+    implementation 'io.github.milquetoad:jvre:1.3.0'
 
     // jvre does NOT bundle platform natives -- you choose them for your OS.
     // Add the natives classifier for the LWJGL modules jvre uses:
@@ -135,6 +135,8 @@ The full Vulkan substrate and both API altitudes are built and run cleanly
   out (offscreen render + `readPixels`).
 - **Interactivity & capability knobs** — a per-frame input snapshot, `time()`/`dt()`,
   and creation-time vsync / MSAA / GPU options.
+- **Window & OS surface** — runtime title, window icon, standard *and* custom image
+  cursors, cursor mode (hide / mouselook lock), clipboard, file-drop, and HiDPI scale.
 - **Delivery** — cross-platform CI (Windows + Linux), GPG-signed and published to
   Maven Central; natives are consumer-selected (not bundled).
 

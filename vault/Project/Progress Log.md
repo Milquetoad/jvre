@@ -2,6 +2,13 @@
 
 Reverse-chronological diary. Newest at top.
 
+## 2026-06-21 — 1.3.0 release milestone: window chrome 📦✅
+- **Cut the 1.3.0 line** (owner builds + uploads). [[jvre-definition-of-done|Semver]]: the window-chrome additions (icon, custom cursors, cursor mode + the new `CursorMode` enum) are backward-compatible -> MINOR.
+- **Version bumped** `1.2.3 -> 1.3.0` in `build.gradle` + every consumer coordinate (`README.md`, `docs/getting-started.md` JBang + Gradle). Status lines (`README.md`, `docs/README.md`) -> 1.3.
+- **README refreshed:** status line lists 1.3's additions; a new "Window & OS surface" bullet in "what works today" (title/icon/standard+custom cursors/cursor mode/clipboard/file-drop/HiDPI -- the Batch-1 family was previously unlisted there).
+- **api-surface.md** carries `CursorMode` + the custom-cursor note (added with the feature). Build green.
+- **Owner step:** `gradlew centralBundle -PsignArtifacts` -> `build/central-bundle-1.3.0.zip`, upload via the Central Portal.
+
 ## 2026-06-21 — Window chrome: icon + custom cursors + cursor mode 🪟🖱️✅
 - **New public API by user request** (one bundled feature on `Window`, the [[Roadmap|Batch 1 OS/window surface]] family):
   - **Icon:** `setIcon(String resourcePath)` (decode a classpath PNG/JPEG via stb_image -> RGBA) + `setIcon(byte[] rgba, w, h)` (raw pixels) -> `glfwSetWindowIcon`.

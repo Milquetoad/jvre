@@ -35,6 +35,40 @@ class ShaderCompilerTest {
     }
 
     @Test
+    void forcesNoContractionOnArithmetic() {
+        // A shader with multiply-add + a dot product -- exactly the ops a driver
+        // would fuse into an FMA, the contraction that breaks procedural noise.
+        String arith = """
+                #version 450
+                layout(location = 0) out vec4 outColor;
+                void main() {
+                    vec2 p = gl_FragCoord.xy;
+                    float n = fract(dot(p, vec2(12.9898, 78.233)) * 43758.5453 + p.x * p.y);
+                    outColor = vec4(n, n, n, 1.0);
+                }
+                """;
+        byte[] spirv = ShaderCompiler.compileFragment(arith, "noise.frag");
+
+        // The compile path must have decorated the arithmetic NoContraction.
+        int decorations = SpirvNoContraction.count(spirv);
+        assertTrue(decorations > 0,
+                "arithmetic ops should be decorated NoContraction, found " + decorations);
+
+        // The pass is idempotent: re-running it adds nothing (ids already decorated).
+        byte[] again = SpirvNoContraction.decorate(spirv);
+        assertArrayEquals(spirv, again, "decorate must be idempotent");
+        assertEquals(decorations, SpirvNoContraction.count(again));
+    }
+
+    @Test
+    void noContractionPassLeavesNonSpirvUntouched() {
+        // Conservative: anything that isn't a well-formed module is returned as-is.
+        byte[] notSpirv = { 1, 2, 3, 4, 5, 6, 7, 8 };
+        assertArrayEquals(notSpirv, SpirvNoContraction.decorate(notSpirv));
+        assertEquals(0, SpirvNoContraction.count(notSpirv));
+    }
+
+    @Test
     void brokenShaderThrowsWithUsefulMessage() {
         String broken = """
                 #version 450

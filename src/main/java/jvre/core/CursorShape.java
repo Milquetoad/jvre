@@ -6,7 +6,8 @@ import static org.lwjgl.glfw.GLFW.*;
  * A standard OS mouse-cursor shape, for {@link Window#setCursor}. These map to
  * GLFW's built-in cursors (the system's native shapes), so an L2 app can show an
  * I-beam over a text field or a hand over a clickable thing without shipping cursor
- * images. (Custom image cursors are a later refinement.)
+ * images. For a CUSTOM image cursor, see {@link Window#setCursor(String, int, int)};
+ * for hiding/locking the cursor (mouselook), see {@link Window#setCursorMode}.
  */
 public enum CursorShape {
     /** The normal arrow. */

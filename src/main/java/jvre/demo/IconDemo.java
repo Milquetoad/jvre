@@ -1,5 +1,6 @@
 package jvre.demo;
 
+import jvre.core.CursorMode;
 import jvre.core.Diagnostics;
 import jvre.core.Instance;
 import jvre.core.Renderer;
@@ -10,13 +11,14 @@ import jvre.core.Window;
 import org.lwjgl.system.Configuration;
 
 /**
- * Window-icon API demo ({@link Window#setIcon}). Exercises BOTH overloads -- a
- * generated raw-RGBA icon and a decoded classpath PNG -- then runs a few frames so
- * the icon is visible in the taskbar / title bar.
+ * Window-chrome API demo: {@link Window#setIcon} (both overloads -- raw RGBA + a
+ * classpath PNG), a CUSTOM image cursor ({@link Window#setCursor(byte[], int, int,
+ * int, int)}), and {@link Window#setCursorMode} (here HIDDEN). Runs a few frames so
+ * the icon + cursor are visible.
  *
- * <p>Windowed (an icon is a window-chrome thing), frame-capped so it self-exits for a
- * validation check; the icon's APPEARANCE is an owner eyeball. Run: {@code gradlew
- * runIcon} (or {@code --args="<frames>"}).
+ * <p>Windowed (these are window-chrome things), frame-capped so it self-exits for a
+ * validation check; the APPEARANCE is an owner eyeball. Run: {@code gradlew runIcon}
+ * (or {@code --args="<frames>"}).
  */
 public final class IconDemo {
 
@@ -42,7 +44,13 @@ public final class IconDemo {
         //    so this is what you'll actually SEE -- both paths are exercised though).
         window.setIcon("/demo/test-image.png");
 
-        System.out.println("icon demo: window icon set from raw bytes, then from a PNG resource.");
+        // 3. A custom image cursor (raw RGBA + a centre hotspot), and HIDDEN mode is
+        //    also exercised then restored to NORMAL so the custom cursor shows.
+        window.setCursorMode(CursorMode.HIDDEN);
+        window.setCursorMode(CursorMode.NORMAL);
+        window.setCursor(checker(24), 24, 24, 12, 12);
+
+        System.out.println("icon demo: icon (raw + PNG), a custom cursor, and cursor-mode toggles set.");
         int frames = 0;
         while (!window.shouldClose() && frames++ < cap) {
             window.pollEvents();

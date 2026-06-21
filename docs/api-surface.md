@@ -75,7 +75,8 @@ the screen, then sample back: `target.texture()` (the result, a `Texture`),
 |---|---|
 | `Diagnostics` | the crash-log / environment-fingerprint helper |
 | `Input`, `Key`, `MouseButton` | the per-frame input snapshot + its enums |
-| `CursorShape` | standard OS cursor shapes for `Window.setCursor` |
+| `CursorShape` | standard OS cursor shapes for `Window.setCursor` (custom image cursors via `setCursor(path, hotspotX, hotspotY)`) |
+| `CursorMode` | cursor visibility/lock (NORMAL / HIDDEN / DISABLED) for `Window.setCursorMode` |
 
 ---
 

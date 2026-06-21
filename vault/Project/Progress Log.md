@@ -2,12 +2,15 @@
 
 Reverse-chronological diary. Newest at top.
 
-## 2026-06-21 — Window icon API 🪟✅
-- **New public API by user request:** `Window.setIcon(String resourcePath)` (decode a classpath PNG/JPEG via stb_image -> RGBA) and `setIcon(byte[] rgba, int w, int h)` (raw pixels). Both hand one `GLFWImage` to `glfwSetWindowIcon`. A natural addition to the [[Roadmap|Batch 1 OS/window surface]] family (setTitle/setCursor/clipboard).
-- **Cross-platform honesty:** GLFW honors it on Windows + Linux/X11; it's a documented no-op on macOS (icon comes from the app bundle) and Wayland (desktop file). Harmless to call everywhere -- no guard needed -- and documented as such.
-- **Reused jvre's stb decode pattern** (from `Texture.load`) but in `Window` directly (Window is the stable layer, shouldn't depend on the creative-tier `Texture`; stb is already a dep). Sidestepped the `stbi_image_free`-frees-at-buffer-POSITION gotcha by handing the decoded buffer straight to `GLFWImage` at position 0 -- never `get()`-ing it -- so it frees cleanly.
-- **Verified:** build green; `IconDemo`/`runIcon` (windowed, frame-capped) exercises BOTH overloads -- raw generated checker + the `/demo/test-image.png` resource -- validation silent through 121 frames, clean teardown. The icon's actual appearance in the taskbar is an owner eyeball ([[dont-self-verify-visuals]]).
-- **Additive public method on an existing type -> MINOR (1.3.0).** No api-surface type added (no new public type), just a new method on `Window`.
+## 2026-06-21 — Window chrome: icon + custom cursors + cursor mode 🪟🖱️✅
+- **New public API by user request** (one bundled feature on `Window`, the [[Roadmap|Batch 1 OS/window surface]] family):
+  - **Icon:** `setIcon(String resourcePath)` (decode a classpath PNG/JPEG via stb_image -> RGBA) + `setIcon(byte[] rgba, w, h)` (raw pixels) -> `glfwSetWindowIcon`.
+  - **Custom cursors:** `setCursor(String resourcePath, hotspotX, hotspotY)` + `setCursor(byte[] rgba, w, h, hotspotX, hotspotY)` -> `glfwCreateCursor` (the hotspot = the image pixel that actually points). Sits alongside the existing `setCursor(CursorShape)` for standard cursors. ONE custom cursor tracked at a time: setting a new one creates+sets it THEN destroys the previous (that order, so the cursor never flickers to default); the live one is destroyed at close.
+  - **Cursor mode:** `setCursorMode(CursorMode)` -> `glfwSetInputMode(GLFW_CURSOR, ...)`. New public enum `CursorMode` (NORMAL / HIDDEN / DISABLED -- DISABLED = invisible + centre-locked + unlimited virtual motion, the mouselook mode).
+- **Cross-platform honesty:** the icon is honored on Windows + Linux/X11, a documented no-op on macOS (app-bundle icon) + Wayland (desktop file) -- harmless to call, no guard needed. Custom cursors + cursor mode work on all desktop platforms.
+- **Reused jvre's stb decode pattern** (from `Texture.load`) but in `Window` directly (the stable layer shouldn't depend on the creative-tier `Texture`; stb is already a dep), factored into one `decodeResourceRgba` helper shared by the icon + cursor paths. Sidestepped the `stbi_image_free`-frees-at-buffer-POSITION gotcha by handing the decoded buffer to GLFW at position 0 -- never `get()`-ing it.
+- **Verified:** build green; `IconDemo`/`runIcon` (windowed, frame-capped) exercises icon (both overloads) + a custom cursor + cursor-mode toggles -- validation silent through 121 frames, clean teardown (incl. destroying the custom cursor). The actual appearance is an owner eyeball ([[dont-self-verify-visuals]]).
+- **Additive: a new method set on `Window` + one new public enum (`CursorMode`) -> MINOR (1.3.0).**
 
 ## 2026-06-21 — User bug: FP contraction wrecks procedural noise 🐛✅
 - **A user's smooth-noise functions showed stepping / banding / garbage, worst at large values.** Cause: floating-point CONTRACTION -- the driver fusing a multiply+add into a single FMA, which keeps full precision on the product instead of rounding twice. Invisible most places, but noise built on `fract()`/`floor()` of large dot products + polynomials (the Shadertoy staple) needs EXACT per-operation IEEE results, so the changed rounding shows up as artifacts.

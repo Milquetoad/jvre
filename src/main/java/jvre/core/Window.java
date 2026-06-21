@@ -63,6 +63,10 @@ public class Window {
     // created. Destroyed at close (before glfwTerminate, which would free them too).
     private final long[] cursors = new long[CursorShape.values().length];
 
+    // The current CUSTOM (image) cursor, or NULL. One at a time: setting a new one
+    // destroys the previous. Destroyed at close.
+    private long customCursor = NULL;
+
     public Window(int width, int height, CharSequence title) {
         // GLFW reports errors through a callback, not return codes -- without one
         // installed, failures (bad hints, missing display, ...) are SILENT and all
@@ -120,6 +124,73 @@ public class Window {
     }
 
     /**
+     * Set a CUSTOM mouse cursor from a classpath image ({@code resourcePath}, e.g.
+     * {@code "/cursors/wand.png"}), decoded via stb_image. {@code hotspotX} /
+     * {@code hotspotY} are the pixel in the image that actually points -- {@code
+     * (0,0)} = top-left (an arrow tip), the centre for a crosshair. The previously
+     * set custom cursor (if any) is destroyed. Works on all desktop platforms.
+     */
+    public void setCursor(String resourcePath, int hotspotX, int hotspotY) {
+        int[] wh = new int[2];
+        ByteBuffer pixels = decodeResourceRgba(resourcePath, wh);
+        try (MemoryStack stack = stackPush()) {
+            applyCustomCursor(stack, pixels, wh[0], wh[1], hotspotX, hotspotY);
+        } finally {
+            stbi_image_free(pixels);
+        }
+    }
+
+    /**
+     * Set a custom mouse cursor from raw RGBA8 pixels ({@code width*height*4} bytes,
+     * row-major, top-to-bottom). See {@link #setCursor(String, int, int)} for the
+     * hotspot meaning.
+     */
+    public void setCursor(byte[] rgba, int width, int height, int hotspotX, int hotspotY) {
+        if (rgba.length != width * height * 4) {
+            throw new IllegalArgumentException("Cursor is " + width + "x" + height
+                    + " (expected " + (width * height * 4) + " RGBA bytes), got " + rgba.length);
+        }
+        ByteBuffer pixels = memAlloc(rgba.length);
+        pixels.put(rgba).flip();
+        try (MemoryStack stack = stackPush()) {
+            applyCustomCursor(stack, pixels, width, height, hotspotX, hotspotY);
+        } finally {
+            memFree(pixels);
+        }
+    }
+
+    /** Create a GLFW cursor from one RGBA image + hotspot, set it, then destroy the
+     *  PREVIOUS custom cursor (in that order, so the cursor never momentarily reverts
+     *  to the default while swapping). */
+    private void applyCustomCursor(MemoryStack stack, ByteBuffer rgba, int width, int height,
+                                   int hotspotX, int hotspotY) {
+        GLFWImage image = GLFWImage.malloc(stack);
+        image.width(width).height(height).pixels(rgba);
+        long created = glfwCreateCursor(image, hotspotX, hotspotY);
+        if (created == NULL) {
+            throw new RuntimeException("GLFW failed to create a " + width + "x" + height
+                    + " custom cursor");
+        }
+        long previous = customCursor;
+        customCursor = created;
+        glfwSetCursor(handle, customCursor);
+        if (previous != NULL) {
+            glfwDestroyCursor(previous);
+        }
+    }
+
+    /**
+     * Set the cursor MODE: {@link CursorMode#NORMAL} (visible, moves freely),
+     * {@link CursorMode#HIDDEN} (invisible while over the window, still free), or
+     * {@link CursorMode#DISABLED} (invisible AND locked to the window centre with
+     * unlimited virtual motion -- for first-person / orbit mouselook; read the
+     * motion from the per-frame cursor position, which then grows unbounded).
+     */
+    public void setCursorMode(CursorMode mode) {
+        glfwSetInputMode(handle, GLFW_CURSOR, mode.glfw);
+    }
+
+    /**
      * Set the window's ICON (taskbar / title-bar / Alt-Tab image) from a classpath
      * image resource ({@code resourcePath}, e.g. {@code "/icons/app.png"}), decoded
      * via stb_image (PNG/JPEG/...). A square power-of-two source (e.g. 32x32 or
@@ -130,26 +201,14 @@ public class Window {
      * a documented no-op, harmless to call (your cross-platform code needs no guard).
      */
     public void setIcon(String resourcePath) {
-        ByteBuffer fileBytes = readResource(resourcePath);   // native buffer -- memFree below
+        int[] wh = new int[2];
+        ByteBuffer pixels = decodeResourceRgba(resourcePath, wh);
         try (MemoryStack stack = stackPush()) {
-            IntBuffer w = stack.mallocInt(1);
-            IntBuffer h = stack.mallocInt(1);
-            IntBuffer channelsInFile = stack.mallocInt(1);
-            // Force 4 channels (RGBA) -- what GLFW wants, regardless of the source.
-            ByteBuffer pixels = stbi_load_from_memory(fileBytes, w, h, channelsInFile, 4);
-            if (pixels == null) {
-                throw new RuntimeException("stb_image failed to decode icon " + resourcePath
-                        + ": " + stbi_failure_reason());
-            }
-            try {
-                // pixels stays at position 0 (we never get() it), so it points at the
-                // RGBA data for GLFW and frees cleanly below.
-                applyIcon(stack, pixels, w.get(0), h.get(0));
-            } finally {
-                stbi_image_free(pixels);
-            }
+            // pixels stays at position 0 (we never get() it), so it points at the
+            // RGBA data for GLFW and frees cleanly below.
+            applyIcon(stack, pixels, wh[0], wh[1]);
         } finally {
-            memFree(fileBytes);
+            stbi_image_free(pixels);
         }
     }
 
@@ -181,12 +240,39 @@ public class Window {
         glfwSetWindowIcon(handle, icon);
     }
 
+    /**
+     * Decode a classpath image resource to RGBA8 via stb_image -- shared by the
+     * window-icon and custom-cursor paths (both hand RGBA pixels + dimensions to
+     * GLFW, which copies them during the call). Returns the native pixel buffer at
+     * position 0 (free it with {@code stbi_image_free}) and writes the dimensions
+     * into {@code wh[0]} (width) and {@code wh[1]} (height). Forces 4 channels so a
+     * source with no alpha still comes back RGBA.
+     */
+    private static ByteBuffer decodeResourceRgba(String resourcePath, int[] wh) {
+        ByteBuffer fileBytes = readResource(resourcePath);   // native buffer -- memFree below
+        try (MemoryStack stack = stackPush()) {
+            IntBuffer w = stack.mallocInt(1);
+            IntBuffer h = stack.mallocInt(1);
+            IntBuffer channelsInFile = stack.mallocInt(1);
+            ByteBuffer pixels = stbi_load_from_memory(fileBytes, w, h, channelsInFile, 4);
+            if (pixels == null) {
+                throw new RuntimeException("stb_image failed to decode " + resourcePath
+                        + ": " + stbi_failure_reason());
+            }
+            wh[0] = w.get(0);
+            wh[1] = h.get(0);
+            return pixels;   // survives the stack pop (native heap, not stack); caller frees
+        } finally {
+            memFree(fileBytes);
+        }
+    }
+
     /** Read a classpath resource into a native {@link ByteBuffer} (freed by the
-     *  caller with {@code memFree}) -- what stb_image decodes the icon from. */
+     *  caller with {@code memFree}) -- what stb_image decodes an icon/cursor from. */
     private static ByteBuffer readResource(String path) {
         try (InputStream in = Window.class.getResourceAsStream(path)) {
             if (in == null) {
-                throw new RuntimeException("Icon resource not found on the classpath: " + path);
+                throw new RuntimeException("Image resource not found on the classpath: " + path);
             }
             byte[] bytes = in.readAllBytes();
             ByteBuffer buf = memAlloc(bytes.length);
@@ -285,6 +371,9 @@ public class Window {
             if (cursor != NULL) {
                 glfwDestroyCursor(cursor);
             }
+        }
+        if (customCursor != NULL) {
+            glfwDestroyCursor(customCursor);
         }
         glfwDestroyWindow(handle);  // also detaches per-window callbacks
         glfwTerminate();

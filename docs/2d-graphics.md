@@ -311,6 +311,8 @@ window.setTitle("My App — " + fps + " FPS");   // runtime title (e.g. a live r
 
 window.setCursor(CursorShape.IBEAM);           // ARROW, IBEAM, CROSSHAIR, HAND, RESIZE_H/V
                                                // (set it per hover region each frame)
+window.setCursor("/cursors/wand.png", 0, 0);   // a CUSTOM image cursor (+ hotspot pixel)
+window.setCursorMode(CursorMode.DISABLED);     // NORMAL / HIDDEN / DISABLED (lock for mouselook)
 
 window.setIcon("/icons/app.png");              // taskbar / title-bar icon from a classpath PNG
 window.setIcon(rgba, 32, 32);                  // ...or raw RGBA8 you generate yourself

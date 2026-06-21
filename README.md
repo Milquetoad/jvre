@@ -69,7 +69,7 @@ repositories {
 }
 
 dependencies {
-    implementation 'io.github.milquetoad:jvre:1.2.2'
+    implementation 'io.github.milquetoad:jvre:1.2.3'
 
     // jvre does NOT bundle platform natives -- you choose them for your OS.
     // Add the natives classifier for the LWJGL modules jvre uses:

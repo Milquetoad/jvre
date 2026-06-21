@@ -85,7 +85,12 @@ public final class ShaderCompiler {
             ByteBuffer spirv = shaderc_result_get_bytes(result);
             byte[] bytes = new byte[spirv.remaining()];
             spirv.get(bytes);
-            return bytes;
+            // FORBID floating-point contraction: decorate every arithmetic op
+            // NoContraction so a driver can't fuse multiply+add into an FMA. Without
+            // this, procedural noise (fract/floor of large dot products) steps and
+            // produces garbage at large magnitudes -- a user-reported bug. shaderc has
+            // no option for it, so it's a tiny SPIR-V pass. See SpirvNoContraction.
+            return SpirvNoContraction.decorate(bytes);
         } finally {
             if (result != 0) {
                 shaderc_result_release(result);

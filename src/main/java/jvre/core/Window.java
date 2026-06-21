@@ -2,15 +2,24 @@ package jvre.core;
 
 import org.lwjgl.glfw.GLFWErrorCallback;
 import org.lwjgl.glfw.GLFWFramebufferSizeCallback;
+import org.lwjgl.glfw.GLFWImage;
 import org.lwjgl.system.MemoryStack;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.ByteBuffer;
 import java.nio.DoubleBuffer;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 
 import static org.lwjgl.glfw.GLFW.*;
+import static org.lwjgl.stb.STBImage.stbi_failure_reason;
+import static org.lwjgl.stb.STBImage.stbi_image_free;
+import static org.lwjgl.stb.STBImage.stbi_load_from_memory;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.NULL;
+import static org.lwjgl.system.MemoryUtil.memAlloc;
+import static org.lwjgl.system.MemoryUtil.memFree;
 
 /**
  * A GLFW window with no graphics API attached (we render to it through a Vulkan
@@ -108,6 +117,84 @@ public class Window {
             cursors[i] = glfwCreateStandardCursor(shape.glfw);
         }
         glfwSetCursor(handle, cursors[i]);
+    }
+
+    /**
+     * Set the window's ICON (taskbar / title-bar / Alt-Tab image) from a classpath
+     * image resource ({@code resourcePath}, e.g. {@code "/icons/app.png"}), decoded
+     * via stb_image (PNG/JPEG/...). A square power-of-two source (e.g. 32x32 or
+     * 64x64) is conventional; the OS scales as needed.
+     *
+     * <p>Honored on <b>Windows and Linux (X11)</b>. On macOS the icon comes from the
+     * app bundle, and on Wayland from the desktop file, so GLFW IGNORES this there --
+     * a documented no-op, harmless to call (your cross-platform code needs no guard).
+     */
+    public void setIcon(String resourcePath) {
+        ByteBuffer fileBytes = readResource(resourcePath);   // native buffer -- memFree below
+        try (MemoryStack stack = stackPush()) {
+            IntBuffer w = stack.mallocInt(1);
+            IntBuffer h = stack.mallocInt(1);
+            IntBuffer channelsInFile = stack.mallocInt(1);
+            // Force 4 channels (RGBA) -- what GLFW wants, regardless of the source.
+            ByteBuffer pixels = stbi_load_from_memory(fileBytes, w, h, channelsInFile, 4);
+            if (pixels == null) {
+                throw new RuntimeException("stb_image failed to decode icon " + resourcePath
+                        + ": " + stbi_failure_reason());
+            }
+            try {
+                // pixels stays at position 0 (we never get() it), so it points at the
+                // RGBA data for GLFW and frees cleanly below.
+                applyIcon(stack, pixels, w.get(0), h.get(0));
+            } finally {
+                stbi_image_free(pixels);
+            }
+        } finally {
+            memFree(fileBytes);
+        }
+    }
+
+    /**
+     * Set the window's icon from raw RGBA8 pixels ({@code width*height*4} bytes,
+     * row-major, top-to-bottom) -- for an icon you generate or decode yourself. See
+     * {@link #setIcon(String)} for the platform notes.
+     */
+    public void setIcon(byte[] rgba, int width, int height) {
+        if (rgba.length != width * height * 4) {
+            throw new IllegalArgumentException("Icon is " + width + "x" + height
+                    + " (expected " + (width * height * 4) + " RGBA bytes), got " + rgba.length);
+        }
+        ByteBuffer pixels = memAlloc(rgba.length);
+        pixels.put(rgba).flip();
+        try (MemoryStack stack = stackPush()) {
+            applyIcon(stack, pixels, width, height);
+        } finally {
+            memFree(pixels);   // GLFW copied the data during the set call
+        }
+    }
+
+    /** Hand one RGBA image to GLFW as the window icon. The pixels buffer must stay
+     *  valid and at position 0 for the duration of the call (GLFW copies it). */
+    private void applyIcon(MemoryStack stack, ByteBuffer rgba, int width, int height) {
+        GLFWImage.Buffer icon = GLFWImage.malloc(1, stack);
+        icon.position(0).width(width).height(height).pixels(rgba);
+        icon.position(0);
+        glfwSetWindowIcon(handle, icon);
+    }
+
+    /** Read a classpath resource into a native {@link ByteBuffer} (freed by the
+     *  caller with {@code memFree}) -- what stb_image decodes the icon from. */
+    private static ByteBuffer readResource(String path) {
+        try (InputStream in = Window.class.getResourceAsStream(path)) {
+            if (in == null) {
+                throw new RuntimeException("Icon resource not found on the classpath: " + path);
+            }
+            byte[] bytes = in.readAllBytes();
+            ByteBuffer buf = memAlloc(bytes.length);
+            buf.put(bytes).flip();
+            return buf;
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to read icon resource: " + path, e);
+        }
     }
 
     /** The system clipboard's text, or {@code null} if it holds no convertible text.

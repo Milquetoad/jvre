@@ -312,11 +312,18 @@ window.setTitle("My App — " + fps + " FPS");   // runtime title (e.g. a live r
 window.setCursor(CursorShape.IBEAM);           // ARROW, IBEAM, CROSSHAIR, HAND, RESIZE_H/V
                                                // (set it per hover region each frame)
 
+window.setIcon("/icons/app.png");              // taskbar / title-bar icon from a classpath PNG
+window.setIcon(rgba, 32, 32);                  // ...or raw RGBA8 you generate yourself
+
 window.setClipboard("copied text");            // copy
 String pasted = window.clipboard();            // paste (null if the clipboard has no text)
 
 float scale = window.contentScaleX();          // DPI factor (e.g. 2.0 at 200% scaling)
 ```
+
+> **Window icon platform note:** honored on Windows and Linux (X11). On macOS the
+> icon comes from the app bundle and on Wayland from the desktop file, so `setIcon`
+> is a no-op there — harmless to call, no cross-platform guard needed.
 
 On **HiDPI**: jvre's 2D space is in **framebuffer pixels**, so drawing and
 `input.mouseX()` are already DPI-correct — you don't multiply by the scale. The

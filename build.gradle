@@ -318,6 +318,16 @@ tasks.register('runStackProbe', JavaExec) {
     classpath = sourceSets.main.runtimeClasspath + configurations.nativesRuntime
 }
 
+// Window-icon demo (jvre.demo.IconDemo) -- WINDOWED, frame-capped; exercises both
+// setIcon overloads (raw bytes + classpath PNG).
+tasks.register('runIcon', JavaExec) {
+    description = 'Runs the window-icon demo (jvre.demo.IconDemo) -- windowed, frame-capped'
+    group = 'application'
+    dependsOn 'classes', 'compileShaders', 'processResources'
+    mainClass = 'jvre.demo.IconDemo'
+    classpath = sourceSets.main.runtimeClasspath + configurations.nativesRuntime
+}
+
 // Treat the generated .spv files as ordinary resources, built before them.
 sourceSets.main.resources.srcDir(shaderOutDir)
 tasks.named('processResources') { dependsOn 'compileShaders' }
